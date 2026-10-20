@@ -33,6 +33,12 @@ pub fn status(v: &Value) {
         None => println!("peer     not paired"),
     }
     println!("daemon   {}", if v["daemon"] == true { "running" } else { "not running" });
+    println!("version  {}", s(&v["version"]));
+    if let Some(pv) = v.get("peer_version").filter(|p| !p.is_null()) {
+        let note =
+            if pv == &v["version"] { " (same build)" } else { "  ⚠ different build: run `make update` on both Macs" };
+        println!("         peer {}{note}", s(pv));
+    }
     println!();
     println!(
         "{:<32} {:<6} {:<18} {:<12} {:<12} {:>5} {:>8}  LAST SYNC",

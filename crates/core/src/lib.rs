@@ -5,6 +5,7 @@
 //! the per-unit Merkle tree, the conflict decision logic, the classification of
 //! paths inside `.git` and the wire protocol messages.
 
+pub mod codec;
 pub mod decide;
 pub mod entry;
 pub mod gitpath;

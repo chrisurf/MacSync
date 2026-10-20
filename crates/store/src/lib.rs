@@ -197,7 +197,7 @@ fn row_to_stored(r: &Row) -> rusqlite::Result<Stored> {
             blob: read_hash(r.get(6)?),
             cmp: read_hash(r.get(7)?),
             target: r.get(8)?,
-            xattrs: xattrs.and_then(|b| bincode::deserialize(&b).ok()).unwrap_or_default(),
+            xattrs: xattrs.and_then(|b| reposync_core::codec::decode(&b).ok()).unwrap_or_default(),
             flags: r.get::<_, i64>(10)? as u32,
             link: r.get(11)?,
             deleted: r.get::<_, i64>(12)? != 0,
@@ -364,7 +364,7 @@ impl Store {
 
     pub fn put_entry(&self, unit: &str, s: &Stored) -> Result<()> {
         let e = &s.entry;
-        let xattrs = if e.xattrs.is_empty() { None } else { Some(bincode::serialize(&e.xattrs)?) };
+        let xattrs = if e.xattrs.is_empty() { None } else { Some(reposync_core::codec::encode(&e.xattrs)?) };
         let mut st = self.conn.prepare_cached(&format!(
             "INSERT OR REPLACE INTO entries(unit, {ENTRY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"
         ))?;
@@ -529,8 +529,8 @@ impl Store {
                 unit,
                 path,
                 class,
-                bincode::serialize(locals)?,
-                bincode::serialize(remotes)?,
+                reposync_core::codec::encode(locals)?,
+                reposync_core::codec::encode(remotes)?,
                 state.0.to_vec(),
                 stored,
                 now_ms()
@@ -557,8 +557,8 @@ impl Store {
         let local: Option<Vec<u8>> = r.get(4)?;
         let remote: Vec<u8> = r.get(5)?;
         let decode = |b: &[u8]| {
-            bincode::deserialize::<Vec<Entry>>(b)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Blob, e))
+            reposync_core::codec::decode::<Vec<Entry>>(b)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Blob, Box::new(e)))
         };
         Ok(ConflictRow {
             id: r.get(0)?,

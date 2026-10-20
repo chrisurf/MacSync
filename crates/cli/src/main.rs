@@ -20,8 +20,12 @@ use reposync_net::{pairing, Identity};
 use reposync_store::{PeerRow, Store};
 use serde_json::{json, Value};
 
+/// Package version plus the Git commit the binary was built from.
+const VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), " (", env!("REPOSYNC_GIT"), ", ", env!("REPOSYNC_GIT_DATE"), ")");
+
 #[derive(Parser)]
-#[command(name = "reposync", version, about = "Git-aware LAN synchronisation between two Macs")]
+#[command(name = "reposync", version = VERSION, about = "Git-aware LAN synchronisation between two Macs")]
 struct Cli {
     /// Configuration file (default: ~/.config/reposync/config.toml or $REPOSYNC_CONFIG).
     #[arg(long, global = true)]
@@ -179,6 +183,7 @@ enum ServiceCmd {
 
 fn main() {
     let cli = Cli::parse();
+    reposync_net::set_build_version(VERSION);
     let default = match (&cli.cmd, cli.verbose) {
         (_, true) => "debug",
         (Cmd::Daemon, _) => "info",

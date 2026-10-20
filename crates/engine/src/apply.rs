@@ -24,7 +24,7 @@ impl Engine {
         if plan.has_disk_ops() {
             self.take_index_lock(plan, &unit_dir)?;
         }
-        self.store().tx_put(&plan.tx, &plan.unit, "applying", &bincode::serialize(&*plan)?)?;
+        self.store().tx_put(&plan.tx, &plan.unit, "applying", &reposync_core::codec::encode(&*plan)?)?;
         let result = self.run_ops(plan, staging, &unit_dir);
         result?;
         self.commit(plan, "applied")?;
@@ -58,7 +58,7 @@ impl Engine {
                 // A new repository: `.git` exists only after the directory phase.
                 if reposync_gitaware::resolve_git_dir(unit_dir).is_some() {
                     self.take_index_lock(plan, unit_dir)?;
-                    self.store().tx_put(&plan.tx, &plan.unit, "applying", &bincode::serialize(&*plan)?)?;
+                    self.store().tx_put(&plan.tx, &plan.unit, "applying", &reposync_core::codec::encode(&*plan)?)?;
                 }
             }
             if plan.ops[i].kind != OpKind::DbOnly {
@@ -317,7 +317,7 @@ impl Engine {
                 self.store().tx_remove(&tx.id)?;
                 continue;
             }
-            let mut plan: Plan = bincode::deserialize(&tx.plan).context("decode journaled plan")?;
+            let mut plan: Plan = reposync_core::codec::decode(&tx.plan).context("decode journaled plan")?;
             let lock = self.unit_lock(&plan.unit);
             let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
             let unit_dir = reposync_fs::unit_dir(&self.cfg.root, &plan.unit);

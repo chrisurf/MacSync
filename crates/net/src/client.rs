@@ -4,7 +4,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use reposync_core::proto::{DirListing, Request, Response, UnitRoot};
 use reposync_core::{Entry, Hash, PROTOCOL_VERSION};
 use reposync_engine::PeerApi;
@@ -20,6 +20,8 @@ pub struct HelloInfo {
     pub name: String,
     pub arch: String,
     pub root: String,
+    /// Build version (package version and Git commit).
+    pub version: String,
 }
 
 impl HelloInfo {
@@ -29,6 +31,7 @@ impl HelloInfo {
             name: name.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             root: root.to_string(),
+            version: crate::build_version(),
         }
     }
 
@@ -39,6 +42,7 @@ impl HelloInfo {
             protocol: PROTOCOL_VERSION,
             arch: self.arch.clone(),
             root: self.root.clone(),
+            version: self.version.clone(),
         }
     }
 
@@ -49,6 +53,7 @@ impl HelloInfo {
             protocol: PROTOCOL_VERSION,
             arch: self.arch.clone(),
             root: self.root.clone(),
+            version: self.version.clone(),
         }
     }
 }
@@ -90,19 +95,35 @@ impl NetPeer {
         if !crate::lan::is_local(&self.addr.ip()) {
             bail!("refusing to connect to non-local address {}", self.addr);
         }
-        let tcp = TcpStream::connect_timeout(&self.addr, Duration::from_secs(5))
-            .with_context(|| format!("connect {}", self.addr))?;
+        let tcp = TcpStream::connect_timeout(&self.addr, Duration::from_secs(5)).map_err(|e| {
+            let hint = if e.raw_os_error() == Some(EHOSTUNREACH) {
+                " – on macOS this usually means the Local Network privacy check blocked RepoSync: \
+                 run the daemon from Terminal.app (see docs/getting-started-mac.md) or allow it under \
+                 System Settings → Privacy & Security → Local Network"
+            } else {
+                ""
+            };
+            anyhow!("connect {}: {e}{hint}", self.addr)
+        })?;
         let mut s = SecureStream::connect(tcp, &self.identity, self.timeout)?;
         if s.remote_static() != self.expected.as_slice() {
             bail!("peer at {} presented an unknown key (device {})", self.addr, crate::device_id(s.remote_static()));
         }
-        s.send(&bincode::serialize(&self.hello.request())?)?;
-        match bincode::deserialize::<Response>(&s.recv()?)? {
-            Response::Hello { device, name, protocol, arch, root } => {
+        s.send(&reposync_core::codec::encode(&self.hello.request())?)?;
+        match reposync_core::codec::decode::<Response>(&s.recv()?)? {
+            Response::Hello { device, name, protocol, arch, root, version } => {
                 if protocol != PROTOCOL_VERSION {
                     bail!("peer speaks protocol {protocol}, expected {PROTOCOL_VERSION}");
                 }
-                *self.remote.lock().unwrap_or_else(|e| e.into_inner()) = Some(HelloInfo { device, name, arch, root });
+                if version != self.hello.version {
+                    tracing::warn!(
+                        local = %self.hello.version,
+                        peer = %version,
+                        "peer runs a different RepoSync build; update both Macs (make update)"
+                    );
+                }
+                *self.remote.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(HelloInfo { device, name, arch, root, version });
             }
             Response::Error(e) => bail!("peer refused: {e}"),
             other => bail!("unexpected handshake response {other:?}"),
@@ -113,7 +134,7 @@ impl NetPeer {
     /// Send one request; reconnects once on transport errors (all requests are
     /// idempotent).
     pub fn call(&self, req: &Request) -> Result<Response> {
-        let payload = bincode::serialize(req)?;
+        let payload = reposync_core::codec::encode(req)?;
         let mut guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
             if guard.is_none() {
@@ -123,7 +144,7 @@ impl NetPeer {
             let r = s.send(&payload).and_then(|_| s.recv());
             match r {
                 Ok(bytes) => {
-                    let resp: Response = bincode::deserialize(&bytes)?;
+                    let resp: Response = reposync_core::codec::decode(&bytes)?;
                     if let Response::Error(e) = resp {
                         return Err(anyhow!("peer error: {e}"));
                     }
@@ -158,6 +179,9 @@ impl NetPeer {
         *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
+
+/// `EHOSTUNREACH` (65 on macOS, 113 on Linux).
+const EHOSTUNREACH: i32 = if cfg!(target_os = "macos") { 65 } else { 113 };
 
 fn unexpected<T>(r: Response) -> Result<T> {
     Err(anyhow!("unexpected response {r:?}"))

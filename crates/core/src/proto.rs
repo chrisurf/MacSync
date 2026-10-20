@@ -33,6 +33,7 @@ pub enum Request {
         protocol: u32,
         arch: String,
         root: String,
+        version: String,
     },
     Roots,
     Tree {
@@ -71,6 +72,7 @@ pub enum Response {
         protocol: u32,
         arch: String,
         root: String,
+        version: String,
     },
     Roots(Vec<UnitRoot>),
     Tree(Vec<DirListing>),

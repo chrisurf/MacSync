@@ -25,6 +25,18 @@ pub fn prologue() -> Vec<u8> {
     format!("reposync/{}", reposync_core::PROTOCOL_VERSION).into_bytes()
 }
 
+static BUILD_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Set the build version announced to the peer (e.g. `0.1.0 (a1b2c3d4e5)`).
+pub fn set_build_version(v: &str) {
+    let _ = BUILD_VERSION.set(v.to_string());
+}
+
+/// Build version announced in the handshake.
+pub fn build_version() -> String {
+    BUILD_VERSION.get().cloned().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
 /// Short device id derived from a static public key.
 pub fn device_id(pubkey: &[u8]) -> String {
     hex::encode(&blake3::hash(pubkey).as_bytes()[..8])

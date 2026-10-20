@@ -10,7 +10,6 @@ reposync-core.workspace = true
 reposync-engine.workspace = true
 anyhow.workspace = true
 serde.workspace = true
-bincode.workspace = true
 blake3.workspace = true
 hex.workspace = true
 snow.workspace = true

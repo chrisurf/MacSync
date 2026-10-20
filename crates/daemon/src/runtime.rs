@@ -132,6 +132,7 @@ impl Node {
         Ok(json!({
             "device": self.identity.device_id(),
             "name": self.cfg.device_name,
+            "version": reposync_net::build_version(),
             "root": self.cfg.root(),
             "mode": self.cfg.mode().as_str(),
             "case_insensitive": self.engine.is_case_insensitive(),
@@ -673,6 +674,14 @@ impl Daemon {
         v["peer_online"] = json!(online);
         v["peer_last_contact"] = json!(if last > 0 { Some(reposync_fs::time::rfc3339(last)) } else { None });
         v["peer_error"] = json!(if err.is_empty() { None } else { Some(err) });
+        let peer_version = shared
+            .peer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|p| p.remote_hello())
+            .map(|h| h.version);
+        v["peer_version"] = json!(peer_version);
         Ok(v)
     }
 

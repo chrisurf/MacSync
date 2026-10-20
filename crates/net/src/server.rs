@@ -114,25 +114,26 @@ fn serve_conn(
     }
     s.set_timeout(IDLE_TIMEOUT)?;
     // The first message must be Hello.
-    let first: Request = bincode::deserialize(&s.recv()?)?;
-    let Request::Hello { device, name, protocol, arch, root } = first else { bail!("expected Hello") };
+    let first: Request = reposync_core::codec::decode(&s.recv()?)?;
+    let Request::Hello { device, name, protocol, arch, root, version } = first else { bail!("expected Hello") };
     if protocol != PROTOCOL_VERSION {
         let r = Response::Error(format!("protocol {protocol} not supported (expected {PROTOCOL_VERSION})"));
-        s.send(&bincode::serialize(&r)?)?;
+        s.send(&reposync_core::codec::encode(&r)?)?;
         bail!("protocol mismatch");
     }
     if device != crate::device_id(&pubkey) {
         bail!("device id does not match key");
     }
-    s.send(&bincode::serialize(&hello.response())?)?;
-    let info = PeerInfo { device: device.clone(), pubkey, addr, hello: HelloInfo { device, name, arch, root } };
+    s.send(&reposync_core::codec::encode(&hello.response())?)?;
+    let info =
+        PeerInfo { device: device.clone(), pubkey, addr, hello: HelloInfo { device, name, arch, root, version } };
     loop {
         let msg = match s.recv() {
             Ok(m) => m,
             Err(_) => return Ok(()), // closed or idle
         };
-        let req: Request = bincode::deserialize(&msg).context("decode request")?;
+        let req: Request = reposync_core::codec::decode(&msg).context("decode request")?;
         let resp = handler(&info, req);
-        s.send(&bincode::serialize(&resp)?)?;
+        s.send(&reposync_core::codec::encode(&resp)?)?;
     }
 }
