@@ -135,9 +135,11 @@ pub struct ConflictRow {
     pub unit: String,
     pub path: String,
     pub class: String,
-    pub local: Option<Entry>,
-    pub remote: Entry,
-    /// Location of the remote version in the conflict store.
+    /// Local entries at the time of the conflict (several for group conflicts).
+    pub locals: Vec<Entry>,
+    /// Remote entries that were held back.
+    pub remotes: Vec<Entry>,
+    /// Location of the remote version(s) in the conflict store.
     pub stored: String,
     pub created_ms: i64,
     pub resolved_ms: Option<i64>,
@@ -274,9 +276,8 @@ impl Store {
     }
 
     pub fn units(&self) -> Result<Vec<UnitRow>> {
-        let mut st = self
-            .conn
-            .prepare("SELECT name, kind, root, paused, prefer, synced_ms, status FROM units ORDER BY name")?;
+        let mut st =
+            self.conn.prepare("SELECT name, kind, root, paused, prefer, synced_ms, status FROM units ORDER BY name")?;
         let rows = st.query_map([], Self::row_to_unit)?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -397,12 +398,13 @@ impl Store {
     }
 
     /// Live local copies of a blob anywhere in the root (for deduplication and
-    /// for serving). Returns `(unit, disk path)`.
-    pub fn find_blob(&self, blob: &Hash) -> Result<Vec<(String, String)>> {
-        let mut st =
-            self.conn.prepare_cached("SELECT unit, disk FROM entries WHERE blob = ?1 AND deleted = 0 AND kind = 0 LIMIT 8")?;
+    /// for serving). Returns `(unit, path, disk path)`.
+    pub fn find_blob(&self, blob: &Hash) -> Result<Vec<(String, String, String)>> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT unit, path, disk FROM entries WHERE blob = ?1 AND deleted = 0 AND kind = 0 LIMIT 8",
+        )?;
         let rows = st
-            .query_map([blob.0.to_vec()], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map([blob.0.to_vec()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -493,17 +495,17 @@ impl Store {
 
     /// Record a conflict unless an identical open one (same path, same remote
     /// state) exists. Returns the id of the new or existing conflict and
-    /// whether it is new.
+    /// whether it is new. Group conflicts (Git state) carry several entries.
     pub fn add_conflict(
         &self,
         unit: &str,
         path: &str,
         class: &str,
-        local: Option<&Entry>,
-        remote: &Entry,
+        locals: &[Entry],
+        remotes: &[Entry],
         stored: &str,
     ) -> Result<(i64, bool)> {
-        let state = remote.state_hash();
+        let state = remote_state(remotes);
         let existing: Option<i64> = self
             .conn
             .query_row(
@@ -527,8 +529,8 @@ impl Store {
                 unit,
                 path,
                 class,
-                local.map(bincode::serialize).transpose()?,
-                bincode::serialize(remote)?,
+                bincode::serialize(locals)?,
+                bincode::serialize(remotes)?,
                 state.0.to_vec(),
                 stored,
                 now_ms()
@@ -537,11 +539,25 @@ impl Store {
         Ok((self.conn.last_insert_rowid(), true))
     }
 
+    /// True if an open conflict with exactly this remote state exists.
+    pub fn has_open_conflict(&self, unit: &str, path: &str, remotes: &[Entry]) -> Result<bool> {
+        let state = remote_state(remotes);
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM conflicts WHERE unit = ?1 AND path = ?2 AND remote_state = ?3 AND resolved_ms IS NULL",
+                params![unit, path, state.0.to_vec()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     fn row_to_conflict(r: &Row) -> rusqlite::Result<ConflictRow> {
         let local: Option<Vec<u8>> = r.get(4)?;
         let remote: Vec<u8> = r.get(5)?;
         let decode = |b: &[u8]| {
-            bincode::deserialize::<Entry>(b)
+            bincode::deserialize::<Vec<Entry>>(b)
                 .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Blob, e))
         };
         Ok(ConflictRow {
@@ -549,8 +565,8 @@ impl Store {
             unit: r.get(1)?,
             path: r.get(2)?,
             class: r.get(3)?,
-            local: local.as_deref().map(decode).transpose()?,
-            remote: decode(&remote)?,
+            locals: local.as_deref().map(decode).transpose()?.unwrap_or_default(),
+            remotes: decode(&remote)?,
             stored: r.get(6)?,
             created_ms: r.get(7)?,
             resolved_ms: r.get(8)?,
@@ -598,6 +614,14 @@ impl Store {
         Ok(())
     }
 
+    /// Close open conflicts on `path` because a newer version superseded them.
+    pub fn supersede_conflicts(&self, unit: &str, path: &str) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE conflicts SET resolved_ms = ?3, resolution = 'superseded' WHERE unit = ?1 AND path = ?2 AND resolved_ms IS NULL",
+            params![unit, path, now_ms()],
+        )?)
+    }
+
     pub fn open_conflict_count(&self, unit: &str) -> Result<u64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM conflicts WHERE unit = ?1 AND resolved_ms IS NULL",
@@ -620,7 +644,13 @@ impl Store {
         let mut st = self.conn.prepare("SELECT device, name, pubkey, addr, paired_ms FROM peers ORDER BY paired_ms")?;
         let rows = st
             .query_map([], |r| {
-                Ok(PeerRow { device: r.get(0)?, name: r.get(1)?, pubkey: r.get(2)?, addr: r.get(3)?, paired_ms: r.get(4)? })
+                Ok(PeerRow {
+                    device: r.get(0)?,
+                    name: r.get(1)?,
+                    pubkey: r.get(2)?,
+                    addr: r.get(3)?,
+                    paired_ms: r.get(4)?,
+                })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
@@ -634,6 +664,17 @@ impl Store {
     pub fn remove_peer(&self, device: &str) -> Result<bool> {
         Ok(self.conn.execute("DELETE FROM peers WHERE device = ?1", [device])? > 0)
     }
+}
+
+/// Identity of a set of remote entries (for conflict de-duplication).
+pub fn remote_state(remotes: &[Entry]) -> Hash {
+    let mut h = Vec::with_capacity(remotes.len() * 64);
+    for e in remotes {
+        h.extend_from_slice(e.path.as_bytes());
+        h.push(0);
+        h.extend_from_slice(&e.state_hash().0);
+    }
+    Hash::of(&h)
 }
 
 /// Convenience: a fresh version vector for a newly observed local entry.
@@ -682,7 +723,7 @@ mod tests {
         under.sort();
         assert_eq!(under, vec!["a", "a/b", "a/b/c"]);
         assert_eq!(s.entries_under("u", "").unwrap().len(), 5);
-        assert_eq!(s.find_blob(&Hash::of(b"z")).unwrap(), vec![("u".to_string(), "z".to_string())]);
+        assert_eq!(s.find_blob(&Hash::of(b"z")).unwrap(), vec![("u".to_string(), "z".to_string(), "z".to_string())]);
         assert_eq!(s.entry_count("u").unwrap(), (5, 0));
     }
 
@@ -691,10 +732,11 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         let r1 = stored("f", b"1").entry;
         let r2 = stored("f", b"2").entry;
-        let (id1, new1) = s.add_conflict("u", "f", "concurrent-modify", None, &r1, "x").unwrap();
-        let (id1b, new1b) = s.add_conflict("u", "f", "concurrent-modify", None, &r1, "x").unwrap();
+        let (id1, new1) = s.add_conflict("u", "f", "concurrent-modify", &[], std::slice::from_ref(&r1), "x").unwrap();
+        let (id1b, new1b) = s.add_conflict("u", "f", "concurrent-modify", &[], std::slice::from_ref(&r1), "x").unwrap();
         assert!(new1 && !new1b && id1 == id1b);
-        let (id2, _) = s.add_conflict("u", "f", "concurrent-modify", None, &r2, "y").unwrap();
+        assert!(s.has_open_conflict("u", "f", std::slice::from_ref(&r1)).unwrap());
+        let (id2, _) = s.add_conflict("u", "f", "concurrent-modify", &[], std::slice::from_ref(&r2), "y").unwrap();
         let open = s.conflicts(false).unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].id, id2);

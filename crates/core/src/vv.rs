@@ -88,11 +88,7 @@ impl VersionVector {
 
     /// Compact textual form used in the journal, e.g. `a1b2:3,c4d5:1`.
     pub fn display(&self) -> String {
-        self.0
-            .iter()
-            .map(|(k, v)| format!("{}:{}", &k[..k.len().min(4)], v))
-            .collect::<Vec<_>>()
-            .join(",")
+        self.0.iter().map(|(k, v)| format!("{}:{}", &k[..k.len().min(4)], v)).collect::<Vec<_>>().join(",")
     }
 }
 

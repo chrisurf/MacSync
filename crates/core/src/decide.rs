@@ -237,10 +237,7 @@ mod tests {
         let l = file("mine", &[("A", 2)]);
         let r = file("theirs", &[("A", 1), ("B", 1)]);
         assert_eq!(decide(Some(&l), &r, None, TW, "A"), Decision::Conflict(ConflictClass::ConcurrentModify));
-        assert_eq!(
-            decide(Some(&l), &r, Some(GitClass::Ref), TW, "A"),
-            Decision::Conflict(ConflictClass::GitState)
-        );
+        assert_eq!(decide(Some(&l), &r, Some(GitClass::Ref), TW, "A"), Decision::Conflict(ConflictClass::GitState));
     }
 
     #[test]
@@ -261,10 +258,7 @@ mod tests {
             Decision::KeepLocalWins(vv) => assert_eq!(vv.compare(&r.vv), Ordering::Dominates),
             d => panic!("{d:?}"),
         }
-        assert!(matches!(
-            decide(Some(&l), &r, None, Policy::TwoWay(Prefer::Remote), "A"),
-            Decision::TakeRemote(_)
-        ));
+        assert!(matches!(decide(Some(&l), &r, None, Policy::TwoWay(Prefer::Remote), "A"), Decision::TakeRemote(_)));
         assert!(matches!(decide(Some(&l), &r, None, Policy::MirrorReceive, "A"), Decision::TakeRemote(_)));
     }
 
@@ -286,7 +280,8 @@ mod tests {
     }
 
     fn arb_entry() -> impl Strategy<Value = Entry> {
-        let vv = proptest::collection::btree_map(prop_oneof![Just("A".to_string()), Just("B".to_string())], 0u64..3, 0..3);
+        let vv =
+            proptest::collection::btree_map(prop_oneof![Just("A".to_string()), Just("B".to_string())], 0u64..3, 0..3);
         (prop_oneof![Just("x"), Just("y")], any::<bool>(), vv).prop_map(|(c, del, vv)| {
             let mut e = file(c, &[]);
             e.vv = VersionVector(vv);

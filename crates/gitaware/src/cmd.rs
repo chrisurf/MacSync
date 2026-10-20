@@ -24,7 +24,8 @@ pub fn available() -> bool {
 /// files were written by RepoSync. Exit code 1 ("needs update") is expected
 /// when the working tree differs from the index and is not an error.
 pub fn refresh_index(work: &Path) -> io::Result<()> {
-    let out = git(work).args(["update-index", "--refresh", "-q"]).stdout(Stdio::null()).stderr(Stdio::piped()).output()?;
+    let out =
+        git(work).args(["update-index", "--refresh", "-q"]).stdout(Stdio::null()).stderr(Stdio::piped()).output()?;
     match out.status.code() {
         Some(0) | Some(1) => Ok(()),
         _ => Err(io::Error::other(format!(

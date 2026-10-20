@@ -196,7 +196,9 @@ pub fn top_level_units(root: &Path, excludes: &Excludes) -> io::Result<Vec<(Stri
     let mut names: Vec<_> = fs::read_dir(root)?.filter_map(|e| e.ok()).collect();
     names.sort_by_key(|e| e.file_name());
     for de in names {
-        let Some(name) = de.file_name().to_str().map(rpath::nfc) else { continue };
+        let Some(name) = de.file_name().to_str().map(rpath::nfc) else {
+            continue;
+        };
         if excludes.is_excluded(&name, &name) {
             continue;
         }

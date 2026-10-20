@@ -55,9 +55,7 @@ impl Default for Gate {
 
 impl Gate {
     pub fn new() -> Gate {
-        Gate {
-            procs: Mutex::new(ProcCache { sys: System::new(), at: None, git_cwds: Vec::new() }),
-        }
+        Gate { procs: Mutex::new(ProcCache { sys: System::new(), at: None, git_cwds: Vec::new() }) }
     }
 
     /// Check a Git working tree `work` (the unit directory).

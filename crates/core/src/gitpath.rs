@@ -156,15 +156,8 @@ pub fn is_excluded(path: &str) -> bool {
 /// Files whose presence means that Git is in the middle of a multi-step
 /// operation. While any of them exists the unit is neither captured nor
 /// written to.
-pub const OPERATION_MARKERS: &[&str] = &[
-    "MERGE_HEAD",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD",
-    "BISECT_LOG",
-    "rebase-merge",
-    "rebase-apply",
-    "sequencer",
-];
+pub const OPERATION_MARKERS: &[&str] =
+    &["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply", "sequencer"];
 
 /// Lock files that signal a running Git command.
 pub const LOCK_FILES: &[&str] =

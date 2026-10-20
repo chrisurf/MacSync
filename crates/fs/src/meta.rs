@@ -64,7 +64,10 @@ pub fn set_mode(path: &Path, kind: Kind, mode: u32) -> io::Result<()> {
 }
 
 pub fn set_mtime(path: &Path, kind: Kind, mtime_ns: i64) -> io::Result<()> {
-    let t = filetime::FileTime::from_unix_time(mtime_ns.div_euclid(1_000_000_000), mtime_ns.rem_euclid(1_000_000_000) as u32);
+    let t = filetime::FileTime::from_unix_time(
+        mtime_ns.div_euclid(1_000_000_000),
+        mtime_ns.rem_euclid(1_000_000_000) as u32,
+    );
     if kind == Kind::Symlink {
         filetime::set_symlink_file_times(path, t, t)
     } else {

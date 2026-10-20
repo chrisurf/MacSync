@@ -27,24 +27,51 @@ pub struct DirListing {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
-    Hello { device: String, name: String, protocol: u32, arch: String, root: String },
+    Hello {
+        device: String,
+        name: String,
+        protocol: u32,
+        arch: String,
+        root: String,
+    },
     Roots,
-    Tree { unit: String, dirs: Vec<String> },
+    Tree {
+        unit: String,
+        dirs: Vec<String>,
+    },
     /// Entries (including tombstones) for exact `paths` and for everything
     /// below each of `prefixes`.
-    Entries { unit: String, paths: Vec<String>, prefixes: Vec<String> },
+    Entries {
+        unit: String,
+        paths: Vec<String>,
+        prefixes: Vec<String>,
+    },
     /// Content of small blobs. Missing or changed blobs are returned as `None`.
-    Blobs { hashes: Vec<Hash> },
+    Blobs {
+        hashes: Vec<Hash>,
+    },
     /// A byte range of a large blob.
-    BlobRange { hash: Hash, offset: u64, len: u64 },
+    BlobRange {
+        hash: Hash,
+        offset: u64,
+        len: u64,
+    },
     /// Notification: these units changed on the sender.
-    Changed { units: Vec<String> },
+    Changed {
+        units: Vec<String>,
+    },
     Ping,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
-    Hello { device: String, name: String, protocol: u32, arch: String, root: String },
+    Hello {
+        device: String,
+        name: String,
+        protocol: u32,
+        arch: String,
+        root: String,
+    },
     Roots(Vec<UnitRoot>),
     Tree(Vec<DirListing>),
     Entries(Vec<Entry>),
