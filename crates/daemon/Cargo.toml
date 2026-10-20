@@ -1,0 +1,24 @@
+[package]
+name = "reposync-daemon"
+description = "RepoSync daemon: configuration, watcher, scheduler, anti-entropy, IPC"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+reposync-core.workspace = true
+reposync-fs.workspace = true
+reposync-store.workspace = true
+reposync-engine.workspace = true
+reposync-net.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+notify.workspace = true
+tracing.workspace = true
+libc.workspace = true
+reposync-gitaware.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

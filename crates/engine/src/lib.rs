@@ -16,8 +16,9 @@ mod pull;
 mod resolve;
 mod serve;
 
+pub use capture::{ScanOptions, ScanReport};
 pub use plan::{ActionKind, PlannedAction};
-pub use pull::{Outcome, PullOptions, PullReport};
+pub use pull::{Outcome, PullOptions, PullReport, RetryLater};
 pub use resolve::Choice;
 
 use std::collections::HashMap;

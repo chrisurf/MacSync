@@ -3,7 +3,7 @@ name = "reposync-net"
 description = "Network layer of RepoSync: Noise transport, SPAKE2 pairing, LAN-only enforcement, mDNS discovery"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+publish.workspace = true
 
 [dependencies]
 reposync-core.workspace = true

@@ -3,7 +3,7 @@ name = "reposync-engine"
 description = "Synchronisation engine of RepoSync: capture, serve, pull, plan, atomic Git-ordered apply, recovery"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+publish.workspace = true
 
 [dependencies]
 reposync-core.workspace = true

@@ -3,7 +3,7 @@ name = "reposync-store"
 description = "SQLite persistence of RepoSync: units, entries, transactions, journal, conflicts, peers"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+publish.workspace = true
 
 [dependencies]
 reposync-core.workspace = true

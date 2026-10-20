@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# End-to-end test: two RepoSync daemons on loopback, paired with a code,
+# continuous sync of Git repositories and ordinary folders, Git torture
+# sequence, latency measurement, conflict detection.
+#
+# Usage: tests/e2e/two_daemons.sh [path/to/reposync]   (default: target/release/reposync)
+# Writes a machine-readable summary to $OUT (default: target/e2e-summary.json).
+set -euo pipefail
+
+BIN="${1:-target/release/reposync}"
+BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+OUT="${OUT:-target/e2e-summary.json}"
+WORK="$(mktemp -d)"
+PORT_A=$((47200 + RANDOM % 300 * 2))
+PORT_B=$((PORT_A + 400))
+PIDS=()
+cleanup() {
+  for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  [ "${KEEP:-0}" = 1 ] || rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+export GIT_AUTHOR_NAME=E2E GIT_AUTHOR_EMAIL=e2e@example.com GIT_COMMITTER_NAME=E2E GIT_COMMITTER_EMAIL=e2e@example.com
+g() { git -c init.defaultBranch=main -c gc.auto=0 -c maintenance.auto=false "$@"; }
+now_ms() { date +%s%3N; }
+log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+fail() { log "FAIL: $*"; echo "--- daemon A log"; tail -50 "$WORK/a.log" || true; echo "--- daemon B log"; tail -50 "$WORK/b.log" || true; exit 1; }
+
+A="$WORK/A"; B="$WORK/B"
+ra() { "$BIN" --config "$WORK/a.toml" "$@"; }
+rb() { "$BIN" --config "$WORK/b.toml" "$@"; }
+
+# wait_until <timeout-s> <command…>
+wait_until() {
+  local t=$1; shift
+  local deadline=$(( $(date +%s) + t ))
+  until "$@" >/dev/null 2>&1; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 0.1
+  done
+}
+
+roots_equal() {
+  local a b
+  a=$(ra status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted((u["name"],u["root"]) for u in d["units"]))')
+  b=$(rb status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted((u["name"],u["root"]) for u in d["units"]))')
+  [ "$a" = "$b" ]
+}
+
+trees_equal() {
+  diff -r --no-dereference -x .reposync -x index -x '*.lock' "$A" "$B" >/dev/null
+}
+
+converged() { roots_equal && trees_equal; }
+
+log "work dir $WORK, ports $PORT_A/$PORT_B"
+ra init --root "$A" --name "Mac A" --listen "127.0.0.1:$PORT_A" --peer "127.0.0.1:$PORT_B" --state-dir "$WORK/a-state" >/dev/null
+rb init --root "$B" --name "Mac B" --listen "127.0.0.1:$PORT_B" --peer "127.0.0.1:$PORT_A" --state-dir "$WORK/b-state" >/dev/null
+for c in a b; do
+  sed -i.bak 's/^discovery = true/discovery = false/' "$WORK/$c.toml"
+done
+
+log "pairing"
+rb pair listen --timeout-s 30 > "$WORK/pair.out" 2>&1 &
+PAIR_PID=$!
+wait_until 10 grep -q "pairing code" "$WORK/pair.out" || fail "no pairing code"
+CODE=$(sed -n 's/^pairing code: \([0-9]*\) \([0-9]*\)$/\1\2/p' "$WORK/pair.out")
+# A wrong code is rejected first.
+if ra pair connect "127.0.0.1:$((PORT_B + 1))" 000000 >/dev/null 2>&1 && [ "$CODE" != 000000 ]; then fail "wrong code accepted"; fi
+ra pair connect "127.0.0.1:$((PORT_B + 1))" "$CODE" > "$WORK/pair-a.out"
+wait $PAIR_PID || fail "pair listen failed"
+grep -q "paired with Mac B" "$WORK/pair-a.out" || fail "A not paired"
+grep -q "paired with Mac A" "$WORK/pair.out" || fail "B not paired"
+
+# Initial content on A before the daemons start.
+mkdir -p "$A/notes" "$A/web"
+echo "# Notizen" > "$A/notes/README.md"
+( cd "$A/web" && g init -q && echo "console.log(1)" > index.js && g add . && g commit -qm initial )
+for i in $(seq 1 3000); do d="$A/web/node_modules/pkg$((i % 60))"; mkdir -p "$d"; echo "module.exports=$i" > "$d/f$i.js"; done
+echo "node_modules/" > "$A/web/.gitignore"
+
+log "starting daemons"
+REPOSYNC_LOG=info ra daemon > "$WORK/a.log" 2>&1 & PIDS+=($!)
+REPOSYNC_LOG=info rb daemon > "$WORK/b.log" 2>&1 & PIDS+=($!)
+
+T0=$(now_ms)
+wait_until 120 converged || fail "initial sync did not converge"
+INITIAL_MS=$(( $(now_ms) - T0 ))
+log "initial sync converged in ${INITIAL_MS} ms (3000+ files)"
+( cd "$B/web" && git fsck --full --no-dangling ) >/dev/null || fail "fsck after initial sync"
+
+log "latency of a single small change"
+LAT=()
+for i in 1 2 3 4 5; do
+  T=$(now_ms)
+  echo "change $i" > "$A/notes/latency-$i.txt"
+  wait_until 20 test -f "$B/notes/latency-$i.txt" || fail "latency change $i not applied"
+  wait_until 20 grep -q "change $i" "$B/notes/latency-$i.txt" || fail "content $i wrong"
+  LAT+=($(( $(now_ms) - T )))
+done
+log "latencies (ms): ${LAT[*]}"
+
+log "git torture on A"
+cd "$A/web"
+for i in $(seq 1 5); do echo "line $i" >> index.js; g commit -qam "commit $i"; done
+g checkout -qb feature
+echo "feature" > feature.js && g add . && g commit -qm "feature"
+g checkout -q main
+echo "wip" >> index.js
+g stash -q
+g rebase -q feature
+g stash pop -q
+g gc -q --prune=now
+echo "staged" > staged.js && g add staged.js
+cd - >/dev/null
+wait_until 60 converged || fail "torture did not converge"
+( cd "$B/web" && git fsck --full --no-dangling ) >/dev/null || fail "fsck after torture"
+[ "$(cd "$A/web" && git rev-parse HEAD)" = "$(cd "$B/web" && git rev-parse HEAD)" ] || fail "HEAD differs"
+[ "$(cd "$A/web" && git status --porcelain)" = "$(cd "$B/web" && git status --porcelain)" ] || fail "status differs"
+[ "$(cd "$B/web" && git stash list | wc -l)" = 0 ] || fail "unexpected stash"
+log "torture converged; fsck ok; HEAD $(cd "$B/web" && git rev-parse --short HEAD)"
+
+log "work continues on B"
+( cd "$B/web" && g commit -qm "from B" && echo b > b.js && g add b.js && g commit -qm "b.js" )
+wait_until 30 converged || fail "B → A did not converge"
+[ "$(cd "$A/web" && git log -1 --format=%s)" = "b.js" ] || fail "commit from B missing on A"
+( cd "$A/web" && git fsck --full --no-dangling ) >/dev/null || fail "fsck on A"
+
+log "deletion of a whole folder"
+rm -rf "$A/notes"
+wait_until 30 test ! -e "$B/notes" || fail "folder deletion not propagated"
+
+log "concurrent edit → conflict (daemons paused while editing)"
+mkdir -p "$A/shared"; echo base > "$A/shared/doc.txt"
+wait_until 30 test -f "$B/shared/doc.txt" || fail "shared doc not synced"
+wait_until 30 converged || fail "not converged before conflict"
+ra pause >/dev/null; rb pause >/dev/null
+echo "edit A" > "$A/shared/doc.txt"; echo "edit B" > "$B/shared/doc.txt"
+ra resume >/dev/null; rb resume >/dev/null
+wait_until 30 sh -c "\"$BIN\" --config \"$WORK/a.toml\" conflicts | grep -q concurrent-modify" || fail "no conflict on A"
+[ "$(cat "$A/shared/doc.txt")" = "edit A" ] || fail "A lost its version"
+[ "$(cat "$B/shared/doc.txt")" = "edit B" ] || fail "B lost its version"
+ID=$(ra conflicts --json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+ra resolve "$ID" --keep remote >/dev/null
+wait_until 30 converged || fail "not converged after resolution"
+[ "$(cat "$A/shared/doc.txt")" = "edit B" ] || fail "resolution not applied"
+
+log "verify"
+ra verify --json > "$WORK/verify.json"
+SILENT=$(python3 -c 'import json; print(sum(r["silent_changes"] for r in json.load(open("'"$WORK"'/verify.json"))))')
+[ "$SILENT" = 0 ] || fail "verify found silent drift"
+
+# Idle CPU of both daemons over 5 s.
+sleep 1
+CPU=$(ps -o %cpu= -p "${PIDS[0]}" -p "${PIDS[1]}" | awk '{s+=$1} END {print s}')
+log "daemon CPU (ps average since start): ${CPU}%"
+
+mkdir -p "$(dirname "$OUT")"
+python3 - "$OUT" "$INITIAL_MS" "${LAT[*]}" "$CPU" <<'PY'
+import json, sys
+lat = [int(x) for x in sys.argv[3].split()]
+json.dump({"initial_sync_ms": int(sys.argv[2]), "files_initial": 3003,
+           "latency_ms": lat, "latency_max_ms": max(lat), "latency_median_ms": sorted(lat)[len(lat)//2],
+           "daemon_cpu_percent_avg": float(sys.argv[4]), "result": "pass"}, open(sys.argv[1], "w"), indent=2)
+PY
+log "PASS — summary in $OUT"

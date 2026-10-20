@@ -3,7 +3,7 @@ name = "reposync-gitaware"
 description = "Git awareness for RepoSync: quiescence gate, semantic index hash, reflog merge"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+publish.workspace = true
 
 [dependencies]
 reposync-core.workspace = true

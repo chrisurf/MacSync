@@ -23,7 +23,10 @@ const MAX_ATTEMPTS: u32 = 3;
 pub struct PairResult {
     pub pubkey: Vec<u8>,
     pub info: HelloInfo,
+    /// Address the pairing connection came from / went to.
     pub addr: SocketAddr,
+    /// Protocol port the peer listens on.
+    pub port: u16,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -31,6 +34,7 @@ struct Payload {
     pubkey: Vec<u8>,
     info: HelloInfo,
     protocol: u32,
+    port: u16,
 }
 
 /// Random 6-digit code.
@@ -83,11 +87,12 @@ fn spake(s: &mut TcpStream, code: &str, first: bool) -> Result<[u8; 32]> {
     Ok(blake3::derive_key("reposync pairing mac v1", &secret))
 }
 
-fn encode(identity: &Identity, info: &HelloInfo) -> Result<Vec<u8>> {
+fn encode(identity: &Identity, info: &HelloInfo, port: u16) -> Result<Vec<u8>> {
     Ok(bincode::serialize(&Payload {
         pubkey: identity.public.clone(),
         info: info.clone(),
         protocol: reposync_core::PROTOCOL_VERSION,
+        port,
     })?)
 }
 
@@ -104,6 +109,9 @@ fn decode_verified(key: &[u8; 32], role: &[u8], msg: &[u8]) -> Result<Payload> {
     if p.pubkey.len() != 32 || p.info.device != crate::device_id(&p.pubkey) {
         bail!("inconsistent pairing payload");
     }
+    if p.protocol != reposync_core::PROTOCOL_VERSION {
+        bail!("peer speaks protocol {}, expected {}", p.protocol, reposync_core::PROTOCOL_VERSION);
+    }
     Ok(p)
 }
 
@@ -114,12 +122,14 @@ fn signed(key: &[u8; 32], role: &[u8], payload: Vec<u8>) -> Vec<u8> {
     out
 }
 
-/// Wait for a peer to pair using `code`. Returns the peer's identity.
+/// Wait for a peer to pair using `code`. `port` is our protocol port.
+/// Returns the peer's identity.
 pub fn listen(
     listener: &TcpListener,
     code: &str,
     identity: &Identity,
     info: &HelloInfo,
+    port: u16,
     timeout: Duration,
 ) -> Result<PairResult> {
     let deadline = Instant::now() + timeout;
@@ -149,8 +159,8 @@ pub fn listen(
             let theirs = decode_verified(&key, b"C", &recv(&mut s)?);
             match theirs {
                 Ok(p) => {
-                    send(&mut s, &signed(&key, b"L", encode(identity, info)?))?;
-                    Ok(PairResult { pubkey: p.pubkey, info: p.info, addr })
+                    send(&mut s, &signed(&key, b"L", encode(identity, info, port)?))?;
+                    Ok(PairResult { pubkey: p.pubkey, info: p.info, addr, port: p.port })
                 }
                 Err(e) => {
                     let _ = send(&mut s, b"");
@@ -166,21 +176,21 @@ pub fn listen(
     bail!("pairing failed after {MAX_ATTEMPTS} attempts")
 }
 
-/// Pair with a listening peer at `addr` using `code`.
-pub fn connect(addr: SocketAddr, code: &str, identity: &Identity, info: &HelloInfo) -> Result<PairResult> {
+/// Pair with a listening peer at `addr` using `code`. `port` is our protocol port.
+pub fn connect(addr: SocketAddr, code: &str, identity: &Identity, info: &HelloInfo, port: u16) -> Result<PairResult> {
     if !crate::lan::is_local(&addr.ip()) {
         bail!("refusing to pair with non-local address {addr}");
     }
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).with_context(|| format!("connect {addr}"))?;
     s.set_read_timeout(Some(Duration::from_secs(20)))?;
     let key = spake(&mut s, code, true)?;
-    send(&mut s, &signed(&key, b"C", encode(identity, info)?))?;
+    send(&mut s, &signed(&key, b"C", encode(identity, info, port)?))?;
     let reply = recv(&mut s)?;
     if reply.is_empty() {
         bail!("wrong pairing code");
     }
     let p = decode_verified(&key, b"L", &reply)?;
-    Ok(PairResult { pubkey: p.pubkey, info: p.info, addr })
+    Ok(PairResult { pubkey: p.pubkey, info: p.info, addr, port: p.port })
 }
 
 #[cfg(test)]
@@ -194,10 +204,10 @@ mod tests {
         let b = Identity::generate().unwrap();
         let ia = HelloInfo::local(&a, "Mac A", "/r");
         let ib = HelloInfo::local(&b, "Mac B", "/r");
-        let t = std::thread::spawn(move || listen(&l, listen_code, &a, &ia, Duration::from_secs(10)));
+        let t = std::thread::spawn(move || listen(&l, listen_code, &a, &ia, 1111, Duration::from_secs(10)));
         let mut results = Vec::new();
         for c in connect_codes {
-            results.push(connect(addr, c, &b, &ib));
+            results.push(connect(addr, c, &b, &ib, 2222));
             if results.last().unwrap().is_ok() {
                 break;
             }
@@ -213,6 +223,7 @@ mod tests {
         assert_eq!(l.info.name, "Mac B");
         assert_eq!(c.info.name, "Mac A");
         assert_eq!(c.info.device, crate::device_id(&c.pubkey));
+        assert_eq!((l.port, c.port), (2222, 1111));
     }
 
     #[test]
