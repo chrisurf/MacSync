@@ -1,0 +1,37 @@
+# Automatic dependency update pull requests.
+# - Rust crates (Cargo.toml / Cargo.lock): weekly, minor+patch grouped into one
+#   PR; major versions arrive as separate PRs so breaking changes stay visible.
+# - GitHub Actions used by the workflows: weekly, grouped.
+# Security updates (RustSec/GitHub advisories) are always opened as separate
+# PRs immediately once "Dependabot security updates" is enabled in the
+# repository settings (Settings → Code security).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    labels: [dependencies, rust]
+    groups:
+      rust-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    commit-message:
+      prefix: "ci"
+    labels: [dependencies, ci]
+    groups:
+      actions:
+        patterns: ["*"]

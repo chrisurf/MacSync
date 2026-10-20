@@ -1,0 +1,51 @@
+name: Dependencies
+
+# Weekly health check of everything RepoSync depends on, plus on every change
+# to the dependency files. Fails on known vulnerabilities; reports (without
+# failing) available crate and toolchain updates in the job summary.
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # Mondays 05:17 UTC, before Dependabot runs
+  workflow_dispatch:
+  push:
+    paths: ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "deny.toml", "rust-toolchain.toml"]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "deny.toml", "rust-toolchain.toml"]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Security advisories, licences, sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  freshness:
+    name: Available updates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Report toolchain and crate updates
+        run: |
+          set +e
+          scripts/check-updates.sh > report.txt 2>&1
+          code=$?
+          {
+            echo '## Dependency report'
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' report.txt
+            echo '```'
+            if [ "$code" = 10 ]; then
+              echo 'Updates are available: run `make update-deps` / `make update-toolchain` or merge the Dependabot PRs.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat report.txt
+          # 1 = vulnerability found by cargo-deny (the audit job fails too)
+          [ "$code" != 1 ]

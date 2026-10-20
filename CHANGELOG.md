@@ -1,5 +1,25 @@
 # Changelog
 
+## Unveröffentlicht
+
+### Hinzugefügt
+- `Makefile` (doctor, install, update, version, sandbox, init, pair-*, run,
+  status, lint, test, e2e, bench, audit, outdated, update-deps, update-toolchain)
+- `scripts/doctor.sh` (Voraussetzungen, Versionen, Netzwerk, Firewall,
+  Terminal.app) und `scripts/check-updates.sh`
+- Gepinnte Toolchain (`rust-toolchain.toml`, Rust 1.99.1)
+- Build-Version mit Git-Commit in `reposync --version`, im Handshake und in
+  `status` (Warnung bei unterschiedlichen Builds)
+- Dependabot (Crates, GitHub Actions), Workflow „Dependencies“ mit
+  `cargo deny` (RustSec, Lizenzen, Quellen), `deny.toml`
+- Hinweis im Log, wenn macOS den Zugriff aufs lokale Netz blockiert
+- Doku: Getting Started auf zwei Macs, Wartung
+
+### Geändert
+- `bincode` (nicht mehr gewartet, RUSTSEC-2025-0141) durch `postcard`
+  ersetzt (ADR-0009); Binärformat inkompatibel zu früheren Dev-Builds
+- CI nutzt die Make-Targets
+
 ## 0.1.0 – MVP (2026-10-20)
 
 Erste funktionsfähige Version gemäss [Implementierungsplan](docs/implementation-plan.md).

@@ -17,12 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The toolchain version comes from rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: make lint
 
   test:
     strategy:
@@ -38,13 +36,13 @@ jobs:
         run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.com"
-      - run: cargo test --workspace
+      - run: make test
       - name: Build release binary
-        run: cargo build --release -p reposync-cli
+        run: make build
       - name: End-to-end test (two daemons)
-        run: OUT=target/e2e-summary-${{ matrix.os }}.json tests/e2e/two_daemons.sh target/release/reposync
+        run: OUT=target/e2e-summary-${{ matrix.os }}.json make e2e
       - name: Benchmark (100k files, in-process)
-        run: cargo test --release -p reposync-engine --test bench -- --ignored --nocapture
+        run: make bench
       - uses: actions/upload-artifact@v4
         if: always()
         with:

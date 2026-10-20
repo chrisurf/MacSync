@@ -15,30 +15,33 @@ werden nie still aufgelöst.
 | [docs/concept.md](docs/concept.md) | Originalkonzept |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | Bewertung, MVP-Umfang, Meilensteine, Gates |
 | [docs/architecture.md](docs/architecture.md) | Umsetzung: Crates, Datenmodell, Protokoll, Abläufe |
+| [docs/getting-started-mac.md](docs/getting-started-mac.md) | **Test auf zwei Macs im eigenen WLAN – Schritt für Schritt** |
 | [docs/operations.md](docs/operations.md) | Installation, Konfiguration, Bedienung, Fehlerbehebung |
+| [docs/maintenance.md](docs/maintenance.md) | Abhängigkeiten, Toolchain, Sicherheitsmeldungen, Updates |
 | [docs/validation-report.md](docs/validation-report.md) | Testergebnisse und Messwerte |
 | [docs/adr/](docs/adr/) | Architekturentscheidungen |
 
-## Schnellstart
+## Schnellstart (zwei Macs)
 
 ```sh
-cargo build --release            # Binary: target/release/reposync
+xcode-select --install                                         # einmalig
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh # einmalig
+git clone https://github.com/chrisurf/RepoSync.git && cd RepoSync
+git checkout claude/mvp-implementation-docs-dzm5uj    # bis der Branch gemergt ist
 
-# auf beiden Macs
-reposync init --root ~/Code --name "MacBook"
+make doctor          # prüft Voraussetzungen, Version, Netzwerk
+make install         # baut und installiert reposync nach ~/.local/bin
 
-# Mac A                                  # Mac B
-reposync pair listen                     reposync pair connect <mac-a>.local <code>
-
-# auf beiden Macs: Dienst installieren (LaunchAgent) oder im Vordergrund starten
-reposync service install                 # oder: reposync daemon
-
-reposync status                          # Zustand aller Repos/Ordner
-reposync diff web                        # was unterscheidet sich, was würde passieren
-reposync conflicts                       # offene Konflikte
-reposync resolve 3 --keep remote         # Konflikt lösen
-reposync log --since 1h                  # Journal: jede Aktion mit Grund
+# Mac A                                   # Mac B
+make sandbox                              mkdir -p ~/RepoSyncTest
+make init PEER=mac-b.local:47123          make init PEER=mac-a.local:47123
+                                          make pair-listen        # zeigt Code
+make pair-connect HOST=mac-b.local CODE=123456
+make run                                  make run                # in Terminal.app
 ```
+
+Details, Netzwerk und macOS-Besonderheiten: [Getting Started](docs/getting-started-mac.md).
+Alle Befehle: `make help`.
 
 ## Status (MVP v0.1)
 
@@ -51,12 +54,12 @@ Dateien (siehe [Roadmap](docs/implementation-plan.md#22-nicht-enthalten-roadmap-
 ## Entwicklung
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace                     # Unit-, Property-, Integrations-, Netzwerktests
-tests/e2e/two_daemons.sh target/release/reposync   # zwei echte Daemons
-cargo test --release -p reposync-engine --test bench -- --ignored --nocapture
+make check        # lint + test + audit (wie die CI)
+make e2e          # zwei echte Daemons auf diesem Rechner
+make bench        # 100 000 Dateien
+make outdated     # verfügbare Updates und Sicherheitsmeldungen
 ```
 
-Rust stable, keine Laufzeitabhängigkeiten ausser `git` (für
-`update-index --refresh` und `fsck`).
+Rust-Version in `rust-toolchain.toml` gepinnt, Abhängigkeiten in `Cargo.lock`;
+Dependabot und der Workflow „Dependencies“ halten beides aktuell
+([maintenance.md](docs/maintenance.md)). Laufzeitabhängigkeit: `git`.
