@@ -49,6 +49,9 @@ pub struct SyncConfig {
     pub max_wait_s: u64,
     /// Interval of the root-hash comparison with the peer.
     pub anti_entropy_s: u64,
+    /// Interval of a stat-only rescan of all units (catches missed file
+    /// system events within minutes instead of at the daily verification).
+    pub rescan_interval_s: u64,
     /// Interval of the full re-hash against the file system.
     pub verify_interval_h: u64,
     pub fsck_after_apply: bool,
@@ -68,6 +71,7 @@ impl Default for SyncConfig {
             max_quiet_ms: 5000,
             max_wait_s: 30,
             anti_entropy_s: 60,
+            rescan_interval_s: 600,
             verify_interval_h: 24,
             fsck_after_apply: true,
             strip_quarantine: false,

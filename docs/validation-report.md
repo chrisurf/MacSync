@@ -28,7 +28,7 @@ reproduzierbar (Befehle jeweils angegeben).
 | M6 Daemon & CLI | E2E mit zwei Daemon-Prozessen (siehe 4.), Latenz < 3 s | ✅ Linux · macOS siehe 6. |
 | M7 Validierung | dieser Bericht | ✅ |
 
-Befehl: `cargo test --workspace` → **100 Tests, 0 Fehler** (Linux und macOS; zusätzlich 1 Benchmark mit `--ignored`).
+Befehl: `cargo test --workspace` → **104 Tests, 0 Fehler** (Linux und macOS; zusätzlich 1 Benchmark mit `--ignored`).
 
 ## 3. Wichtige Integrationsszenarien (Engine)
 
@@ -59,6 +59,19 @@ Papierkorb oder Konfliktspeicher). 40 Fälle je CI-Lauf, lokal zusätzlich mit
 400 Fällen ausgeführt – **keine Verletzung**. Der Test fand während der
 Entwicklung eine echte Regression (fehlendes Anlegen des Konfliktordners nach
 einer Optimierung), die vor dem Commit behoben wurde.
+
+### Zuverlässigkeit (`tests/robustness.rs`)
+
+| Szenario | Ergebnis |
+| --- | --- |
+| Absturz nach **jeder** einzelnen Dateioperation einer Git-Transaktion (Commit mit Änderung, neuer und gelöschter Datei; 18 Absturzpunkte) | an jedem Punkt: HEAD alt oder neu, `git fsck --full` sauber, Git durch `index.lock` blockiert; nach Neustart vollständig, Lock entfernt, Arbeitsbaum identisch zur Quelle |
+| Netzabbruch beim 1., 2. und 3. Blob-Aufruf (6 000 Dateien + 9-MB-Datei) | Zielbaum bitgenau unverändert, kein offenes Journal, Staging bereinigt; nach Wiederverbindung vollständiger Sync |
+| Quelle ändert eine Datei während der Übertragung | Transaktion verworfen (kein Mix aus alt/neu), danach Konvergenz auf den neuen Stand |
+| Datenbankverlust auf einer Seite + lokale Bearbeitung | Neuaufbau per Scan; abweichender Stand wird Konflikt, **nie** still überschrieben |
+
+Zusätzlich im Daemon: Stat-Rescan aller Einheiten alle 10 Minuten
+(`rescan_interval_s`), damit verpasste Dateisystem-Ereignisse nicht erst bei
+der täglichen Vollprüfung auffallen; Funde werden als `drift` journalisiert.
 
 ## 4. End-to-End mit zwei Daemons (`tests/e2e/two_daemons.sh`)
 

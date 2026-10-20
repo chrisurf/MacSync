@@ -56,6 +56,7 @@ quiet_ms = 400                # Ruhezeit nach dem letzten Ereignis
 max_quiet_ms = 5000           # Ruhezeit bei Bursts (npm install)
 max_wait_s = 30               # spätestens dann erfassen
 anti_entropy_s = 60           # Root-Vergleich mit dem Peer
+rescan_interval_s = 600       # Stat-Rescan gegen verpasste Ereignisse (0 = aus)
 verify_interval_h = 24        # vollständiges Neu-Hashen
 fsck_after_apply = true
 strip_quarantine = false      # com.apple.quarantine beim Empfang entfernen

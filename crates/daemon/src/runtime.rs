@@ -439,6 +439,7 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
     let cfg = node.cfg.sync.clone();
     let mut last_ae: Option<Instant> = None;
     let mut last_verify = Instant::now();
+    let mut last_rescan = Instant::now();
     let mut last_housekeeping: Option<Instant> = None;
     let tick = Duration::from_millis(100);
     while !shared.stop.load(Ordering::SeqCst) {
@@ -541,7 +542,31 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
             }
         }
 
-        // 3. Daily verification and housekeeping.
+        // 3. Safety net against missed events: periodic stat-only rescan.
+        if cfg.rescan_interval_s > 0 && now.duration_since(last_rescan) >= Duration::from_secs(cfg.rescan_interval_s) {
+            last_rescan = now;
+            match node.engine.scan_all(false) {
+                Ok(r) => {
+                    let missed: Vec<String> = r.iter().filter(|r| r.changed > 0).map(|r| r.unit.clone()).collect();
+                    if !missed.is_empty() {
+                        tracing::info!(?missed, "periodic rescan found changes without events");
+                        for u in &missed {
+                            let _ =
+                                node.engine.store().log(u, "drift", "", "periodic rescan found uncaptured changes", "");
+                        }
+                        refresh_units(&node, &shared);
+                        if let Some(p) = peer(&node, &shared) {
+                            if let Err(e) = p.notify_changed(missed) {
+                                peer_failed(&shared, &e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error = %format!("{e:#}"), "periodic rescan failed"),
+            }
+        }
+
+        // 4. Daily verification and housekeeping.
         if now.duration_since(last_verify) >= Duration::from_secs(cfg.verify_interval_h.max(1) * 3600) {
             last_verify = now;
             match node.engine.scan_all(true) {
