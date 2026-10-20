@@ -49,9 +49,16 @@ pub struct PullReport {
     pub remote_root: Hash,
     /// True if the local root equals the remote root after the pull.
     pub converged: bool,
+    /// Wall-clock milliseconds per phase (diagnostics).
+    pub timings_ms: Vec<(String, u64)>,
 }
 
 impl PullReport {
+    fn lap(&mut self, phase: &str, t: &mut std::time::Instant) {
+        self.timings_ms.push((phase.to_string(), t.elapsed().as_millis() as u64));
+        *t = std::time::Instant::now();
+    }
+
     fn new(unit: &str, remote_root: Hash) -> PullReport {
         PullReport {
             unit: unit.to_string(),
@@ -65,6 +72,7 @@ impl PullReport {
             local_root: Hash::ZERO,
             remote_root,
             converged: false,
+            timings_ms: Vec::new(),
         }
     }
 }
@@ -190,6 +198,7 @@ impl Engine {
         }
 
         // 1. Merkle descent and entry exchange.
+        let mut t = std::time::Instant::now();
         let (paths, prefixes) = descend(peer, unit, &tree, remote.root)?;
         let remote_entries = fetch_entries(peer, unit, &paths, &prefixes)?;
         let mut local: HashMap<String, Stored> = HashMap::new();
@@ -208,6 +217,7 @@ impl Engine {
         }
         let keys: BTreeSet<String> = remote_entries.keys().chain(local.keys()).cloned().collect();
 
+        rep.lap("descend", &mut t);
         // 2. Decisions.
         let policy = self.policy_for(unit);
         let me = self.cfg.device.clone();
@@ -471,6 +481,7 @@ impl Engine {
             }
         }
         plan.sort();
+        rep.lap("plan", &mut t);
         rep.actions = plan.actions.clone();
         rep.writes = plan
             .ops
@@ -501,7 +512,9 @@ impl Engine {
         result?;
 
         // 5. Post-apply: refresh index stat cache, re-capture, verify.
+        let mut t = std::time::Instant::now();
         self.post_apply(&plan, &mut rep)?;
+        rep.lap("post-apply", &mut t);
         rep.outcome = Outcome::Applied;
         Ok(rep)
     }
@@ -551,7 +564,9 @@ impl Engine {
                 anyhow::bail!("not enough free space: need {total} bytes, {free} available");
             }
         }
-        self.fetch(peer, &needs, rep)?;
+        let mut t = std::time::Instant::now();
+        self.fetch(peer, &needs, rep, staging)?;
+        rep.lap("fetch", &mut t);
 
         // Materialise conflict-store symlinks/dirs.
         for c in &plan.conflicts {
@@ -628,16 +643,25 @@ impl Engine {
             }
         }
 
+        rep.lap("pre-check", &mut t);
         // Execute.
-        self.execute(plan, staging)
+        let r = self.execute(plan, staging);
+        rep.lap("apply", &mut t);
+        r
     }
 
-    fn fetch(&self, peer: &dyn PeerApi, needs: &BTreeMap<Hash, Need>, rep: &mut PullReport) -> Result<()> {
+    fn fetch(
+        &self,
+        peer: &dyn PeerApi,
+        needs: &BTreeMap<Hash, Need>,
+        rep: &mut PullReport,
+        staging: &Path,
+    ) -> Result<()> {
         let mut remote_small: Vec<Hash> = Vec::new();
         let mut remote_large: Vec<Hash> = Vec::new();
         for (hash, need) in needs {
             for d in &need.dests {
-                if let Some(p) = d.parent() {
+                if let Some(p) = d.parent().filter(|p| *p != staging) {
                     std::fs::create_dir_all(p)?;
                 }
             }
@@ -650,7 +674,7 @@ impl Engine {
                 remote_large.push(*hash);
             }
         }
-        // Bundles of small files.
+        // Bundles of small files, written by a thread pool.
         let mut i = 0;
         while i < remote_small.len() {
             let mut bytes = 0u64;
@@ -660,17 +684,18 @@ impl Engine {
                 j += 1;
             }
             let batch = &remote_small[i..j];
-            let blobs = peer.blobs(batch)?;
-            for (k, h) in batch.iter().enumerate() {
-                let data = match blobs.get(k).cloned().flatten() {
+            let mut blobs = peer.blobs(batch)?;
+            blobs.resize(batch.len(), None);
+            let mut items: Vec<(&Need, Vec<u8>)> = Vec::with_capacity(batch.len());
+            for (h, b) in batch.iter().zip(blobs) {
+                let data = match b {
                     Some(d) if Hash::of(&d) == *h => d,
                     _ => self.refetch_small(peer, h)?,
                 };
                 rep.bytes_fetched += data.len() as u64;
-                let need = &needs[h];
-                ops::write_new(&need.dests[0], &data)?;
-                copy_rest(&need.dests)?;
+                items.push((&needs[h], data));
             }
+            write_parallel(&items)?;
             i = j;
         }
         // Large files in ranges.
@@ -687,6 +712,9 @@ impl Engine {
             }
             copy_rest(&need.dests)?;
         }
+        // One bundled flush for everything staged (instead of one per file).
+        let all: Vec<PathBuf> = needs.values().flat_map(|n| n.dests.iter().cloned()).collect();
+        ops::sync_paths(&all)?;
         Ok(())
     }
 
@@ -720,7 +748,6 @@ impl Engine {
             off += chunk.len() as u64;
             rep.bytes_fetched += chunk.len() as u64;
         }
-        f.sync_data()?;
         Ok(Hash::from_blake3(hasher.finalize()) == *h)
     }
 
@@ -863,6 +890,38 @@ fn db_op(path: &str, disk: &str, entry: Entry, reason: &str) -> Op {
         source: None,
         reason: reason.to_string(),
     }
+}
+
+/// Paralleles Schreiben (concept): staging files are written by a small
+/// thread pool; durability follows with one bundled flush.
+fn write_parallel(items: &[(&Need, Vec<u8>)]) -> Result<()> {
+    const THREADS: usize = 8;
+    if items.len() < 64 {
+        for (need, data) in items {
+            ops::write_unsynced(&need.dests[0], data)?;
+            copy_rest(&need.dests)?;
+        }
+        return Ok(());
+    }
+    let chunk = items.len().div_ceil(THREADS);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|c| {
+                s.spawn(move || -> Result<()> {
+                    for (need, data) in c {
+                        ops::write_unsynced(&need.dests[0], data)?;
+                        copy_rest(&need.dests)?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().map_err(|_| anyhow::anyhow!("staging writer panicked"))??;
+        }
+        Ok(())
+    })
 }
 
 fn copy_rest(dests: &[PathBuf]) -> Result<()> {

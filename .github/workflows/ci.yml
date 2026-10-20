@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Git identity for test repositories
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+      - run: cargo test --workspace
+      - name: Build release binary
+        run: cargo build --release -p reposync-cli
+      - name: End-to-end test (two daemons)
+        run: OUT=target/e2e-summary-${{ matrix.os }}.json tests/e2e/two_daemons.sh target/release/reposync
+      - name: Benchmark (100k files, in-process)
+        run: cargo test --release -p reposync-engine --test bench -- --ignored --nocapture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ matrix.os }}
+          path: target/e2e-summary-*.json

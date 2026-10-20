@@ -46,6 +46,49 @@ pub fn write_new(path: &Path, data: &[u8]) -> io::Result<()> {
     f.sync_data()
 }
 
+/// Write `data` to a new file without flushing; call [`sync_paths`] for the
+/// whole batch afterwards (bundled durability, one flush per transaction).
+pub fn write_unsynced(path: &Path, data: &[u8]) -> io::Result<()> {
+    let mut f = File::create(path)?;
+    f.write_all(data)
+}
+
+/// Make a batch of freshly written files durable. On Linux a single
+/// `syncfs` covers the whole volume; elsewhere the files are flushed in
+/// parallel.
+pub fn sync_paths(paths: &[PathBuf]) -> io::Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let f = File::open(&paths[0])?;
+        if unsafe { libc::syncfs(f.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+    }
+    let threads = 8usize.min(paths.len());
+    let chunk = paths.len().div_ceil(threads);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = paths
+            .chunks(chunk)
+            .map(|c| {
+                s.spawn(move || -> io::Result<()> {
+                    for p in c {
+                        File::open(p)?.sync_data()?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().map_err(|_| io::Error::other("fsync thread panicked"))??;
+        }
+        Ok(())
+    })
+}
+
 /// Copy-on-write clone if the file system supports it (APFS `clonefile`,
 /// Btrfs/XFS reflink), otherwise a regular copy.
 pub fn clone_or_copy(src: &Path, dst: &Path) -> io::Result<()> {

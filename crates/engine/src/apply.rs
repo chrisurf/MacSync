@@ -113,10 +113,16 @@ impl Engine {
                         }
                     }
                 }
-                self.set_meta(&staged, e)?;
+                // The staged file is fresh: only set attributes it should have.
+                meta::set_mode(&staged, Kind::File, e.mode)?;
+                if !e.xattrs.is_empty() {
+                    meta::write_xattrs(&staged, &e.xattrs, self.cfg.strip_quarantine)?;
+                }
                 meta::set_mtime(&staged, Kind::File, e.mtime_ns)?;
                 if let Some(p) = target.parent() {
-                    fs::create_dir_all(p)?;
+                    if fs::symlink_metadata(p).is_err() {
+                        fs::create_dir_all(p)?;
+                    }
                 }
                 self.backup(&target, trash, &trash_rel)?;
                 if op.phase == Phase::Index {

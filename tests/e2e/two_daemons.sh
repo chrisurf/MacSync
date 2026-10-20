@@ -23,7 +23,7 @@ trap cleanup EXIT
 
 export GIT_AUTHOR_NAME=E2E GIT_AUTHOR_EMAIL=e2e@example.com GIT_COMMITTER_NAME=E2E GIT_COMMITTER_EMAIL=e2e@example.com
 g() { git -c init.defaultBranch=main -c gc.auto=0 -c maintenance.auto=false "$@"; }
-now_ms() { date +%s%3N; }
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 fail() { log "FAIL: $*"; echo "--- daemon A log"; tail -50 "$WORK/a.log" || true; echo "--- daemon B log"; tail -50 "$WORK/b.log" || true; exit 1; }
 
@@ -48,8 +48,34 @@ roots_equal() {
   [ "$a" = "$b" ]
 }
 
+# Portable tree comparison (content, mode, symlink targets; .git/index is
+# compared semantically by RepoSync, so it is skipped here).
 trees_equal() {
-  diff -r --no-dereference -x .reposync -x index -x '*.lock' "$A" "$B" >/dev/null
+  python3 - "$A" "$B" <<'PY'
+import os, stat, sys
+def snap(root):
+    out = {}
+    for d, dirs, files in os.walk(root):
+        rel_d = os.path.relpath(d, root)
+        if rel_d.split(os.sep)[0] == ".reposync":
+            dirs[:] = []
+            continue
+        for n in dirs + files:
+            p = os.path.join(d, n)
+            rel = os.path.normpath(os.path.join(rel_d, n))
+            if rel.startswith(".reposync") or n.endswith(".lock") or rel.endswith(os.path.join(".git", "index")):
+                continue
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                out[rel] = ("l", os.readlink(p))
+            elif stat.S_ISDIR(st.st_mode):
+                out[rel] = ("d", st.st_mode & 0o7777)
+            else:
+                with open(p, "rb") as f:
+                    out[rel] = ("f", st.st_mode & 0o7777, f.read())
+    return out
+sys.exit(0 if snap(sys.argv[1]) == snap(sys.argv[2]) else 1)
+PY
 }
 
 converged() { roots_equal && trees_equal; }
