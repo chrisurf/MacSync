@@ -25,7 +25,7 @@ reproduzierbar (Befehle jeweils angegeben).
 | M3 Git-bewusst | 7 Tests gegen echtes git: Index v2/v3/v4 semantisch stabil bei Stat-Änderungen, Locks inkl. `refs/**/*.lock`, Rebase-Erkennung, `.git`-Datei, Reflog-Merge, `fsck`-Erkennung | ✅ |
 | M4 Engine | 17 Ordner- + 10 Git-Integrationstests + Konvergenz-Property-Test (siehe 3.) | ✅ |
 | M5 Netzwerk | 7 + 3 Tests: Noise-Roundtrip (1 MB, komprimierbar/zufällig), Pairing richtig/falsch/Limit 3, Sync über TCP (9-MB-Datei + 500 Dateien), fremder und gefälschter Schlüssel abgelehnt, öffentliche Adresse abgelehnt | ✅ |
-| M6 Daemon & CLI | E2E mit zwei Daemon-Prozessen (siehe 4.), Latenz < 3 s | ✅ Linux · macOS siehe 6. |
+| M6 Daemon & CLI | E2E mit zwei Daemon-Prozessen (siehe 4.), Latenz < 3 s | ✅ Linux und macOS |
 | M7 Validierung | dieser Bericht | ✅ |
 
 Befehl: `cargo test --workspace` → **104 Tests, 0 Fehler** (Linux und macOS; zusätzlich 1 Benchmark mit `--ignored`).
@@ -87,8 +87,13 @@ Konflikt → Auflösung → `verify`.
 | Erst-Sync 3 003 Dateien | 1,6–2,1 s | – |
 | Latenz kleine Änderung (Speichern → Ziel) | 426–442 ms (Median 436 ms) | < 3 s ✅ |
 | Torture-Szenario | konvergiert, `fsck --full` sauber, HEAD/Status/Refs identisch | `fsck`-gültig ✅ |
-| Leerlauf-CPU beider Daemons | 0 % (ps-Mittel) | ≈ 0 % ✅ |
+| Leerlauf-CPU beider Daemons (CPU-Zeit über 10 s ohne Änderungen, `/proc`-Ticks) | 0,1 % eines Kerns | ≈ 0 % ✅ |
 | `verify` nach dem Lauf | 0 stille Abweichungen | – |
+
+Korrektur: Eine frühere Fassung meldete „0 % CPU (ps-Mittel)“. Das war ein
+Messfehler – gemessen wurde die Subshell statt des Daemon-Prozesses (der
+deshalb auf macOS beim Aufräumen auch nicht beendet wurde). Skript und
+Messung sind korrigiert; der Wert oben ist die echte Leerlauf-Messung.
 
 Die Latenz setzt sich aus der Ruhezeit (400 ms, konfigurierbar) und < 50 ms
 Übertragung/Anwendung zusammen.
@@ -110,8 +115,23 @@ Optimierungen während der Validierung (gemessen, 30 000 Dateien): gebündeltes
 `fsync` pro Transaktion (14,6 s → 9,5 s) und paralleles Schreiben in den
 Staging-Ordner (→ 5,4 s). Parallele Lesezugriffe auf der Quellseite waren in
 der Sandbox messbar langsamer und wurden verworfen. 100 000 Dateien: 44 s →
-17,9 s. Die Sandbox-I/O (`openat` ≈ 67 µs) schwankt um Faktor 2; auf APFS
-sind deutlich bessere Werte zu erwarten (CI-Artefakt `bench-summary.json`).
+17,9 s. Die Sandbox-I/O (`openat` ≈ 67 µs) schwankt um Faktor 2.
+
+macOS-CI-Runner (`macos-latest`, virtualisiertes APFS, gleicher Benchmark):
+
+| Messgrösse | macOS-CI |
+| --- | --- |
+| Leerlauf-Prüfung | **0,08 ms** ✅ |
+| Erzeugen der 100 000 Testdateien (Vergleichswert für die I/O des Runners) | 19,4 s |
+| Kalter Scan / warmer Re-Scan | 28,5 s / 3,5 s |
+| Erst-Sync 100 000 Dateien | 86 s (≈ 1 160 Dateien/s; fetch 54 s, apply 29 s) |
+| Eine geänderte Datei: Scan / Pull | 6,0 s / 5,8 s |
+
+Der CI-Runner ist beim Dateierzeugen selbst ≈ 4× langsamer als die Sandbox;
+die Werte sind daher kein Mass für echte Macs, zeigen aber, dass Erst-Sync
+und Einheiten-Scan bei sehr vielen kleinen Dateien I/O-gebunden sind. Echte
+Messungen auf den Ziel-Macs sind Teil des Dogfoodings (Konzept: 4 Wochen
+Spiegel-Modus).
 
 ## 6. macOS (GitHub Actions)
 
@@ -119,16 +139,18 @@ sind deutlich bessere Werte zu erwarten (CI-Artefakt `bench-summary.json`).
   (inkl. macOS-spezifischer Codepfade: BSD-Flags, `lchflags`,
   Case-insensitive-Probe auf APFS, FSEvents-Backend, `clonefile` via
   `reflink-copy`).
-* E2E (erster Lauf): Pairing, Erst-Sync (3 003 Dateien in 1,66 s) und
-  Latenz (638–860 ms) bestanden; die Stash-Prüfung des Skripts war zu streng
-  formuliert (verlangte leere Stash-Liste statt Gleichheit mit A) und wurde
-  korrigiert. Ergebnis des Folgelaufs: siehe CI-Status des Branches.
+* E2E: erster Lauf scheiterte an einer zu streng formulierten Prüfung des
+  Skripts (leere Stash-Liste statt Gleichheit mit A); nach Korrektur
+  **bestanden**: Pairing, Erst-Sync 3 003 Dateien ≈ 1,7 s, Latenz
+  638–860 ms (< 3 s ✅), Git-Torture mit sauberem `fsck`, Konflikt und
+  Auflösung, `verify`.
+* Benchmark: siehe Abschnitt 5.
 
 ## 7. Bekannte Grenzen (bewusst, siehe Roadmap)
 
 | Thema | Stand |
 | --- | --- |
-| Scan einer Einheit nach Ereignis | Stat-Walk der ganzen Einheit (1,1 s bei 100 000 Dateien); FSEvents-Pfadgranularität (nur geänderte Teilbäume) ist v0.2 |
+| Scan einer Einheit nach Ereignis | Stat-Walk der ganzen Einheit (1,1 s Sandbox / 3,5–6 s macOS-CI bei 100 000 Dateien in *einer* Einheit); Scan nur der geänderten Teilbäume (FSEvents-Pfade) ist die wichtigste Optimierung für v0.2 |
 | Erst-Sync-Durchsatz | eine Verbindung, sequentielles Anwenden; mehrere Ströme sind v0.2 |
 | Grosse Dateien | Ganzdatei-Transfer (4-MB-Bereiche, fortsetzbar durch Dedup), kein FastCDC-Delta |
 | Atomare Bundles/SQLite-Gruppen, Sparse Files, `birthtime`, ACLs | nicht im MVP |

@@ -107,8 +107,10 @@ for i in $(seq 1 3000); do d="$A/web/node_modules/pkg$((i % 60))"; mkdir -p "$d"
 echo "node_modules/" > "$A/web/.gitignore"
 
 log "starting daemons"
-REPOSYNC_LOG=info ra daemon > "$WORK/a.log" 2>&1 & PIDS+=($!)
-REPOSYNC_LOG=info rb daemon > "$WORK/b.log" 2>&1 & PIDS+=($!)
+# Start the binary directly (not via a shell function) so that $! is the
+# daemon itself and cleanup terminates it.
+REPOSYNC_LOG=info "$BIN" --config "$WORK/a.toml" daemon > "$WORK/a.log" 2>&1 & PIDS+=($!)
+REPOSYNC_LOG=info "$BIN" --config "$WORK/b.toml" daemon > "$WORK/b.log" 2>&1 & PIDS+=($!)
 
 T0=$(now_ms)
 wait_until 120 converged || fail "initial sync did not converge"
@@ -179,10 +181,25 @@ ra verify --json > "$WORK/verify.json"
 SILENT=$(python3 -c 'import json; print(sum(r["silent_changes"] for r in json.load(open("'"$WORK"'/verify.json"))))')
 [ "$SILENT" = 0 ] || fail "verify found silent drift"
 
-# Idle CPU of both daemons over 5 s.
-sleep 1
-CPU=$(ps -o %cpu= -p "${PIDS[0]}" -p "${PIDS[1]}" | awk '{s+=$1} END {print s}')
-log "daemon CPU (ps average since start): ${CPU}%"
+# Idle CPU: CPU time consumed by both daemons during 10 s without changes.
+cpu_ms() {  # cumulative user+sys CPU time of a pid in ms
+  if [ -r "/proc/$1/stat" ]; then  # Linux: exact clock ticks
+    python3 -c 'import os,sys; f=open("/proc/%s/stat" % sys.argv[1]).read().rsplit(")",1)[1].split(); print(int((int(f[11])+int(f[12]))*1000/os.sysconf("SC_CLK_TCK")))' "$1"
+  else  # macOS: ps TIME has centiseconds ([[dd-]hh:]mm:ss.cc)
+    ps -o time= -p "$1" | python3 -c '
+import sys
+t = sys.stdin.read().strip().replace("-", ":")
+s = 0.0
+for p in t.split(":"): s = s * 60 + float(p)
+print(int(s * 1000))'
+  fi
+}
+sleep 2
+C0=$(( $(cpu_ms "${PIDS[0]}") + $(cpu_ms "${PIDS[1]}") ))
+sleep 10
+C1=$(( $(cpu_ms "${PIDS[0]}") + $(cpu_ms "${PIDS[1]}") ))
+CPU=$(python3 -c "print(round(($C1 - $C0) / 10000 * 100, 2))")
+log "idle CPU of both daemons over 10 s: ${CPU}% of one core"
 
 mkdir -p "$(dirname "$OUT")"
 python3 - "$OUT" "$INITIAL_MS" "${LAT[*]}" "$CPU" <<'PY'
@@ -190,6 +207,6 @@ import json, sys
 lat = [int(x) for x in sys.argv[3].split()]
 json.dump({"initial_sync_ms": int(sys.argv[2]), "files_initial": 3003,
            "latency_ms": lat, "latency_max_ms": max(lat), "latency_median_ms": sorted(lat)[len(lat)//2],
-           "daemon_cpu_percent_avg": float(sys.argv[4]), "result": "pass"}, open(sys.argv[1], "w"), indent=2)
+           "idle_cpu_percent_10s": float(sys.argv[4]), "result": "pass"}, open(sys.argv[1], "w"), indent=2)
 PY
 log "PASS — summary in $OUT"
