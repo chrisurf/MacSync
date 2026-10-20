@@ -266,3 +266,10 @@ der Gruppe hält die gesamte Gruppe zurück (ein Konflikt-Eintrag).
 | Grösse | Ziel ≥ 100 000 Dateien pro Einheit | – |
 | LFS/Submodule/Worktrees | `.git`-Datei wird erkannt; Submodul-Gitdirs gehören zur Eltern-Einheit; LFS-Objekte sind normale Dateien unter `.git/lfs` | – |
 | Mitteilungen | Journal + `status`; Mitteilungen mit Menüleiste (Roadmap) | – |
+
+## 8. Umsetzungsstand
+
+Alle Meilensteine M0–M7 sind umgesetzt; Nachweise und Messwerte im
+[Validierungsbericht](validation-report.md). Die Commit-Historie folgt den
+Meilensteinen (`docs` → `core` → `fs` → `gitaware` → `store` → `engine` →
+`net` → `daemon/cli` → `perf/ci` → `docs`).
