@@ -144,7 +144,9 @@ wait_until 60 converged || fail "torture did not converge"
 ( cd "$B/web" && git fsck --full --no-dangling ) >/dev/null || fail "fsck after torture"
 [ "$(cd "$A/web" && git rev-parse HEAD)" = "$(cd "$B/web" && git rev-parse HEAD)" ] || fail "HEAD differs"
 [ "$(cd "$A/web" && git status --porcelain)" = "$(cd "$B/web" && git status --porcelain)" ] || fail "status differs"
-[ "$(cd "$B/web" && git stash list | wc -l)" = 0 ] || fail "unexpected stash"
+# RepoSync must never create stashes/refs of its own: B mirrors A exactly.
+SA=$(cd "$A/web" && git stash list; git for-each-ref); SB=$(cd "$B/web" && git stash list; git for-each-ref)
+[ "$SA" = "$SB" ] || { echo "A: $SA"; echo "B: $SB"; fail "refs/stashes differ"; }
 log "torture converged; fsck ok; HEAD $(cd "$B/web" && git rev-parse --short HEAD)"
 
 log "work continues on B"
