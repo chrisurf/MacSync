@@ -6,7 +6,7 @@ members = ["crates/core", "crates/fs", "crates/gitaware", "crates/store", "crate
 publish = false
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/chrisurf/RepoSync"
+repository = "https://github.com/chrisurf/MacSync"
 
 [workspace.dependencies]
 reposync-core = { path = "crates/core" }

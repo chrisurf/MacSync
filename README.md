@@ -26,8 +26,7 @@ werden nie still aufgelöst.
 ```sh
 xcode-select --install                                         # einmalig
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh # einmalig
-git clone https://github.com/chrisurf/RepoSync.git && cd RepoSync
-git checkout claude/mvp-implementation-docs-dzm5uj    # bis der Branch gemergt ist
+git clone https://github.com/chrisurf/MacSync.git && cd MacSync
 
 make doctor          # prüft Voraussetzungen, Version, Netzwerk
 make install         # baut und installiert reposync nach ~/.local/bin

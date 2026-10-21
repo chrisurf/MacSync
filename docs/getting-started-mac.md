@@ -31,9 +31,8 @@ xcode-select --install
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # 3. Repository auschecken
-git clone https://github.com/chrisurf/RepoSync.git ~/Developer/RepoSync
-cd ~/Developer/RepoSync
-git checkout claude/mvp-implementation-docs-dzm5uj   # bis der Branch gemergt ist
+git clone https://github.com/chrisurf/MacSync.git ~/Developer/MacSync
+cd ~/Developer/MacSync
 
 # 4. Alles prüfen
 make doctor

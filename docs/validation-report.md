@@ -1,6 +1,6 @@
 # Validierungsbericht MVP v0.1
 
-Stand: 20.10.2026 · Commit-Basis: Branch `claude/mvp-implementation-docs-dzm5uj`
+Stand: 20.10.2026 · Commit-Basis: `main`
 
 Dieser Bericht belegt die Gates aus dem
 [Implementierungsplan](implementation-plan.md#4-meilensteine-und-gates) mit
