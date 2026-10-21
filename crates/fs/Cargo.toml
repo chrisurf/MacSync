@@ -1,0 +1,19 @@
+[package]
+name = "reposync-fs"
+description = "File system layer of RepoSync: scanning, hashing, metadata, staging, trash"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+reposync-core.workspace = true
+blake3.workspace = true
+xattr.workspace = true
+filetime.workspace = true
+reflink-copy.workspace = true
+globset.workspace = true
+libc.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

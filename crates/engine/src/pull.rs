@@ -1,0 +1,1023 @@
+//! Pulling a unit from a peer: Merkle descent, decisions, Git coherence,
+//! staging with hash verification, pre-apply checks.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+use reposync_core::proto::{limits, UnitRoot};
+use reposync_core::{
+    decide, path as rpath, ConflictClass, Decision, Entry, GitClass, Hash, Kind, Policy, Tree, UnitKind,
+};
+use reposync_fs::{ops, scan};
+use reposync_store::Stored;
+use serde::Serialize;
+
+use crate::capture::ScanOptions;
+use crate::plan::{class_of, rank_of, ActionKind, ConflictPlan, Op, OpKind, Phase, Plan, PlannedAction, Source};
+use crate::{Engine, Mode, PeerApi};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PullOptions {
+    /// Compute and report the plan without changing anything.
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum Outcome {
+    InSync,
+    Applied,
+    DryRun,
+    /// Not possible right now (gate closed, unscanned local change, source
+    /// changed during transfer); retried automatically.
+    Deferred(String),
+    Paused,
+    Failed(String),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PullReport {
+    pub unit: String,
+    pub outcome: Outcome,
+    pub actions: Vec<PlannedAction>,
+    pub writes: usize,
+    pub deletes: usize,
+    pub conflicts: usize,
+    pub bytes_fetched: u64,
+    pub bytes_deduped: u64,
+    pub local_root: Hash,
+    pub remote_root: Hash,
+    /// True if the local root equals the remote root after the pull.
+    pub converged: bool,
+    /// Wall-clock milliseconds per phase (diagnostics).
+    pub timings_ms: Vec<(String, u64)>,
+}
+
+impl PullReport {
+    fn lap(&mut self, phase: &str, t: &mut std::time::Instant) {
+        self.timings_ms.push((phase.to_string(), t.elapsed().as_millis() as u64));
+        *t = std::time::Instant::now();
+    }
+
+    fn new(unit: &str, remote_root: Hash) -> PullReport {
+        PullReport {
+            unit: unit.to_string(),
+            outcome: Outcome::InSync,
+            actions: Vec::new(),
+            writes: 0,
+            deletes: 0,
+            conflicts: 0,
+            bytes_fetched: 0,
+            bytes_deduped: 0,
+            local_root: Hash::ZERO,
+            remote_root,
+            converged: false,
+            timings_ms: Vec::new(),
+        }
+    }
+}
+
+/// The transaction cannot proceed now; it is retried later.
+#[derive(Debug)]
+pub struct RetryLater(pub String);
+
+impl std::fmt::Display for RetryLater {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "retry later: {}", self.0)
+    }
+}
+
+impl std::error::Error for RetryLater {}
+
+fn retry<T>(msg: impl Into<String>) -> Result<T> {
+    Err(RetryLater(msg.into()).into())
+}
+
+struct Need {
+    size: u64,
+    dests: Vec<PathBuf>,
+}
+
+impl Engine {
+    /// Pull every unit that differs from the peer (or only `only`).
+    pub fn sync_from(&self, peer: &dyn PeerApi, only: Option<&[String]>, opts: PullOptions) -> Result<Vec<PullReport>> {
+        if self.cfg.mode == Mode::MirrorSend {
+            return Ok(Vec::new());
+        }
+        let mut remote = peer.roots()?;
+        remote.retain(|r| crate::validate_unit_name(&r.name).is_ok());
+        remote.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: BTreeSet<String> = remote.iter().map(|r| r.name.clone()).collect();
+        let mut reports = Vec::new();
+        for r in &remote {
+            if only.is_some_and(|o| !o.contains(&r.name)) {
+                continue;
+            }
+            reports.push(self.pull_with_names(peer, r, &names, opts));
+        }
+        Ok(reports)
+    }
+
+    /// Pull a single unit given the peer's root for it.
+    pub fn pull_unit(&self, peer: &dyn PeerApi, remote: &UnitRoot, opts: PullOptions) -> PullReport {
+        let names: BTreeSet<String> = [remote.name.clone()].into();
+        self.pull_with_names(peer, remote, &names, opts)
+    }
+
+    fn pull_with_names(
+        &self,
+        peer: &dyn PeerApi,
+        remote: &UnitRoot,
+        names: &BTreeSet<String>,
+        opts: PullOptions,
+    ) -> PullReport {
+        let lock = self.unit_lock(&remote.name);
+        let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
+        match self.pull_locked(peer, remote, names, opts) {
+            Ok(r) => r,
+            Err(e) => {
+                let mut r = PullReport::new(&remote.name, remote.root);
+                if let Some(rl) = e.downcast_ref::<RetryLater>() {
+                    r.outcome = Outcome::Deferred(rl.0.clone());
+                    let _ = self.store().set_unit_status(&remote.name, &format!("waiting: {}", rl.0), false);
+                } else {
+                    tracing::warn!(unit = %remote.name, error = %format!("{e:#}"), "pull failed");
+                    let _ = self.store().log(&remote.name, "error", "", "pull failed", &format!("{e:#}"));
+                    r.outcome = Outcome::Failed(format!("{e:#}"));
+                }
+                r
+            }
+        }
+    }
+
+    fn pull_locked(
+        &self,
+        peer: &dyn PeerApi,
+        remote: &UnitRoot,
+        remote_names: &BTreeSet<String>,
+        opts: PullOptions,
+    ) -> Result<PullReport> {
+        let unit = remote.name.as_str();
+        crate::validate_unit_name(unit)?;
+        let root = self.cfg.root.clone();
+        let mut rep = PullReport::new(unit, remote.root);
+        let row = self.store().unit(unit)?;
+        if row.as_ref().is_some_and(|u| u.paused) {
+            rep.outcome = Outcome::Paused;
+            return Ok(rep);
+        }
+        let on_disk = scan::unit_kind_on_disk(&root, unit);
+        if !opts.dry_run {
+            match &row {
+                None => self.store().upsert_unit(unit, on_disk.unwrap_or(remote.kind))?,
+                Some(u) if u.root.is_none() && on_disk.is_some() => {
+                    self.scan_unit_locked(unit, &ScanOptions::default())?;
+                }
+                _ => {}
+            }
+        }
+        let local_kind = on_disk.or(row.as_ref().map(|u| u.kind)).unwrap_or(remote.kind);
+        let kind = if remote.kind == UnitKind::Git || local_kind == UnitKind::Git { UnitKind::Git } else { local_kind };
+
+        let tree = self.tree(unit)?;
+        rep.local_root = tree.root();
+        if tree.root() == remote.root {
+            rep.converged = true;
+            if !opts.dry_run {
+                self.settle_conflicts(peer, unit)?;
+                self.after_converged(unit)?;
+            }
+            return Ok(rep);
+        }
+        let unit_dir = reposync_fs::unit_dir(&root, unit);
+        if kind == UnitKind::Git && unit_dir.exists() {
+            let g = self.gate.check(&unit_dir);
+            if !g.is_open() {
+                return retry(g.describe());
+            }
+        }
+
+        // 1. Merkle descent and entry exchange.
+        let mut t = std::time::Instant::now();
+        let (paths, prefixes) = descend(peer, unit, &tree, remote.root)?;
+        let remote_entries = fetch_entries(peer, unit, &paths, &prefixes)?;
+        let mut local: HashMap<String, Stored> = HashMap::new();
+        {
+            let store = self.store();
+            for p in &paths {
+                if let Some(s) = store.entry(unit, p)? {
+                    local.insert(p.clone(), s);
+                }
+            }
+            for p in &prefixes {
+                for s in store.entries_under(unit, p)? {
+                    local.insert(s.entry.path.clone(), s);
+                }
+            }
+        }
+        let keys: BTreeSet<String> = remote_entries.keys().chain(local.keys()).cloned().collect();
+
+        rep.lap("descend", &mut t);
+        // 2. Decisions.
+        let policy = self.policy_for(unit);
+        let me = self.cfg.device.clone();
+        let mut decisions: Vec<(String, Option<GitClass>, Decision)> = Vec::new();
+        for key in &keys {
+            let class = class_of(kind, key);
+            if class == Some(GitClass::ProcessLocal) {
+                continue;
+            }
+            let l = local.get(key).map(|s| &s.entry);
+            let d = match remote_entries.get(key) {
+                Some(r) => decide(l, r, class, policy, &me),
+                None if policy == Policy::MirrorReceive && l.is_some_and(|l| !l.deleted) => {
+                    let l = l.expect("checked");
+                    Decision::TakeRemote(l.vv.clone())
+                }
+                None => continue,
+            };
+            decisions.push((key.clone(), class, d));
+        }
+
+        // 3. Git coherence: a conflict in HEAD/refs/index holds back the whole
+        //    Git state of the unit as one conflict.
+        let git_state_conflict =
+            decisions.iter().any(|(_, c, d)| c.is_some_and(|c| c.is_git_state()) && matches!(d, Decision::Conflict(_)));
+        let nested: Vec<String> = {
+            let mut n: BTreeSet<String> = self.nested_units_of(unit)?.into_iter().collect();
+            n.extend(remote_names.iter().filter(|r| r.starts_with(&format!("{unit}/"))).cloned());
+            if unit == reposync_core::entry::ROOT_UNIT {
+                n.clear();
+            }
+            n.into_iter().filter_map(|u| u.strip_prefix(&format!("{unit}/")).map(str::to_string)).collect()
+        };
+
+        let tx = crate::new_tx_id();
+        let mut plan = Plan {
+            tx: tx.clone(),
+            unit: unit.to_string(),
+            unit_kind: kind,
+            ops: Vec::new(),
+            conflicts: Vec::new(),
+            lock: None,
+            actions: Vec::new(),
+        };
+        let mut disk_cache: HashMap<String, String> = HashMap::new();
+        let mut group_locals: Vec<Entry> = Vec::new();
+        let mut group_remotes: Vec<Entry> = Vec::new();
+        let mut case_keys: HashMap<String, String> = HashMap::new();
+        if self.case_insensitive {
+            for s in self.store().entries(unit)? {
+                if !s.entry.deleted {
+                    case_keys.insert(rpath::case_key(&s.entry.path), s.entry.path.clone());
+                }
+            }
+        }
+        let conflict_dir = self.conflict_root().join(unit).join(&tx);
+
+        for (path, class, d) in decisions {
+            let l = local.get(&path);
+            let r = remote_entries.get(&path);
+            let action = |kind: ActionKind, reason: String| PlannedAction { path: path.clone(), kind, reason };
+
+            if nested.iter().any(|n| rpath::is_within(&path, n)) {
+                plan.actions.push(action(ActionKind::Skip, "belongs to a nested unit".into()));
+                continue;
+            }
+            let in_group = git_state_conflict && class.is_some_and(|c| c.is_git_state());
+            if in_group && matches!(d, Decision::TakeRemote(_) | Decision::MergeReflog(_) | Decision::Conflict(_)) {
+                if let Some(r) = r {
+                    if let Some(l) = l {
+                        group_locals.push(l.entry.clone());
+                    }
+                    group_remotes.push(r.clone());
+                }
+                plan.actions.push(action(ActionKind::Conflict, "held back: Git state conflict".into()));
+                continue;
+            }
+
+            match d {
+                Decision::Nothing => {}
+                Decision::KeepLocal => {
+                    plan.actions.push(action(ActionKind::KeepLocal, "local version is newer".into()));
+                }
+                Decision::AdoptVv(vv) | Decision::KeepLocalWins(vv) => {
+                    let l = l.expect("adopt/keep requires local");
+                    let mut s = l.clone();
+                    s.entry.vv = vv.clone();
+                    plan.ops.push(db_op(&path, &s.disk, s.entry, "version vectors merged"));
+                    plan.actions.push(action(ActionKind::Vv, format!("vv → {}", vv.display())));
+                }
+                Decision::Conflict(c) => {
+                    let r = r.expect("conflict requires remote");
+                    let locals: Vec<Entry> = l.map(|s| vec![s.entry.clone()]).unwrap_or_default();
+                    if self.store().has_open_conflict(unit, &path, std::slice::from_ref(r))? {
+                        plan.actions.push(action(ActionKind::Conflict, format!("{} (already recorded)", c.as_str())));
+                        continue;
+                    }
+                    plan.conflicts.push(ConflictPlan {
+                        path: path.clone(),
+                        class: c.as_str().into(),
+                        locals,
+                        remotes: vec![r.clone()],
+                        dir: conflict_dir.join(format!("{}", plan.conflicts.len())).to_string_lossy().into_owned(),
+                    });
+                    plan.actions.push(action(ActionKind::Conflict, c.as_str().into()));
+                }
+                Decision::MergeReflog(vv) => {
+                    let (l, r) = (l.expect("merge requires local"), r.expect("merge requires remote"));
+                    let (Some(lb), Some(rb)) = (l.entry.blob, r.blob) else {
+                        continue;
+                    };
+                    let mut e = r.clone();
+                    e.vv = vv;
+                    let disk = l.disk.clone();
+                    plan.ops.push(Op {
+                        path: path.clone(),
+                        disk,
+                        kind: OpKind::Write,
+                        phase: Phase::Writes,
+                        rank: rank_of(class),
+                        entry: e,
+                        staged: Some(format!("{}", plan.ops.len())),
+                        source: Some(Source::Reflog {
+                            local_disk: l.disk.clone(),
+                            local_blob: lb,
+                            remote: rb,
+                            remote_size: r.size,
+                        }),
+                        reason: "concurrent reflogs merged".into(),
+                    });
+                    plan.actions.push(action(ActionKind::Merge, "concurrent reflogs merged line-wise".into()));
+                }
+                Decision::TakeRemote(vv) => {
+                    let synthetic;
+                    let r = match r {
+                        Some(r) => r,
+                        None => {
+                            // Mirror mode: remote does not know this local entry.
+                            let l = l.expect("mirror delete requires local");
+                            synthetic = Entry::tombstone(&path, l.entry.kind, l.entry.vv.clone());
+                            &synthetic
+                        }
+                    };
+                    let mut e = r.clone();
+                    e.vv = vv.clone();
+                    let local_live = l.filter(|s| !s.entry.deleted);
+                    let reason = match (l, local.get(&path).map(|s| s.entry.vv.compare(&r.vv))) {
+                        (None, _) => "new on peer".to_string(),
+                        (Some(_), Some(reposync_core::VvOrdering::Dominated)) => {
+                            format!(
+                                "peer newer ({} → {})",
+                                l.map(|s| s.entry.vv.display()).unwrap_or_default(),
+                                r.vv.display()
+                            )
+                        }
+                        _ if policy == Policy::MirrorReceive => "mirror: peer is authoritative".into(),
+                        _ => "concurrent change resolved by rule".into(),
+                    };
+                    if e.deleted {
+                        match local_live {
+                            Some(s) => {
+                                let is_obj = class.is_some_and(|c| c.is_object());
+                                if is_obj && git_state_conflict {
+                                    plan.actions.push(action(ActionKind::Skip, "object deletion held back".into()));
+                                    continue;
+                                }
+                                plan.ops.push(Op {
+                                    path: path.clone(),
+                                    disk: s.disk.clone(),
+                                    kind: OpKind::Delete,
+                                    phase: if is_obj { Phase::ObjectDeletes } else { Phase::Deletes },
+                                    rank: rank_of(class),
+                                    entry: Entry::tombstone(&path, s.entry.kind, vv),
+                                    staged: None,
+                                    source: None,
+                                    reason: reason.clone(),
+                                });
+                                plan.actions.push(action(ActionKind::Delete, reason));
+                            }
+                            None => {
+                                let disk = l.map(|s| s.disk.clone()).unwrap_or_else(|| path.clone());
+                                plan.ops.push(db_op(&path, &disk, Entry::tombstone(&path, e.kind, vv), "tombstone"));
+                            }
+                        }
+                        continue;
+                    }
+                    // Case collision on case-insensitive volumes.
+                    if self.case_insensitive && local_live.is_none() {
+                        let k = rpath::case_key(&path);
+                        if let Some(other) = case_keys.get(&k).filter(|o| **o != path) {
+                            plan.conflicts.push(ConflictPlan {
+                                path: path.clone(),
+                                class: ConflictClass::CaseCollision.as_str().into(),
+                                locals: local.get(other).map(|s| vec![s.entry.clone()]).unwrap_or_default(),
+                                remotes: vec![r.clone()],
+                                dir: conflict_dir
+                                    .join(format!("{}", plan.conflicts.len()))
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            });
+                            plan.actions.push(action(ActionKind::Conflict, format!("case collision with {other}")));
+                            continue;
+                        }
+                        case_keys.insert(k, path.clone());
+                    }
+                    if class == Some(GitClass::Hook) {
+                        let _ = self.store().log(
+                            unit,
+                            "warning",
+                            &path,
+                            "hook changed by sync (never executed by RepoSync)",
+                            "",
+                        );
+                    }
+                    let disk = self.disk_for(unit, &path, &local, &mut disk_cache)?;
+                    let same_kind = local_live.is_some_and(|s| s.entry.kind == e.kind);
+                    let (kind_op, phase, akind) = match e.kind {
+                        Kind::Dir if same_kind => (OpKind::Meta, Phase::Writes, ActionKind::Meta),
+                        Kind::Dir => (OpKind::Mkdir, Phase::Dirs, ActionKind::Write),
+                        Kind::Symlink => (OpKind::Symlink, Phase::Writes, ActionKind::Write),
+                        Kind::File if local_live.is_some_and(|s| s.entry.same_content(&e)) => {
+                            (OpKind::Meta, Phase::Writes, ActionKind::Meta)
+                        }
+                        Kind::File => (OpKind::Write, Phase::Writes, ActionKind::Write),
+                    };
+                    let phase =
+                        if class == Some(GitClass::Index) && kind_op == OpKind::Write { Phase::Index } else { phase };
+                    let source = (kind_op == OpKind::Write)
+                        .then(|| Source::Blob { hash: e.blob.unwrap_or_default(), size: e.size });
+                    plan.ops.push(Op {
+                        path: path.clone(),
+                        disk,
+                        kind: kind_op,
+                        phase,
+                        rank: rank_of(class),
+                        staged: (kind_op == OpKind::Write).then(|| format!("{}", plan.ops.len())),
+                        entry: e,
+                        source,
+                        reason: reason.clone(),
+                    });
+                    plan.actions.push(action(akind, reason));
+                }
+            }
+        }
+        if !group_remotes.is_empty() {
+            let path = ".git".to_string();
+            if self.store().has_open_conflict(unit, &path, &group_remotes)? {
+                plan.actions.push(PlannedAction {
+                    path,
+                    kind: ActionKind::Conflict,
+                    reason: "git-state (already recorded)".into(),
+                });
+            } else {
+                plan.conflicts.push(ConflictPlan {
+                    path,
+                    class: ConflictClass::GitState.as_str().into(),
+                    locals: group_locals,
+                    remotes: group_remotes,
+                    dir: conflict_dir.join("git-state").to_string_lossy().into_owned(),
+                });
+            }
+        }
+        plan.sort();
+        rep.lap("plan", &mut t);
+        rep.actions = plan.actions.clone();
+        rep.writes = plan
+            .ops
+            .iter()
+            .filter(|o| matches!(o.kind, OpKind::Write | OpKind::Mkdir | OpKind::Symlink | OpKind::Meta))
+            .count();
+        rep.deletes = plan.ops.iter().filter(|o| o.kind == OpKind::Delete).count();
+        rep.conflicts = plan.conflicts.len()
+            + plan
+                .actions
+                .iter()
+                .filter(|a| a.kind == ActionKind::Conflict && a.reason.ends_with("(already recorded)"))
+                .count();
+
+        if opts.dry_run {
+            rep.outcome = Outcome::DryRun;
+            return Ok(rep);
+        }
+
+        // 4. Staging: fetch or clone every needed blob and verify its hash.
+        let staging = self.staging_root().join(&tx);
+        std::fs::create_dir_all(&staging)?;
+        let result = self.stage_and_apply(peer, &mut plan, &local, &staging, &mut rep);
+        // An interrupted apply keeps its staging directory for recovery.
+        if self.store().tx_pending()?.iter().all(|t| t.id != tx) {
+            let _ = ops::remove_any(&staging);
+        }
+        result?;
+
+        // 5. Post-apply: refresh index stat cache, re-capture, verify.
+        let mut t = std::time::Instant::now();
+        self.post_apply(&plan, &mut rep)?;
+        rep.lap("post-apply", &mut t);
+        rep.outcome = Outcome::Applied;
+        Ok(rep)
+    }
+
+    fn stage_and_apply(
+        &self,
+        peer: &dyn PeerApi,
+        plan: &mut Plan,
+        local: &HashMap<String, Stored>,
+        staging: &Path,
+        rep: &mut PullReport,
+    ) -> Result<()> {
+        let mut needs: BTreeMap<Hash, Need> = BTreeMap::new();
+        let mut add_need = |hash: Hash, size: u64, dest: PathBuf| {
+            needs.entry(hash).or_insert(Need { size, dests: Vec::new() }).dests.push(dest);
+        };
+        let mut reflog_remote: Vec<(usize, PathBuf)> = Vec::new();
+        for (i, op) in plan.ops.iter().enumerate() {
+            match &op.source {
+                Some(Source::Blob { hash, size }) => {
+                    add_need(*hash, *size, staging.join(op.staged.as_ref().expect("staged name")));
+                }
+                Some(Source::Reflog { remote, remote_size, .. }) => {
+                    let p = staging.join(format!("reflog-remote-{i}"));
+                    add_need(*remote, *remote_size, p.clone());
+                    reflog_remote.push((i, p));
+                }
+                Some(Source::File { .. }) | None => {}
+            }
+        }
+        for c in &plan.conflicts {
+            let dir = PathBuf::from(&c.dir);
+            for r in &c.remotes {
+                if r.deleted || r.kind != Kind::File {
+                    continue;
+                }
+                if let Some(b) = r.blob {
+                    add_need(b, r.size, dir.join(if r.path.is_empty() { "_unit_root" } else { &r.path }));
+                }
+            }
+        }
+
+        let total: u64 = needs.values().map(|n| n.size).sum();
+        if total > 0 {
+            let free = ops::available_space(staging).unwrap_or(u64::MAX);
+            if free < total.saturating_add(64 * 1024 * 1024) {
+                anyhow::bail!("not enough free space: need {total} bytes, {free} available");
+            }
+        }
+        let mut t = std::time::Instant::now();
+        self.fetch(peer, &needs, rep, staging)?;
+        rep.lap("fetch", &mut t);
+
+        // Materialise conflict-store symlinks/dirs.
+        for c in &plan.conflicts {
+            let dir = PathBuf::from(&c.dir);
+            std::fs::create_dir_all(&dir)?;
+            for r in &c.remotes {
+                let p = dir.join(if r.path.is_empty() { "_unit_root" } else { &r.path });
+                match r.kind {
+                    Kind::Symlink if !r.deleted => {
+                        if let Some(parent) = p.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        let t = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(
+                            r.target.as_deref().unwrap_or_default(),
+                        );
+                        let _ = std::os::unix::fs::symlink(Path::new(t), &p);
+                    }
+                    Kind::Dir if !r.deleted => std::fs::create_dir_all(&p)?,
+                    _ => {}
+                }
+            }
+        }
+
+        // Reflog merges.
+        for (i, remote_path) in reflog_remote {
+            let op = &mut plan.ops[i];
+            let Some(Source::Reflog { local_disk, local_blob, .. }) = op.source.clone() else {
+                continue;
+            };
+            let local_abs = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &local_disk);
+            let Some(local_bytes) = ops::read_verified(&local_abs, &local_blob)? else {
+                return retry(format!("{} changed locally", op.path));
+            };
+            let merged = reposync_gitaware::reflog::merge(&local_bytes, &std::fs::read(&remote_path)?);
+            let h = Hash::of(&merged);
+            ops::write_new(&staging.join(op.staged.as_ref().expect("staged")), &merged)?;
+            op.entry.blob = Some(h);
+            op.entry.cmp = Some(h);
+            op.entry.size = merged.len() as u64;
+        }
+
+        // Pre-apply check: never overwrite a local change that was not captured.
+        if plan.unit_kind == UnitKind::Git {
+            let g = self.gate.check(&reposync_fs::unit_dir(&self.cfg.root, &plan.unit));
+            if !g.is_open() {
+                return retry(g.describe());
+            }
+        }
+        for op in &plan.ops {
+            if op.kind == OpKind::DbOnly {
+                continue;
+            }
+            let abs = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
+            let on_disk = scan::stat(&abs, op.path.clone(), op.disk.clone()).ok().flatten();
+            match (local.get(&op.path).filter(|s| !s.entry.deleted), on_disk) {
+                (Some(s), Some(d)) => {
+                    let unchanged = s.entry.kind == d.kind
+                        && (d.kind == Kind::Dir
+                            || (s.entry.size == d.size
+                                && s.entry.mtime_ns == d.mtime_ns
+                                && s.stat.ino == d.ino
+                                && s.stat.ctime_ns == d.ctime_ns));
+                    if !unchanged {
+                        return retry(format!("{} changed locally since last capture", op.path));
+                    }
+                }
+                (Some(_), None) => return retry(format!("{} was removed locally", op.path)),
+                (None, Some(d)) => {
+                    if !(op.kind == OpKind::Mkdir && d.kind == Kind::Dir) {
+                        return retry(format!("{} was created locally", op.path));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+
+        rep.lap("pre-check", &mut t);
+        // Execute.
+        let r = self.execute(plan, staging);
+        rep.lap("apply", &mut t);
+        r
+    }
+
+    fn fetch(
+        &self,
+        peer: &dyn PeerApi,
+        needs: &BTreeMap<Hash, Need>,
+        rep: &mut PullReport,
+        staging: &Path,
+    ) -> Result<()> {
+        let mut remote_small: Vec<Hash> = Vec::new();
+        let mut remote_large: Vec<Hash> = Vec::new();
+        for (hash, need) in needs {
+            for d in &need.dests {
+                if let Some(p) = d.parent().filter(|p| *p != staging) {
+                    std::fs::create_dir_all(p)?;
+                }
+            }
+            if self.dedup_local(hash, &need.dests[0])? {
+                rep.bytes_deduped += need.size;
+                copy_rest(&need.dests)?;
+            } else if need.size <= limits::SMALL_FILE {
+                remote_small.push(*hash);
+            } else {
+                remote_large.push(*hash);
+            }
+        }
+        // Bundles of small files, written by a thread pool.
+        let mut i = 0;
+        while i < remote_small.len() {
+            let mut bytes = 0u64;
+            let mut j = i;
+            while j < remote_small.len() && j - i < limits::BUNDLE_COUNT && bytes < limits::BUNDLE_BYTES {
+                bytes += needs[&remote_small[j]].size;
+                j += 1;
+            }
+            let batch = &remote_small[i..j];
+            let mut blobs = peer.blobs(batch)?;
+            blobs.resize(batch.len(), None);
+            let mut items: Vec<(&Need, Vec<u8>)> = Vec::with_capacity(batch.len());
+            for (h, b) in batch.iter().zip(blobs) {
+                let data = match b {
+                    Some(d) if Hash::of(&d) == *h => d,
+                    _ => self.refetch_small(peer, h)?,
+                };
+                rep.bytes_fetched += data.len() as u64;
+                items.push((&needs[h], data));
+            }
+            write_parallel(&items)?;
+            i = j;
+        }
+        // Large files in ranges.
+        for h in remote_large {
+            let need = &needs[&h];
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match self.fetch_large(peer, &h, need, rep)? {
+                    true => break,
+                    false if attempt < 3 => continue,
+                    false => anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short()),
+                }
+            }
+            copy_rest(&need.dests)?;
+        }
+        // One bundled flush for everything staged (instead of one per file).
+        let all: Vec<PathBuf> = needs.values().flat_map(|n| n.dests.iter().cloned()).collect();
+        ops::sync_paths(&all)?;
+        Ok(())
+    }
+
+    fn refetch_small(&self, peer: &dyn PeerApi, h: &Hash) -> Result<Vec<u8>> {
+        for _ in 0..2 {
+            match peer.blobs(std::slice::from_ref(h))?.into_iter().next().flatten() {
+                Some(d) if Hash::of(&d) == *h => return Ok(d),
+                Some(_) => continue,
+                None => return retry(format!("blob {} no longer available on peer", h.short())),
+            }
+        }
+        anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short())
+    }
+
+    fn fetch_large(&self, peer: &dyn PeerApi, h: &Hash, need: &Need, rep: &mut PullReport) -> Result<bool> {
+        use std::io::Write;
+        let dest = &need.dests[0];
+        let mut f = std::fs::File::create(dest)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut off = 0u64;
+        while off < need.size {
+            let len = (need.size - off).min(limits::RANGE_CHUNK);
+            let Some(chunk) = peer.blob_range(h, off, len)? else {
+                return retry(format!("blob {} changed on peer during transfer", h.short()));
+            };
+            if chunk.is_empty() {
+                return retry(format!("blob {} shorter than expected", h.short()));
+            }
+            hasher.update(&chunk);
+            f.write_all(&chunk)?;
+            off += chunk.len() as u64;
+            rep.bytes_fetched += chunk.len() as u64;
+        }
+        Ok(Hash::from_blake3(hasher.finalize()) == *h)
+    }
+
+    /// Try to materialise a blob from a local copy (copy-on-write clone where
+    /// supported). The copy is verified before use.
+    fn dedup_local(&self, hash: &Hash, dest: &Path) -> Result<bool> {
+        let candidates = self.store().find_blob(hash)?;
+        for (unit, _path, disk) in candidates {
+            let src = reposync_fs::abs_path(&self.cfg.root, &unit, &disk);
+            if ops::clone_or_copy(&src, dest).is_ok() && ops::hash_file(dest).ok() == Some(*hash) {
+                return Ok(true);
+            }
+            let _ = std::fs::remove_file(dest);
+        }
+        Ok(false)
+    }
+
+    /// Local disk path for a canonical path: the existing spelling if known,
+    /// otherwise the parent's spelling plus the canonical name.
+    fn disk_for(
+        &self,
+        unit: &str,
+        path: &str,
+        local: &HashMap<String, Stored>,
+        cache: &mut HashMap<String, String>,
+    ) -> Result<String> {
+        if path.is_empty() {
+            return Ok(String::new());
+        }
+        if let Some(d) = cache.get(path) {
+            return Ok(d.clone());
+        }
+        let known = match local.get(path) {
+            Some(s) => Some(s.disk.clone()),
+            None => self.store().entry(unit, path)?.map(|s| s.disk),
+        };
+        let d = match known {
+            Some(d) => d,
+            None => {
+                let parent = rpath::parent(path).unwrap_or("");
+                let pd = self.disk_for(unit, parent, local, cache)?;
+                rpath::join(&pd, rpath::file_name(path))
+            }
+        };
+        cache.insert(path.to_string(), d.clone());
+        Ok(d)
+    }
+
+    fn post_apply(&self, plan: &Plan, rep: &mut PullReport) -> Result<()> {
+        let unit = plan.unit.as_str();
+        let unit_dir = reposync_fs::unit_dir(&self.cfg.root, unit);
+        let is_git = plan.unit_kind == UnitKind::Git && reposync_gitaware::resolve_git_dir(&unit_dir).is_some();
+        let touched_tree = plan.ops.iter().any(|o| o.kind != OpKind::DbOnly && !o.path.starts_with(".git/"));
+        let touched_index = plan.ops.iter().any(|o| o.phase == Phase::Index);
+        let touched_objects = plan.ops.iter().any(|o| {
+            o.kind != OpKind::DbOnly
+                && (o.path.starts_with(".git/objects")
+                    || o.path.starts_with(".git/refs")
+                    || o.path == ".git/packed-refs"
+                    || o.path == ".git/HEAD")
+        });
+        let git = is_git && reposync_gitaware::cmd::available();
+        if git && (touched_tree || touched_index) {
+            if let Err(e) = reposync_gitaware::cmd::refresh_index(&unit_dir) {
+                let _ = self.store().log(unit, "warning", ".git/index", "index refresh failed", &e.to_string());
+            }
+        }
+        if git && touched_objects && self.cfg.fsck_after_apply {
+            if let Err(msg) = reposync_gitaware::cmd::fsck_connectivity(&unit_dir)? {
+                let restored = self.restore_object_deletions(plan)?;
+                let _ = self.store().log(
+                    unit,
+                    "error",
+                    ".git",
+                    "git fsck --connectivity-only failed after apply",
+                    &format!("{msg}; restored {restored} objects from trash"),
+                );
+                tracing::error!(unit, %msg, restored, "fsck failed after apply");
+            }
+        }
+        let scan = self.scan_unit_locked(unit, &ScanOptions::default())?;
+        rep.local_root = scan.root;
+        rep.converged = scan.root == rep.remote_root;
+        let open = self.store().open_conflict_count(unit)?;
+        let status = if open > 0 {
+            "conflict"
+        } else if rep.converged {
+            "in sync"
+        } else {
+            "partially synced"
+        };
+        self.store().set_unit_status(unit, status, rep.converged)?;
+        Ok(())
+    }
+
+    /// Identical roots prove that open conflicts of the unit are moot. Adopt
+    /// the peer's version vectors for those paths (otherwise the next local
+    /// edit would look concurrent again) and close the conflicts.
+    fn settle_conflicts(&self, peer: &dyn PeerApi, unit: &str) -> Result<()> {
+        let open: Vec<_> = self.store().conflicts(false)?.into_iter().filter(|c| c.unit == unit).collect();
+        if open.is_empty() {
+            return Ok(());
+        }
+        let paths: Vec<String> = open.iter().flat_map(|c| c.remotes.iter().map(|r| r.path.clone())).collect();
+        let remote: HashMap<String, Entry> =
+            peer.entries(unit, &paths, &[])?.into_iter().map(|e| (e.path.clone(), e)).collect();
+        let store = self.store();
+        store.atomically(|st| {
+            for p in &paths {
+                if let (Some(mut l), Some(r)) = (st.entry(unit, p)?, remote.get(p)) {
+                    if l.entry.same_state(r) {
+                        l.entry.vv = l.entry.vv.merge(&r.vv);
+                        st.put_entry(unit, &l)?;
+                    }
+                }
+            }
+            for c in &open {
+                st.resolve_conflict(c.id, "superseded")?;
+                st.log(unit, "resolve", &c.path, "conflict moot: both sides identical", "")?;
+            }
+            Ok(())
+        })
+    }
+
+    fn after_converged(&self, unit: &str) -> Result<()> {
+        let open = self.store().open_conflict_count(unit)?;
+        self.store().set_unit_status(unit, if open > 0 { "conflict" } else { "in sync" }, true)
+    }
+}
+
+fn db_op(path: &str, disk: &str, entry: Entry, reason: &str) -> Op {
+    Op {
+        path: path.to_string(),
+        disk: disk.to_string(),
+        kind: OpKind::DbOnly,
+        phase: Phase::Db,
+        rank: 0,
+        entry,
+        staged: None,
+        source: None,
+        reason: reason.to_string(),
+    }
+}
+
+/// Paralleles Schreiben (concept): staging files are written by a small
+/// thread pool; durability follows with one bundled flush.
+fn write_parallel(items: &[(&Need, Vec<u8>)]) -> Result<()> {
+    const THREADS: usize = 8;
+    if items.len() < 64 {
+        for (need, data) in items {
+            ops::write_unsynced(&need.dests[0], data)?;
+            copy_rest(&need.dests)?;
+        }
+        return Ok(());
+    }
+    let chunk = items.len().div_ceil(THREADS);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|c| {
+                s.spawn(move || -> Result<()> {
+                    for (need, data) in c {
+                        ops::write_unsynced(&need.dests[0], data)?;
+                        copy_rest(&need.dests)?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().map_err(|_| anyhow::anyhow!("staging writer panicked"))??;
+        }
+        Ok(())
+    })
+}
+
+fn copy_rest(dests: &[PathBuf]) -> Result<()> {
+    for d in &dests[1..] {
+        ops::clone_or_copy(&dests[0], d)?;
+    }
+    Ok(())
+}
+
+/// Merkle descent: returns the exact paths and the prefixes (whole subtrees)
+/// whose entries must be compared.
+fn descend(
+    peer: &dyn PeerApi,
+    unit: &str,
+    local: &Tree,
+    remote_root: Hash,
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let mut paths = BTreeSet::new();
+    let mut prefixes = BTreeSet::new();
+    if local.root() == remote_root {
+        return Ok((paths, prefixes));
+    }
+    paths.insert(String::new());
+    let mut queue: Vec<String> = vec![String::new()];
+    while !queue.is_empty() {
+        let take = queue.len().min(limits::TREE_BATCH);
+        let batch: Vec<String> = queue.drain(..take).collect();
+        let listings = peer.tree(unit, &batch)?;
+        for l in listings {
+            if !batch.contains(&l.dir) {
+                continue;
+            }
+            let Some(rc) = l.children else {
+                prefixes.insert(l.dir.clone());
+                continue;
+            };
+            let lc = local.children(&l.dir).unwrap_or(&[]);
+            let mut names: BTreeMap<
+                &str,
+                (Option<&reposync_core::merkle::Child>, Option<&reposync_core::merkle::Child>),
+            > = BTreeMap::new();
+            for c in &rc {
+                names.entry(c.name.as_str()).or_default().1 = Some(c);
+            }
+            for c in lc {
+                names.entry(c.name.as_str()).or_default().0 = Some(c);
+            }
+            for (name, (lc, rc)) in names {
+                let path = rpath::join(&l.dir, name);
+                if rpath::validate(&path).is_err() {
+                    continue;
+                }
+                match (lc, rc) {
+                    (Some(a), Some(b)) if a.kind == b.kind && a.hash == b.hash => {}
+                    (Some(a), Some(b)) if a.kind == Kind::Dir && b.kind == Kind::Dir => {
+                        paths.insert(path.clone());
+                        queue.push(path);
+                    }
+                    (a, b) => {
+                        paths.insert(path.clone());
+                        if a.is_some_and(|c| c.kind == Kind::Dir) || b.is_some_and(|c| c.kind == Kind::Dir) {
+                            prefixes.insert(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok((paths, prefixes))
+}
+
+fn fetch_entries(
+    peer: &dyn PeerApi,
+    unit: &str,
+    paths: &BTreeSet<String>,
+    prefixes: &BTreeSet<String>,
+) -> Result<HashMap<String, Entry>> {
+    let mut out = HashMap::new();
+    let paths: Vec<String> = paths.iter().cloned().collect();
+    let prefixes: Vec<String> = prefixes.iter().cloned().collect();
+    let mut accept = |e: Entry| {
+        if rpath::validate(&e.path).is_ok() {
+            out.insert(e.path.clone(), e);
+        }
+    };
+    for chunk in paths.chunks(limits::ENTRY_BATCH) {
+        for e in peer.entries(unit, chunk, &[])? {
+            accept(e);
+        }
+    }
+    for chunk in prefixes.chunks(64) {
+        for e in peer.entries(unit, &[], chunk)? {
+            if chunk.iter().any(|p| rpath::is_within(&e.path, p)) {
+                accept(e);
+            }
+        }
+    }
+    Ok(out)
+}

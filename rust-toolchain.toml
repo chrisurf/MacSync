@@ -1,0 +1,7 @@
+# Pinned Rust toolchain: both Macs and CI build with exactly this compiler.
+# Updated by the weekly "Dependencies" workflow (it reports newer stable
+# releases) – bump the version here in a normal pull request.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
