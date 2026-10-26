@@ -3,6 +3,10 @@
 ## Unveröffentlicht
 
 ### Hinzugefügt
+- `reposync-connect` (`scripts/connect.sh`, `make connect`): verbindet zwei
+  Macs in einem Schritt – Konfiguration, Bonjour-Suche, Pairing, Start;
+  erkennt selbst, welcher Mac wartet und welcher sich verbindet
+- `make doctor` prüft, ob der C-Linker mit dem Standard-SDK funktioniert
 - `Makefile` (doctor, install, update, version, sandbox, init, pair-*, run,
   status, lint, test, e2e, bench, audit, outdated, update-deps, update-toolchain)
 - `scripts/doctor.sh` (Voraussetzungen, Versionen, Netzwerk, Firewall,

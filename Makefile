@@ -18,6 +18,7 @@ MODE       ?= two-way
 PEER       ?=
 HOST       ?=
 CODE       ?=
+PORT       ?= 47123
 CARGO      ?= cargo
 BIN        := target/release/reposync
 RS         := $(BINDIR)/reposync --config $(CONFIG)
@@ -56,12 +57,13 @@ build: ## Build the optimised release binary (uses Cargo.lock exactly)
 install: build ## Build and install reposync to $(BINDIR)
 	@mkdir -p $(BINDIR)
 	install -m 755 $(BIN) $(BINDIR)/reposync
+	install -m 755 scripts/connect.sh $(BINDIR)/reposync-connect
 	@echo "installed $$($(BINDIR)/reposync --version) → $(BINDIR)/reposync"
 	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "note: add $(BINDIR) to PATH: echo 'export PATH=\"$(BINDIR):\$$PATH\"' >> ~/.zshrc";; esac
 
 .PHONY: uninstall
 uninstall: ## Remove the installed binary (configuration and data stay)
-	rm -f $(BINDIR)/reposync
+	rm -f $(BINDIR)/reposync $(BINDIR)/reposync-connect
 
 .PHONY: version
 version: ## Show installed, built and repository versions
@@ -132,6 +134,10 @@ update-toolchain: ## Pin the latest stable Rust in rust-toolchain.toml, then tes
 	$(MAKE) lint test
 
 ##@ Run on two Macs (see docs/getting-started-mac.md)
+
+.PHONY: connect
+connect: ## One step on both Macs: configure ROOT, find the other Mac, pair, start (ARGS=--help)
+	@scripts/connect.sh --config $(CONFIG) --port $(PORT) --mode $(MODE) --name "$(NAME)" $(if $(PEER),--peer $(PEER),) $(ARGS) "$(ROOT)"
 
 .PHONY: sandbox
 sandbox: ## Create a safe test root $(ROOT) with a sample Git repo and folder

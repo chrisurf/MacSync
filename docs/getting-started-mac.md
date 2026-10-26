@@ -58,6 +58,26 @@ reposync --version    # z. B. reposync 0.1.0 (a1b2c3d4e5, 2026-10-20)
 Die Version enthält den Git-Commit. Beide Macs zeigen sich gegenseitig im
 `make status` an, ob sie denselben Build fahren.
 
+## Kurzweg: `reposync-connect`
+
+`make install` installiert neben `reposync` das Skript `reposync-connect`.
+Es erledigt Schritte 4–7 in einem Aufruf, ohne Rechnernamen: auf **beiden**
+Macs im zu synchronisierenden Verzeichnis ausführen (in Terminal.app),
+zuerst auf dem einen, dann auf dem anderen.
+
+```sh
+cd ~/RepoSyncTest && reposync-connect      # Mac 1: wartet und zeigt einen Code
+cd ~/RepoSyncTest && reposync-connect      # Mac 2: findet Mac 1 per Bonjour, fragt nach dem Code
+```
+
+Danach fragt das Skript, ob es die Synchronisation gleich startet.
+Alternativ aus dem Repository: `make connect ROOT=~/RepoSyncTest`.
+Optionen (`reposync-connect --help`): Verzeichnis als Argument, `--peer HOST`
+ohne Bonjour, `--port`, `--name`, `--send`/`--receive` (Spiegel-Modus),
+`--listen`/`--connect`, `--yes`, `--force`.
+
+Die folgenden Abschnitte beschreiben dieselben Schritte einzeln.
+
 ## 4. Bonjour-Namen herausfinden
 
 Auf jedem Mac:

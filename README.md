@@ -31,6 +31,9 @@ git clone https://github.com/chrisurf/MacSync.git && cd MacSync
 make doctor          # prüft Voraussetzungen, Version, Netzwerk
 make install         # baut und installiert reposync nach ~/.local/bin
 
+# Kurzweg: auf beiden Macs im Sync-Verzeichnis (erst Mac 1, dann Mac 2)
+cd ~/RepoSyncTest && reposync-connect
+
 # Mac A                                   # Mac B
 make sandbox                              mkdir -p ~/RepoSyncTest
 make init PEER=mac-b.local:47123          make init PEER=mac-a.local:47123
