@@ -23,6 +23,24 @@ if [ $IS_MAC = 1 ]; then
   pass "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)), $(uname -m)"
   if xcode-select -p >/dev/null 2>&1; then
     pass "Xcode Command Line Tools: $(xcode-select -p)"
+    # Some CLT updates ship an SDK whose .tbd files are newer than the bundled
+    # linker ("tapi error: malformed file … unknown architecture"). Link a
+    # trivial program to find out, and suggest an SDK that works.
+    tmp=$(mktemp -d)
+    printf 'int main(void){return 0;}\n' > "$tmp/t.c"
+    if cc "$tmp/t.c" -o "$tmp/t" >/dev/null 2>&1; then
+      pass "C linker works with SDK $(xcrun --show-sdk-version 2>/dev/null)"
+    else
+      fail "C linker fails with the default SDK $(xcrun --show-sdk-version 2>/dev/null) (SDK newer than the linker)"
+      for sdk in $(ls -d "$(xcode-select -p)"/SDKs/MacOSX[0-9]*.[0-9]*.sdk 2>/dev/null | sort -rV); do
+        if SDKROOT="$sdk" cc "$tmp/t.c" -o "$tmp/t" >/dev/null 2>&1; then
+          hint "export SDKROOT=$sdk   # e.g. in ~/.zshrc, then: make install"
+          break
+        fi
+      done
+      hint "or reinstall the Command Line Tools: sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install"
+    fi
+    rm -rf "$tmp"
   else
     fail "Xcode Command Line Tools missing (needed as C compiler/linker)"
     hint "xcode-select --install"

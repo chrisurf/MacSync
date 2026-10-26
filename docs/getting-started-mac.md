@@ -180,6 +180,7 @@ Wie die Bibliotheken aktuell gehalten werden: [maintenance.md](maintenance.md).
 
 | Symptom | Abhilfe |
 | --- | --- |
+| `make install`: `tapi error: malformed file … unknown architecture arm64e.x1` | Die Command Line Tools enthalten ein SDK, das neuer ist als ihr Linker. Älteres SDK verwenden (`make doctor` nennt eins), z. B. `export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`, dann `make install` – oder die Command Line Tools neu installieren |
 | `No route to host` im Log | Daemon in Terminal.app statt in einer anderen App/als LaunchAgent starten; ggf. Systemeinstellungen → Datenschutz & Sicherheit → Lokales Netzwerk prüfen |
 | `ping mac-b.local` geht nicht | beide im selben WLAN? Gäste-WLAN/Client-Isolation? Notfalls IP-Adresse statt Name verwenden (`ipconfig getifaddr en0`) |
 | `Connection refused` | Daemon auf dem anderen Mac läuft nicht (`make run`) |
