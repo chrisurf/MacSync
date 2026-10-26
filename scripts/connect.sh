@@ -4,7 +4,7 @@
 # Macs, in the directory that should be synchronised – no host names needed.
 #
 # Usage: reposync-connect [options] [DIR]   (or: make connect ROOT=DIR)
-#        reposync-connect --help
+#        reposync-connect --stop | --help
 set -uo pipefail
 
 PROG=$(basename "$0")
@@ -20,6 +20,7 @@ TIMEOUT_S=300
 RUN=ask
 YES=0
 FORCE=0
+STOP=0
 SERVICE=_reposync-pair._tcp
 
 usage() {
@@ -28,11 +29,14 @@ $PROG – connect two Macs with RepoSync (configure, pair, start)
 
 Usage: $PROG [options] [DIR]
 
-Run the same command on both Macs, each in the directory to synchronise.
-The Macs find each other via Bonjour: the first one waits and shows a
-6-digit code, the second one finds it and asks for that code.
+Run the same command on both Macs. The order does not matter:
+  1. Mac 1: finds nobody, waits and shows a 6-digit code
+  2. Mac 2: finds Mac 1 via Bonjour and asks for that code
+Then both start synchronising (in the foreground; stop with Ctrl-C).
 
-  DIR                 directory to synchronise (default: current directory)
+  DIR                 directory to synchronise; without DIR the script asks
+                      (suggestion: current directory; in ~ or a Git repository
+                      the configured directory or ~/RepoSyncTest)
 
 Options:
   -p, --peer HOST[:PORT]
@@ -51,11 +55,13 @@ Options:
       --run           start the daemon afterwards without asking
       --no-run        do not start the daemon
   -y, --yes           no questions: accept all defaults
+      --stop          stop a running daemon / pairing wait on this Mac
   -h, --help          this help
 
 Examples:
-  cd ~/RepoSyncTest && $PROG               # on both Macs
-  $PROG ~/Code                             # synchronise ~/Code
+  $PROG ~/RepoSyncTest                    # on both Macs
+  $PROG                                    # asks for the directory
+  $PROG --stop                             # stop synchronising
   $PROG --peer macbook-b.local             # Bonjour unavailable (guest Wi-Fi)
   $PROG --send   (Mac A)   /   $PROG --receive   (Mac B)
 EOF
@@ -93,6 +99,7 @@ while [ $# -gt 0 ]; do
     --run) RUN=yes ;;
     --no-run) RUN=no ;;
     -y|--yes) YES=1 ;;
+    --stop) STOP=1 ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) [ -z "$ROOT" ] || die "only one directory allowed"; ROOT=$1 ;;
   esac
@@ -119,8 +126,32 @@ RS_BIN=$(command -v reposync || true)
 [ -n "$RS_BIN" ] || die "reposync is not installed – run 'make install' in the RepoSync repository"
 rs() { "$RS_BIN" --config "$CONFIG" "$@"; }
 
+# --- stop ------------------------------------------------------------------
+if [ $STOP = 1 ]; then
+  stopped=0
+  pkill -f "$SERVICE" 2>/dev/null && stopped=1
+  if pkill -INT -f "reposync .*daemon" 2>/dev/null; then
+    stopped=1; sleep 1
+    pkill -f "reposync .*daemon" 2>/dev/null
+  fi
+  pkill -f "reposync .*pair listen" 2>/dev/null && stopped=1
+  if [ $stopped = 1 ]; then info "stopped"; else info "nothing was running"; fi
+  exit 0
+fi
+
 # --- directory -------------------------------------------------------------
-ROOT=${ROOT:-$PWD}
+if [ -z "$ROOT" ]; then
+  suggest=$PWD
+  if [ "$PWD" = "$HOME" ] || [ -e "$PWD/.git" ]; then
+    suggest="$HOME/RepoSyncTest"
+    prev=$(sed -n 's/^root *= *"\(.*\)"/\1/p' "$CONFIG" 2>/dev/null)
+    [ -n "$prev" ] && [ -d "$prev" ] && [ ! -e "$prev/.git" ] && [ "$prev" != "$HOME" ] && suggest=$prev
+  fi
+  if [ $YES = 0 ] && [ -t 0 ]; then
+    read -r -p "Directory to synchronise [$suggest]: " ROOT || exit 1
+  fi
+  ROOT=${ROOT:-$suggest}
+fi
 ROOT=${ROOT/#\~/$HOME}
 mkdir -p "$ROOT" || die "cannot create $ROOT"
 ROOT=$(cd "$ROOT" && pwd -P)
@@ -192,11 +223,13 @@ do_listen() {
     dns-sd -R "$NAME" "$SERVICE" local. "$PAIR_PORT" >/dev/null 2>&1 & adv=$!
     trap '[ -n "$adv" ] && kill $adv 2>/dev/null' EXIT INT TERM
   fi
-  info "waiting for the other Mac – run '$PROG' there and enter this code:"
-  rs pair listen --timeout-s "$TIMEOUT_S"
+  echo
+  info "this Mac waits. Now run '$PROG' on the OTHER Mac and enter this code there:"
+  rs pair listen --timeout-s "$TIMEOUT_S" | sed '/on the other Mac run/d'
   local rc=$?
   [ -n "$adv" ] && kill "$adv" 2>/dev/null
   trap - EXIT INT TERM
+  case $rc in 130|143) info "stopped"; exit 0 ;; esac
   return $rc
 }
 
@@ -273,10 +306,11 @@ if [ "$RUN" = ask ]; then
   if [ $YES = 0 ] && [ -t 0 ] && ask "Start synchronisation now (Ctrl-C stops it)?" y; then RUN=yes; else RUN=no; fi
 fi
 if [ "$RUN" = yes ]; then
+  info "synchronising – stop with Ctrl-C (or '$PROG --stop' in another window)"
   if [ $IS_MAC = 1 ] && [ "${TERM_PROGRAM:-}" != Apple_Terminal ]; then
     warn "not running in Terminal.app (${TERM_PROGRAM:-unknown}): macOS may block the local network ('No route to host')"
   fi
   REPOSYNC_LOG=${REPOSYNC_LOG:-info} exec "$RS_BIN" --config "$CONFIG" daemon
 fi
-echo "start later with: reposync --config $CONFIG daemon   (in Terminal.app)"
+echo "start later with: reposync --config $CONFIG daemon   (in Terminal.app, stop: Ctrl-C)"
 echo "check with      : reposync status"

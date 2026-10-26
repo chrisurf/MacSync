@@ -32,6 +32,7 @@ help: ## Show this help
 	  /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Variables: ROOT=$(ROOT) NAME=\"$(NAME)\" BINDIR=$(BINDIR) CONFIG=$(CONFIG)"
+	@echo "Step by step: MAKE-HELP.md"
 
 .PHONY: doctor
 doctor: ## Check prerequisites, versions and network setup (read-only)
@@ -136,8 +137,17 @@ update-toolchain: ## Pin the latest stable Rust in rust-toolchain.toml, then tes
 ##@ Run on two Macs (see docs/getting-started-mac.md)
 
 .PHONY: connect
-connect: ## One step on both Macs: configure ROOT, find the other Mac, pair, start (ARGS=--help)
-	@scripts/connect.sh --config $(CONFIG) --port $(PORT) --mode $(MODE) --name "$(NAME)" $(if $(PEER),--peer $(PEER),) $(ARGS) "$(ROOT)"
+connect: ## One step on both Macs: choose directory, find the other Mac, pair, start (ROOT=…, ARGS=…)
+	@scripts/connect.sh --config $(CONFIG) --port $(PORT) --mode $(MODE) --name "$(NAME)" $(if $(PEER),--peer $(PEER),) \
+	  $(ARGS) $(if $(filter command line environment,$(origin ROOT)),"$(ROOT)",)
+
+.PHONY: connect-help
+connect-help: ## All options of reposync-connect
+	@scripts/connect.sh --help
+
+.PHONY: stop
+stop: ## Stop the daemon / pairing wait on this Mac
+	@scripts/connect.sh --stop
 
 .PHONY: sandbox
 sandbox: ## Create a safe test root $(ROOT) with a sample Git repo and folder

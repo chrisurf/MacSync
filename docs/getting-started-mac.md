@@ -70,7 +70,10 @@ cd ~/RepoSyncTest && reposync-connect      # Mac 1: wartet und zeigt einen Code
 cd ~/RepoSyncTest && reposync-connect      # Mac 2: findet Mac 1 per Bonjour, fragt nach dem Code
 ```
 
-Danach fragt das Skript, ob es die Synchronisation gleich startet.
+Ohne Verzeichnis-Argument fragt das Skript, welches Verzeichnis
+synchronisiert werden soll. Danach fragt es, ob es die Synchronisation gleich
+startet; stoppen mit `Ctrl-C` oder `reposync-connect --stop` (`make stop`).
+Kurzfassung: [MAKE-HELP.md](../MAKE-HELP.md).
 Alternativ aus dem Repository: `make connect ROOT=~/RepoSyncTest`.
 Optionen (`reposync-connect --help`): Verzeichnis als Argument, `--peer HOST`
 ohne Bonjour, `--port`, `--name`, `--send`/`--receive` (Spiegel-Modus),

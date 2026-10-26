@@ -15,6 +15,7 @@ werden nie still aufgelöst.
 | [docs/concept.md](docs/concept.md) | Originalkonzept |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | Bewertung, MVP-Umfang, Meilensteine, Gates |
 | [docs/architecture.md](docs/architecture.md) | Umsetzung: Crates, Datenmodell, Protokoll, Abläufe |
+| [MAKE-HELP.md](MAKE-HELP.md) | **Kurzanleitung: verbinden, stoppen, Hilfe** |
 | [docs/getting-started-mac.md](docs/getting-started-mac.md) | **Test auf zwei Macs im eigenen WLAN – Schritt für Schritt** |
 | [docs/operations.md](docs/operations.md) | Installation, Konfiguration, Bedienung, Fehlerbehebung |
 | [docs/maintenance.md](docs/maintenance.md) | Abhängigkeiten, Toolchain, Sicherheitsmeldungen, Updates |
