@@ -164,6 +164,12 @@ impl Config {
         if !reposync_net::lan::is_local(&self.listen.ip()) && !self.listen.ip().is_unspecified() {
             anyhow::bail!("listen address {} is not a local address", self.listen);
         }
+        if let Some(a) = &self.peer.address {
+            let (host, port) = a.rsplit_once(':').unwrap_or((a, ""));
+            if host.trim_matches(['[', ']']).is_empty() || port.parse::<u16>().is_err() {
+                anyhow::bail!("peer address {a:?} must be host:port, e.g. \"mac-b.local:47123\"");
+            }
+        }
         Ok(())
     }
 
@@ -195,6 +201,19 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_address_needs_host_and_port() {
+        let mut c = Config::default();
+        for bad in [":47123", "mac-b.local", "mac-b.local:", "[]:47123"] {
+            c.peer.address = Some(bad.into());
+            assert!(c.validate().is_err(), "{bad}");
+        }
+        for ok in ["mac-b.local:47123", "192.168.1.20:47123", "[fe80::1]:47123"] {
+            c.peer.address = Some(ok.into());
+            assert!(c.validate().is_ok(), "{ok}");
+        }
+    }
 
     #[test]
     fn roundtrip_and_defaults() {

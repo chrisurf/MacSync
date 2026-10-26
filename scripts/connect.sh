@@ -176,7 +176,12 @@ if [ -f "$CONFIG" ]; then
   cur_root=${cur_root/#\~/$HOME}
   cur_port=$(sed -n 's/^listen *= *".*:\([0-9]*\)"/\1/p' "$CONFIG")
   cur_mode=$(sed -n 's/^mode *= *"\(.*\)"/\1/p' "$CONFIG")
-  if [ $FORCE = 0 ] && [ "$cur_root" = "$ROOT" ] && [ "${cur_port:-47123}" = "$PORT" ] && [ "${cur_mode:-two-way}" = "$MODE" ]; then
+  BAD_PEER=0
+  cur_peer=$(sed -n 's/^address *= *"\(.*\)"/\1/p' "$CONFIG")
+  case "$cur_peer" in :*|*:) warn "invalid peer address \"$cur_peer\" in $CONFIG – rewriting the configuration"; BAD_PEER=1 ;; esac
+  if [ $BAD_PEER = 1 ]; then
+    write_config=1
+  elif [ $FORCE = 0 ] && [ "$cur_root" = "$ROOT" ] && [ "${cur_port:-47123}" = "$PORT" ] && [ "${cur_mode:-two-way}" = "$MODE" ]; then
     info "configuration $CONFIG is already set up for this directory"
     write_config=0
   else
