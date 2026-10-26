@@ -13,8 +13,8 @@ use std::fs;
 use std::path::Path;
 
 use common::*;
+use macsync_engine::{Choice, PullOptions};
 use proptest::prelude::*;
-use reposync_engine::{Choice, PullOptions};
 
 #[derive(Clone, Debug)]
 enum Step {

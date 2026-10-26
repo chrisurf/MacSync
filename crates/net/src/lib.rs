@@ -20,9 +20,9 @@ pub const DEFAULT_PORT: u16 = 47123;
 /// Noise protocol pattern.
 pub const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 
-/// Noise prologue: binds the handshake to RepoSync and the protocol version.
+/// Noise prologue: binds the handshake to MacSync and the protocol version.
 pub fn prologue() -> Vec<u8> {
-    format!("reposync/{}", reposync_core::PROTOCOL_VERSION).into_bytes()
+    format!("macsync/{}", macsync_core::PROTOCOL_VERSION).into_bytes()
 }
 
 static BUILD_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();

@@ -27,7 +27,7 @@ private struct GeneralTab: View {
                 .onChange(of: notifyConflicts) { _, on in if on { model.requestNotificationPermission() } }
             LabeledContent("Befehlszeile") {
                 VStack(alignment: .trailing) {
-                    Button("Werkzeug „reposync“ installieren") { cliMessage = model.installCommandLineTool() }
+                    Button("Werkzeug „macsync“ installieren") { cliMessage = model.installCommandLineTool() }
                     if let m = cliMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
                 }
             }

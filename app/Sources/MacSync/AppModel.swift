@@ -3,7 +3,7 @@ import Foundation
 import ServiceManagement
 import UserNotifications
 
-/// Status as reported by `reposync status --json` / the daemon socket.
+/// Status as reported by `macsync status --json` / the daemon socket.
 struct Status: Decodable {
     struct Peer: Decodable {
         var address: String?
@@ -147,20 +147,25 @@ final class AppModel: ObservableObject {
     var config: ConfigFile? { ConfigFile.load() }
 
     func launch() {
+        CLI.migrate()
         if isConfigured {
             daemon.start()
             // Already set up (CLI or RepoSync 0.2.0): start at login like
             // the setup assistant would – once; the user can turn it off.
-            if !UserDefaults.standard.bool(forKey: "offeredLaunchAtLogin") {
+            // Not for test/demo setups with their own configuration.
+            let standard = ProcessInfo.processInfo.environment["MACSYNC_CONFIG"] == nil
+            if standard, !UserDefaults.standard.bool(forKey: "offeredLaunchAtLogin") {
                 UserDefaults.standard.set(true, forKey: "offeredLaunchAtLogin")
                 setLaunchAtLogin(true)
             }
         } else {
             SetupWindow.shared.show()
         }
-        // `open -a MacSync --args --manager` opens the sync manager directly.
-        if isConfigured, CommandLine.arguments.contains("--manager") {
-            ManagerWindow.shared.show()
+        // `open -a MacSync --args --manager [Ordner]` opens the sync manager directly.
+        let args = CommandLine.arguments
+        if isConfigured, let i = args.firstIndex(of: "--manager") {
+            let path = args.indices.contains(i + 1) && !args[i + 1].hasPrefix("-") ? args[i + 1] : nil
+            ManagerWindow.shared.show(path: path)
         }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             Task { @MainActor in await AppModel.shared.refresh() }
@@ -336,11 +341,11 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.expand(root)))
     }
 
-    /// Symlink ~/.local/bin/reposync → the binary inside the app.
+    /// Symlink ~/.local/bin/macsync → the binary inside the app.
     func installCommandLineTool() -> String {
-        guard let bin = Paths.binary else { return "reposync nicht gefunden" }
+        guard let bin = Paths.binary else { return "macsync nicht gefunden" }
         let dir = Paths.home.appendingPathComponent(".local/bin")
-        let link = dir.appendingPathComponent("reposync")
+        let link = dir.appendingPathComponent("macsync")
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             if (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil
@@ -348,7 +353,7 @@ final class AppModel: ObservableObject {
                 try FileManager.default.removeItem(at: link)
             }
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: bin)
-            return "Installiert: ~/.local/bin/reposync"
+            return "Installiert: ~/.local/bin/macsync"
         } catch {
             return "Fehler: \(error.localizedDescription)"
         }

@@ -8,10 +8,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
-use reposync_core::entry::ROOT_UNIT;
-use reposync_core::merkle::Child;
-use reposync_core::vv::Ordering;
-use reposync_core::{path as rpath, Entry, Hash, Kind};
+use macsync_core::entry::ROOT_UNIT;
+use macsync_core::merkle::Child;
+use macsync_core::vv::Ordering;
+use macsync_core::{path as rpath, Entry, Hash, Kind};
 use serde::Serialize;
 
 use crate::{Engine, PeerApi};
@@ -82,7 +82,7 @@ impl Engine {
         // A unit whose entries are all deletion records (tombstones, kept so
         // that the other Mac learns about the deletion) has the empty root:
         // it does not exist any more on that side.
-        let empty = reposync_core::merkle::empty_root();
+        let empty = macsync_core::merkle::empty_root();
         let remote_all: Option<Vec<(String, Hash)>> =
             peer.and_then(|p| p.roots().ok()).map(|r| r.into_iter().map(|u| (u.name, u.root)).collect());
         let local_all: Vec<(String, Hash)> = self.local_roots()?.into_iter().map(|u| (u.name, u.root)).collect();
@@ -272,7 +272,7 @@ fn direction(local: Option<&Entry>, remote: Option<&Entry>) -> ItemState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reposync_core::VersionVector;
+    use macsync_core::VersionVector;
 
     fn entry(path: &str, vv: &[(&str, u64)], deleted: bool) -> Entry {
         let vv = VersionVector(vv.iter().map(|(d, n)| (d.to_string(), *n)).collect());

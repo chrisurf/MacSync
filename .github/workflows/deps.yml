@@ -1,6 +1,6 @@
 name: Dependencies
 
-# Weekly health check of everything RepoSync depends on, plus on every change
+# Weekly health check of everything MacSync depends on, plus on every change
 # to the dependency files. Fails on known vulnerabilities; reports (without
 # failing) available crate and toolchain updates in the job summary.
 on:

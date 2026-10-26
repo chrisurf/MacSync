@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use reposync_core::Prefer;
-use reposync_engine::Choice;
+use macsync_core::Prefer;
+use macsync_engine::Choice;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -92,11 +92,11 @@ pub(crate) fn serve(path: &Path, node: Arc<Node>, shared: Arc<Shared>) -> Result
     }
     let listener = UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    std::thread::Builder::new().name("reposync-ipc".into()).spawn(move || {
+    std::thread::Builder::new().name("macsync-ipc".into()).spawn(move || {
         for conn in listener.incoming() {
             let Ok(stream) = conn else { continue };
             let (n, s) = (node.clone(), shared.clone());
-            let _ = std::thread::Builder::new().name("reposync-ipc-conn".into()).spawn(move || {
+            let _ = std::thread::Builder::new().name("macsync-ipc-conn".into()).spawn(move || {
                 let _ = handle_conn(stream, &n, &s);
             });
         }

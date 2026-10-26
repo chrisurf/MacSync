@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use reposync_core::gitpath::{LOCK_FILES, OPERATION_MARKERS};
+use macsync_core::gitpath::{LOCK_FILES, OPERATION_MARKERS};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# End-to-end test: two RepoSync daemons on loopback, paired with a code,
+# End-to-end test: two MacSync daemons on loopback, paired with a code,
 # continuous sync of Git repositories and ordinary folders, Git torture
 # sequence, latency measurement, conflict detection.
 #
-# Usage: tests/e2e/two_daemons.sh [path/to/reposync]   (default: target/release/reposync)
+# Usage: tests/e2e/two_daemons.sh [path/to/macsync]   (default: target/release/macsync)
 # Writes a machine-readable summary to $OUT (default: target/e2e-summary.json).
 set -euo pipefail
 
-BIN="${1:-target/release/reposync}"
+BIN="${1:-target/release/macsync}"
 BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 OUT="${OUT:-target/e2e-summary.json}"
 WORK="$(mktemp -d)"
@@ -49,7 +49,7 @@ roots_equal() {
 }
 
 # Portable tree comparison (content, mode, symlink targets; .git/index is
-# compared semantically by RepoSync, so it is skipped here).
+# compared semantically by MacSync, so it is skipped here).
 trees_equal() {
   python3 - "$A" "$B" <<'PY'
 import os, stat, sys
@@ -57,13 +57,13 @@ def snap(root):
     out = {}
     for d, dirs, files in os.walk(root):
         rel_d = os.path.relpath(d, root)
-        if rel_d.split(os.sep)[0] == ".reposync":
+        if rel_d.split(os.sep)[0] == ".macsync":
             dirs[:] = []
             continue
         for n in dirs + files:
             p = os.path.join(d, n)
             rel = os.path.normpath(os.path.join(rel_d, n))
-            if rel.startswith(".reposync") or n.endswith(".lock") or rel.endswith(os.path.join(".git", "index")):
+            if rel.startswith(".macsync") or n.endswith(".lock") or rel.endswith(os.path.join(".git", "index")):
                 continue
             st = os.lstat(p)
             if stat.S_ISLNK(st.st_mode):
@@ -109,8 +109,8 @@ echo "node_modules/" > "$A/web/.gitignore"
 log "starting daemons"
 # Start the binary directly (not via a shell function) so that $! is the
 # daemon itself and cleanup terminates it.
-REPOSYNC_LOG=info "$BIN" --config "$WORK/a.toml" daemon > "$WORK/a.log" 2>&1 & PIDS+=($!)
-REPOSYNC_LOG=info "$BIN" --config "$WORK/b.toml" daemon > "$WORK/b.log" 2>&1 & PIDS+=($!)
+MACSYNC_LOG=info "$BIN" --config "$WORK/a.toml" daemon > "$WORK/a.log" 2>&1 & PIDS+=($!)
+MACSYNC_LOG=info "$BIN" --config "$WORK/b.toml" daemon > "$WORK/b.log" 2>&1 & PIDS+=($!)
 
 T0=$(now_ms)
 wait_until 120 converged || fail "initial sync did not converge"
@@ -146,7 +146,7 @@ wait_until 60 converged || fail "torture did not converge"
 ( cd "$B/web" && git fsck --full --no-dangling ) >/dev/null || fail "fsck after torture"
 [ "$(cd "$A/web" && git rev-parse HEAD)" = "$(cd "$B/web" && git rev-parse HEAD)" ] || fail "HEAD differs"
 [ "$(cd "$A/web" && git status --porcelain)" = "$(cd "$B/web" && git status --porcelain)" ] || fail "status differs"
-# RepoSync must never create stashes/refs of its own: B mirrors A exactly.
+# MacSync must never create stashes/refs of its own: B mirrors A exactly.
 SA=$(cd "$A/web" && git stash list; git for-each-ref); SB=$(cd "$B/web" && git stash list; git for-each-ref)
 [ "$SA" = "$SB" ] || { echo "A: $SA"; echo "B: $SB"; fail "refs/stashes differ"; }
 log "torture converged; fsck ok; HEAD $(cd "$B/web" && git rev-parse --short HEAD)"

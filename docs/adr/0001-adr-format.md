@@ -3,7 +3,7 @@
 - Status: angenommen · Datum: 2026-10-20
 
 ## Kontext
-RepoSync weicht im MVP bewusst an einigen Stellen vom [Konzept](../concept.md) ab.
+MacSync weicht im MVP bewusst an einigen Stellen vom [Konzept](../concept.md) ab.
 Diese Abweichungen müssen nachvollziehbar bleiben.
 
 ## Entscheidung

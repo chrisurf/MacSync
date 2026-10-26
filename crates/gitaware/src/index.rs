@@ -6,7 +6,7 @@
 //! `REUC` (resolve undo) extension. Stat data and derived caches (`TREE`,
 //! `UNTR`, `FSMN`, `EOIE`, `IEOT`) are ignored.
 
-use reposync_core::Hash;
+use macsync_core::Hash;
 
 /// Compute the semantic hash. Returns `None` for formats that are not
 /// understood (e.g. split index), in which case the caller falls back to the

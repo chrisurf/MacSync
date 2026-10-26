@@ -4,11 +4,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
-use reposync_core::entry::ROOT_UNIT;
-use reposync_core::{gitpath, path as rpath, Entry, Hash, Kind, UnitKind, VersionVector};
-use reposync_fs::{meta, ops, scan, Scanned};
-use reposync_gitaware::GateState;
-use reposync_store::{StatCache, Stored};
+use macsync_core::entry::ROOT_UNIT;
+use macsync_core::{gitpath, path as rpath, Entry, Hash, Kind, UnitKind, VersionVector};
+use macsync_fs::{meta, ops, scan, Scanned};
+use macsync_gitaware::GateState;
+use macsync_store::{StatCache, Stored};
 use serde::Serialize;
 
 use crate::Engine;
@@ -53,7 +53,7 @@ impl Engine {
             self.store().upsert_unit(unit, kind)?;
         }
         let mut report = ScanReport { unit: unit.to_string(), ..Default::default() };
-        let unit_dir = reposync_fs::unit_dir(root, unit);
+        let unit_dir = macsync_fs::unit_dir(root, unit);
 
         if kind == UnitKind::Git {
             let g = self.gate.check(&unit_dir);
@@ -100,11 +100,11 @@ impl Engine {
         }
 
         let oid_len = if kind == UnitKind::Git {
-            reposync_gitaware::resolve_git_dir(&unit_dir).map(|g| reposync_gitaware::object_id_len(&g)).unwrap_or(20)
+            macsync_gitaware::resolve_git_dir(&unit_dir).map(|g| macsync_gitaware::object_id_len(&g)).unwrap_or(20)
         } else {
             20
         };
-        let now = reposync_fs::time::now_ms();
+        let now = macsync_fs::time::now_ms();
         let me = self.cfg.device.as_str();
         let mut writes: Vec<Stored> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
@@ -158,7 +158,7 @@ impl Engine {
             if seen.contains(p.as_str()) || o.entry.deleted {
                 continue;
             }
-            let excluded = self.cfg.excludes.is_excluded(&reposync_fs::root_rel(unit, p), rpath::file_name(p))
+            let excluded = self.cfg.excludes.is_excluded(&macsync_fs::root_rel(unit, p), rpath::file_name(p))
                 || (kind == UnitKind::Git && gitpath::is_excluded(p));
             if excluded || in_nested(p) {
                 forget.push(p.clone());
@@ -183,7 +183,7 @@ impl Engine {
             }
         }
         if kind == UnitKind::Git {
-            let g = reposync_gitaware::Gate::check_files(&unit_dir);
+            let g = macsync_gitaware::Gate::check_files(&unit_dir);
             if g != GateState::Open {
                 report.deferred = Some(g.describe());
                 return Ok(report);
@@ -215,7 +215,7 @@ impl Engine {
             })?;
         }
         report.root = self.invalidate_tree(unit)?;
-        report.nested = res.nested_units.iter().map(|n| reposync_fs::root_rel(unit, n)).collect();
+        report.nested = res.nested_units.iter().map(|n| macsync_fs::root_rel(unit, n)).collect();
         Ok(report)
     }
 
@@ -230,7 +230,7 @@ impl Engine {
         full: bool,
         link: Option<String>,
     ) -> Result<Option<(Entry, bool)>> {
-        let abs = reposync_fs::abs_path(&self.cfg.root, unit, &s.disk);
+        let abs = macsync_fs::abs_path(&self.cfg.root, unit, &s.disk);
         if let Some(o) = old.filter(|o| !full && !o.entry.deleted && stat_unchanged(o, s)) {
             let mut e = o.entry.clone();
             e.link = link;
@@ -250,7 +250,7 @@ impl Engine {
             let cmp = if kind == UnitKind::Git && s.path == ".git/index" {
                 std::fs::read(&abs)
                     .ok()
-                    .and_then(|d| reposync_gitaware::index::semantic_hash(&d, oid_len))
+                    .and_then(|d| macsync_gitaware::index::semantic_hash(&d, oid_len))
                     .unwrap_or(blob)
             } else {
                 blob

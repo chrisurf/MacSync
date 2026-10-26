@@ -1,6 +1,6 @@
 # Wartung: Abhängigkeiten, Toolchain, Sicherheitsmeldungen
 
-Ziel: jederzeit wissen, *womit* RepoSync gebaut wird, und Updates sowie
+Ziel: jederzeit wissen, *womit* MacSync gebaut wird, und Updates sowie
 Sicherheitsmeldungen schnell und kontrolliert einspielen.
 
 ## Was festgelegt ist
@@ -10,7 +10,7 @@ Sicherheitsmeldungen schnell und kontrolliert einspielen.
 | Rust-Compiler | `rust-toolchain.toml` (`channel = "1.99.1"`) | beide Macs und CI bauen mit identischem Compiler; rustup lädt ihn automatisch |
 | Bibliotheken (Crates) | `Cargo.lock` | exakte Versionen aller direkten und transitiven Abhängigkeiten; `make build` verwendet `--locked` |
 | Erlaubte Lizenzen, Quellen, Sicherheitsregeln | `deny.toml` | `make audit` / CI schlagen fehl bei RustSec-Meldungen, gezogenen (yanked) Crates, fremden Registries, unzulässigen Lizenzen |
-| Build-Version | im Binary (`reposync --version`) | Paketversion + Git-Commit; beide Macs zeigen sich im Handshake ihre Version (`make status`) |
+| Build-Version | im Binary (`macsync --version`) | Paketversion + Git-Commit; beide Macs zeigen sich im Handshake ihre Version (`make status`) |
 
 ## Automatisch (GitHub)
 
@@ -51,7 +51,7 @@ Danach committen, pushen, CI abwarten, auf beiden Macs `make update`.
 1. Dependabot-Sicherheits-PR bzw. roter „Dependencies“-Workflow zeigt die
    RUSTSEC-ID und den betroffenen Crate.
 2. Gibt es eine gepatchte Version: PR mergen (oder `make update-deps`).
-3. Gibt es keine: prüfen, ob RepoSync den betroffenen Code nutzt. Wenn nicht,
+3. Gibt es keine: prüfen, ob MacSync den betroffenen Code nutzt. Wenn nicht,
    die ID mit Begründung in `deny.toml` unter `[advisories] ignore` eintragen;
    wenn doch, Crate ersetzen (Beispiel: [ADR-0009](adr/0009-postcard-statt-bincode.md)).
 4. Auf beiden Macs `make update` und Daemons neu starten.

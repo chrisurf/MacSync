@@ -4,11 +4,11 @@
 //! tombstones), `tx` (transaction journal for crash recovery), `journal`
 //! (human readable action log), `conflicts`, `peers`, `kv`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use reposync_core::{Entry, Hash, Kind, Prefer, UnitKind, VersionVector};
+use macsync_core::{Entry, Hash, Kind, Prefer, UnitKind, VersionVector};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -197,7 +197,7 @@ fn row_to_stored(r: &Row) -> rusqlite::Result<Stored> {
             blob: read_hash(r.get(6)?),
             cmp: read_hash(r.get(7)?),
             target: r.get(8)?,
-            xattrs: xattrs.and_then(|b| reposync_core::codec::decode(&b).ok()).unwrap_or_default(),
+            xattrs: xattrs.and_then(|b| macsync_core::codec::decode(&b).ok()).unwrap_or_default(),
             flags: r.get::<_, i64>(10)? as u32,
             link: r.get(11)?,
             deleted: r.get::<_, i64>(12)? != 0,
@@ -207,6 +207,28 @@ fn row_to_stored(r: &Row) -> rusqlite::Result<Stored> {
         stat: StatCache { ino: r.get::<_, i64>(14)? as u64, dev: r.get::<_, i64>(15)? as u64, ctime_ns: r.get(16)? },
         changed_ms: r.get(17)?,
     })
+}
+
+/// File name of the database inside the state directory.
+pub const DB_FILE: &str = "macsync.db";
+/// Name up to 0.2.x (RepoSync), renamed on first use.
+const LEGACY_DB_FILE: &str = "reposync.db";
+
+/// Path of the database in `state_dir`; takes over a database from the
+/// RepoSync era (`reposync.db` incl. WAL files) if there is no new one yet.
+pub fn db_path(state_dir: &Path) -> Result<PathBuf> {
+    let db = state_dir.join(DB_FILE);
+    let legacy = state_dir.join(LEGACY_DB_FILE);
+    if !db.exists() && legacy.exists() {
+        for suffix in ["", "-wal", "-shm"] {
+            let from = state_dir.join(format!("{LEGACY_DB_FILE}{suffix}"));
+            if from.exists() {
+                std::fs::rename(&from, state_dir.join(format!("{DB_FILE}{suffix}")))
+                    .with_context(|| format!("rename {}", from.display()))?;
+            }
+        }
+    }
+    Ok(db)
 }
 
 impl Store {
@@ -364,7 +386,7 @@ impl Store {
 
     pub fn put_entry(&self, unit: &str, s: &Stored) -> Result<()> {
         let e = &s.entry;
-        let xattrs = if e.xattrs.is_empty() { None } else { Some(reposync_core::codec::encode(&e.xattrs)?) };
+        let xattrs = if e.xattrs.is_empty() { None } else { Some(macsync_core::codec::encode(&e.xattrs)?) };
         let mut st = self.conn.prepare_cached(&format!(
             "INSERT OR REPLACE INTO entries(unit, {ENTRY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"
         ))?;
@@ -529,8 +551,8 @@ impl Store {
                 unit,
                 path,
                 class,
-                reposync_core::codec::encode(locals)?,
-                reposync_core::codec::encode(remotes)?,
+                macsync_core::codec::encode(locals)?,
+                macsync_core::codec::encode(remotes)?,
                 state.0.to_vec(),
                 stored,
                 now_ms()
@@ -557,7 +579,7 @@ impl Store {
         let local: Option<Vec<u8>> = r.get(4)?;
         let remote: Vec<u8> = r.get(5)?;
         let decode = |b: &[u8]| {
-            reposync_core::codec::decode::<Vec<Entry>>(b)
+            macsync_core::codec::decode::<Vec<Entry>>(b)
                 .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Blob, Box::new(e)))
         };
         Ok(ConflictRow {

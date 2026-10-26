@@ -95,6 +95,17 @@ final class ManagerModel: ObservableObject {
         }
     }
 
+    /// Opens a root-relative folder such as `Projekte/website/src`.
+    func open(path: String) async {
+        var (u, d): (String?, String) = (nil, "")
+        for name in path.split(separator: "/").map(String.init) {
+            guard let r = try? await Self.fetch(unit: u, dir: d),
+                  let item = r.items.first(where: { $0.isDir && $0.name == name }) else { break }
+            (u, d) = item.isUnit ? (item.unit, "") : (item.unit, item.path)
+        }
+        go(unit: u, dir: d)
+    }
+
     func start() {
         tree.title = URL(fileURLWithPath: Paths.expand(root)).lastPathComponent
         tree.expanded = true
@@ -500,7 +511,8 @@ struct ManagerView: View {
         let pending = model.items.filter { !$0.isSynced }.count
         let sel = model.selected
         return HStack {
-            Text("\(model.items.count) Einträge" + (pending > 0 ? " · \(pending) nicht synchron" : " · alles synchron"))
+            Text((model.items.count == 1 ? "1 Eintrag" : "\(model.items.count) Einträge")
+                + (pending > 0 ? " · \(pending) nicht synchron" : " · alles synchron"))
                 .foregroundStyle(.secondary)
             if !model.online {
                 Label("\(model.peerName) nicht erreichbar", systemImage: "wifi.exclamationmark").foregroundStyle(.orange)
@@ -589,15 +601,27 @@ private struct StateCell: View {
     var body: some View {
         let (text, symbol, color) = describe()
         Label(text, systemImage: symbol).foregroundStyle(color).lineLimit(1)
+            .help(longText ?? text)
+    }
+
+    /// Spelled out with the name of the other Mac (tooltip).
+    private var longText: String? {
+        switch item.state {
+        case "to-peer": return "Diese Version wird an \(peer) gesendet"
+        case "from-peer": return "Die neuere Version wird von \(peer) geholt"
+        case "delete-on-peer": return "Hier gelöscht – wird auch auf \(peer) gelöscht"
+        case "delete-here": return "Auf \(peer) gelöscht – wird auch hier gelöscht"
+        default: return nil
+        }
     }
 
     private func describe() -> (String, String, Color) {
         if item.paused && !item.isSynced { return ("Pausiert", "pause.circle.fill", .orange) }
         switch item.state {
         case "synced": return ("Synchron", "checkmark.circle.fill", .green)
-        case "to-peer": return ("Wird an \(peer) gesendet", "arrow.right.circle.fill", .blue)
-        case "from-peer": return ("Wird von \(peer) geholt", "arrow.left.circle.fill", .blue)
-        case "delete-on-peer": return ("Wird auf \(peer) gelöscht", "trash.circle.fill", .orange)
+        case "to-peer": return ("Wird gesendet", "arrow.right.circle.fill", .blue)
+        case "from-peer": return ("Wird geholt", "arrow.left.circle.fill", .blue)
+        case "delete-on-peer": return ("Wird dort gelöscht", "trash.circle.fill", .orange)
         case "delete-here": return ("Wird hier gelöscht", "trash.circle.fill", .orange)
         case "conflict": return ("Konflikt", "exclamationmark.triangle.fill", .red)
         case "differs": return ("Änderungen", "arrow.triangle.2.circlepath.circle.fill", .blue)
@@ -613,7 +637,7 @@ final class ManagerWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private(set) var model: ManagerModel?
 
-    func show() {
+    func show(path: String? = nil) {
         if let w = window {
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -623,25 +647,48 @@ final class ManagerWindow: NSObject, NSWindowDelegate {
         let w = NSWindow(contentViewController: NSHostingController(rootView: ManagerView(model: m)))
         w.title = "MacSync – Synchronisations-Manager"
         w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-        w.setContentSize(NSSize(width: 980, height: 580))
+        w.setContentSize(NSSize(width: 1100, height: 600))
         w.isReleasedWhenClosed = false
         w.delegate = self
-        w.setFrameAutosaveName("MacSyncManager")
+        if ProcessInfo.processInfo.environment["MACSYNC_SNAPSHOT"] == nil {
+            w.setFrameAutosaveName("MacSyncManager")
+        }
         w.center()
         model = m
         window = w
         m.start()
+        if let path { Task { await m.open(path: path) } }
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         // Documentation screenshots: MACSYNC_SNAPSHOT=/path.png renders the
         // window content once the listing has loaded.
         if let path = ProcessInfo.processInfo.environment["MACSYNC_SNAPSHOT"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak w] in
-                guard let view = w?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-                view.cacheDisplay(in: view.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                guard let w, let frame = w.contentView?.superview else { return }
+                ManagerWindow.snapshot(frame, to: URL(fileURLWithPath: path))
             }
         }
+    }
+
+    /// Renders a view hierarchy (incl. title bar) at 2x via its layers.
+    static func snapshot(_ view: NSView, to url: URL) {
+        let scale: CGFloat = 2
+        let size = view.bounds.size
+        guard let layer = view.layer,
+              let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+                                  bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.scaleBy(x: scale, y: scale)
+        if !view.isFlipped {
+            // layer.render draws in the layer's coordinate system
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        layer.render(in: ctx)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let img = ctx.makeImage() else { return }
+        let rep = NSBitmapImageRep(cgImage: img)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
     func windowWillClose(_ notification: Notification) {

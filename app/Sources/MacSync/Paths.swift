@@ -5,25 +5,25 @@ enum Paths {
     static let home = FileManager.default.homeDirectoryForCurrentUser
 
     static var config: URL {
-        if let p = ProcessInfo.processInfo.environment["REPOSYNC_CONFIG"] { return URL(fileURLWithPath: p) }
-        return home.appendingPathComponent(".config/reposync/config.toml")
+        if let p = ProcessInfo.processInfo.environment["MACSYNC_CONFIG"] { return URL(fileURLWithPath: p) }
+        return home.appendingPathComponent(".config/macsync/config.toml")
     }
 
     static var stateDir: URL {
         if let s = ConfigFile.load()?.string("state_dir") { return URL(fileURLWithPath: expand(s)) }
-        return home.appendingPathComponent("Library/Application Support/RepoSync")
+        return home.appendingPathComponent("Library/Application Support/MacSync")
     }
 
     static var socket: URL { stateDir.appendingPathComponent("daemon.sock") }
 
     static var logFile: URL { home.appendingPathComponent("Library/Logs/MacSync/daemon.log") }
 
-    /// `reposync` inside the app bundle (Contents/Helpers, next to the app
+    /// `macsync` inside the app bundle (Contents/Helpers, next to the app
     /// executable in Contents/MacOS); falls back to ~/.local/bin for development.
     static var binary: URL? {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/reposync")
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/macsync")
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
-        let dev = home.appendingPathComponent(".local/bin/reposync")
+        let dev = home.appendingPathComponent(".local/bin/macsync")
         return FileManager.default.isExecutableFile(atPath: dev.path) ? dev : nil
     }
 

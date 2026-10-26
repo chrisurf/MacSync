@@ -10,7 +10,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use reposync_core::proto::limits::MAX_MESSAGE;
+use macsync_core::proto::limits::MAX_MESSAGE;
 
 use crate::identity::Identity;
 

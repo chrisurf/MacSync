@@ -42,7 +42,7 @@ Befehl: `cargo test --workspace` → **104 Tests, 0 Fehler** (Linux und macOS; z
 | Nicht erfasste lokale Änderung | Anwendung wird verschoben, nie überschrieben; danach regulärer Konflikt |
 | Grosse Dateien / Dedup | 6-MB-Datei per Bereichs-Transfer; identischer Inhalt in anderer Einheit: 0 Bytes übertragen |
 | Hardlinks, xattrs | Hardlink-Gruppe neu verlinkt (gleiche Inode); xattr-Änderung ohne Inhaltsübertragung |
-| Git: Spiegelung inkl. nicht committeter Arbeit | `git status`, `git log`, gestagte/ignorierte/ungetrackte Dateien identisch; **Refs vor = nach (keine Commits/Refs/Stashes durch RepoSync)**; `git fsck --full` sauber |
+| Git: Spiegelung inkl. nicht committeter Arbeit | `git status`, `git log`, gestagte/ignorierte/ungetrackte Dateien identisch; **Refs vor = nach (keine Commits/Refs/Stashes durch MacSync)**; `git fsck --full` sauber |
 | Git: Commits, Branches, Checkout, Rückweg | HEAD, Branch, sauberer `git status` auf beiden Seiten |
 | Git: `git status` auf dem Ziel | 0 geänderte Einträge, kein Verkehr (semantischer Index-Hash) |
 | Git: Ruhe-Gate | `index.lock` verschiebt Erfassung; laufender Rebase verschiebt Anwendung |
@@ -100,7 +100,7 @@ Die Latenz setzt sich aus der Ruhezeit (400 ms, konfigurierbar) und < 50 ms
 
 ## 5. Benchmark (`tests/bench.rs`, 100 000 Dateien, in-process)
 
-`cargo test --release -p reposync-engine --test bench -- --ignored --nocapture`
+`cargo test --release -p macsync-engine --test bench -- --ignored --nocapture`
 
 | Messgrösse | Sandbox | Ziel |
 | --- | --- | --- |
@@ -166,5 +166,5 @@ Property-Tests und einen Zwei-Prozess-E2E-Test belegt. Die nicht-funktionalen
 Ziele für Latenz, Leerlauf-Prüfung, CPU im Leerlauf, Integrität und
 Absturzsicherheit sind erfüllt; der Erst-Sync-Durchsatz für sehr viele kleine
 Dateien ist der wichtigste Optimierungspunkt für v0.2. Empfehlung gemäss
-Konzept: zunächst 4 Wochen Spiegel-Modus mit täglichem `reposync verify`,
+Konzept: zunächst 4 Wochen Spiegel-Modus mit täglichem `macsync verify`,
 dann Zweiweg.

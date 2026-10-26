@@ -5,9 +5,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use reposync_core::proto::{DirListing, Request, Response, UnitRoot};
-use reposync_core::{Entry, Hash, PROTOCOL_VERSION};
-use reposync_engine::PeerApi;
+use macsync_core::proto::{DirListing, Request, Response, UnitRoot};
+use macsync_core::{Entry, Hash, PROTOCOL_VERSION};
+use macsync_engine::PeerApi;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::Identity;
@@ -97,7 +97,7 @@ impl NetPeer {
         }
         let tcp = TcpStream::connect_timeout(&self.addr, Duration::from_secs(5)).map_err(|e| {
             let hint = if e.raw_os_error() == Some(EHOSTUNREACH) {
-                " – on macOS this usually means the Local Network privacy check blocked RepoSync: \
+                " – on macOS this usually means the Local Network privacy check blocked MacSync: \
                  run the daemon from Terminal.app (see docs/getting-started-mac.md) or allow it under \
                  System Settings → Privacy & Security → Local Network"
             } else {
@@ -109,8 +109,8 @@ impl NetPeer {
         if s.remote_static() != self.expected.as_slice() {
             bail!("peer at {} presented an unknown key (device {})", self.addr, crate::device_id(s.remote_static()));
         }
-        s.send(&reposync_core::codec::encode(&self.hello.request())?)?;
-        match reposync_core::codec::decode::<Response>(&s.recv()?)? {
+        s.send(&macsync_core::codec::encode(&self.hello.request())?)?;
+        match macsync_core::codec::decode::<Response>(&s.recv()?)? {
             Response::Hello { device, name, protocol, arch, root, version } => {
                 if protocol != PROTOCOL_VERSION {
                     bail!("peer speaks protocol {protocol}, expected {PROTOCOL_VERSION}");
@@ -119,7 +119,7 @@ impl NetPeer {
                     tracing::warn!(
                         local = %self.hello.version,
                         peer = %version,
-                        "peer runs a different RepoSync build; update both Macs (make update)"
+                        "peer runs a different MacSync build; update both Macs (make update)"
                     );
                 }
                 *self.remote.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -134,7 +134,7 @@ impl NetPeer {
     /// Send one request; reconnects once on transport errors (all requests are
     /// idempotent).
     pub fn call(&self, req: &Request) -> Result<Response> {
-        let payload = reposync_core::codec::encode(req)?;
+        let payload = macsync_core::codec::encode(req)?;
         let mut guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
             if guard.is_none() {
@@ -144,7 +144,7 @@ impl NetPeer {
             let r = s.send(&payload).and_then(|_| s.recv());
             match r {
                 Ok(bytes) => {
-                    let resp: Response = reposync_core::codec::decode(&bytes)?;
+                    let resp: Response = macsync_core::codec::decode(&bytes)?;
                     if let Response::Error(e) = resp {
                         return Err(anyhow!("peer error: {e}"));
                     }

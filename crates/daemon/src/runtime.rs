@@ -9,12 +9,12 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use reposync_core::proto::Request;
-use reposync_core::Hash;
-use reposync_engine::{Engine, Outcome, PeerApi, PullOptions, PullReport, ScanOptions};
-use reposync_net::client::HelloInfo;
-use reposync_net::{discovery, Identity, NetPeer, Server};
-use reposync_store::PeerRow;
+use macsync_core::proto::Request;
+use macsync_core::Hash;
+use macsync_engine::{Engine, Outcome, PeerApi, PullOptions, PullReport, ScanOptions};
+use macsync_net::client::HelloInfo;
+use macsync_net::{discovery, Identity, NetPeer, Server};
+use macsync_store::PeerRow;
 use serde_json::{json, Value};
 
 use crate::config::Config;
@@ -46,7 +46,7 @@ impl Node {
     /// Peer address: configured address, Bonjour, or the address seen at pairing.
     pub fn peer_addr(&self, row: &PeerRow) -> Result<SocketAddr> {
         if let Some(a) = &self.cfg.peer.address {
-            return reposync_net::lan::resolve(a);
+            return macsync_net::lan::resolve(a);
         }
         if self.cfg.peer.discovery {
             if let Ok(Some(a)) = discovery::find(&row.device, Duration::from_secs(3)) {
@@ -61,7 +61,7 @@ impl Node {
     }
 
     pub fn connect_peer(&self) -> Result<NetPeer> {
-        let row = self.peer_row()?.context("not paired: run `reposync pair` first")?;
+        let row = self.peer_row()?.context("not paired: run `macsync pair` first")?;
         let addr = self.peer_addr(&row)?;
         let peer = NetPeer::new(addr, self.identity.clone(), row.pubkey.clone(), self.hello());
         peer.ping().with_context(|| format!("peer {} at {addr} not reachable", row.name))?;
@@ -123,16 +123,16 @@ impl Node {
                 "conflicts": conflicts,
                 "entries": live,
                 "tombstones": tombs,
-                "last_sync": if u.synced_ms > 0 { Some(reposync_fs::time::rfc3339(u.synced_ms)) } else { None },
+                "last_sync": if u.synced_ms > 0 { Some(macsync_fs::time::rfc3339(u.synced_ms)) } else { None },
             }));
         }
         let peer = store.peers()?.into_iter().last().map(|p| {
-            json!({"device": p.device, "name": p.name, "address": p.addr, "paired": reposync_fs::time::rfc3339(p.paired_ms)})
+            json!({"device": p.device, "name": p.name, "address": p.addr, "paired": macsync_fs::time::rfc3339(p.paired_ms)})
         });
         Ok(json!({
             "device": self.identity.device_id(),
             "name": self.cfg.device_name,
-            "version": reposync_net::build_version(),
+            "version": macsync_net::build_version(),
             "root": self.cfg.root(),
             "mode": self.cfg.mode().as_str(),
             "case_insensitive": self.engine.is_case_insensitive(),
@@ -248,15 +248,15 @@ impl Daemon {
 
         // Protocol server: only the paired key may connect.
         let n2 = node.clone();
-        let authorize: reposync_net::server::Authorizer = Arc::new(move |key: &[u8]| {
+        let authorize: macsync_net::server::Authorizer = Arc::new(move |key: &[u8]| {
             n2.engine.store().peers().map(|p| p.iter().any(|p| p.pubkey == key)).unwrap_or(false)
         });
         let (n3, s3) = (node.clone(), shared.clone());
-        let handler: reposync_net::server::Handler = Arc::new(move |peer, req| {
+        let handler: macsync_net::server::Handler = Arc::new(move |peer, req| {
             {
                 let mut ps = s3.peer_state.lock().unwrap_or_else(|e| e.into_inner());
                 ps.online = true;
-                ps.last_contact_ms = reposync_fs::time::now_ms();
+                ps.last_contact_ms = macsync_fs::time::now_ms();
             }
             if let Request::Changed { units } = &req {
                 tracing::debug!(peer = %peer.device, ?units, "peer reports changes");
@@ -286,7 +286,7 @@ impl Daemon {
 
         let (n4, s4) = (node.clone(), shared.clone());
         let scheduler =
-            std::thread::Builder::new().name("reposync-scheduler".into()).spawn(move || scheduler(n4, s4))?;
+            std::thread::Builder::new().name("macsync-scheduler".into()).spawn(move || scheduler(n4, s4))?;
 
         Ok(Daemon {
             node,
@@ -315,7 +315,7 @@ impl Daemon {
         }
         // Started by the menu bar app: stop when the app is gone (crash,
         // force quit), so no orphaned daemon keeps running.
-        let parent: Option<libc::pid_t> = std::env::var("REPOSYNC_PARENT_PID").ok().and_then(|p| p.parse().ok());
+        let parent: Option<libc::pid_t> = std::env::var("MACSYNC_PARENT_PID").ok().and_then(|p| p.parse().ok());
         while !SIGNALLED.load(Ordering::SeqCst) {
             if parent.is_some_and(|p| unsafe { libc::getppid() } != p) {
                 tracing::info!("parent process ended");
@@ -348,13 +348,13 @@ fn refresh_units(node: &Node, shared: &Shared) {
 fn unit_of(root: &Path, canon_root: &Path, units: &[String], abs: &Path) -> Option<String> {
     let rel = abs.strip_prefix(root).or_else(|_| abs.strip_prefix(canon_root)).ok()?;
     let rel = rel.to_str()?;
-    if rel.is_empty() || rel == reposync_fs::PRIVATE_DIR || rel.starts_with(".reposync/") {
+    if rel.is_empty() || macsync_fs::is_private(rel) {
         return None;
     }
-    let rel = reposync_core::path::nfc(rel);
+    let rel = macsync_core::path::nfc(rel);
     let best = units
         .iter()
-        .filter(|u| u.as_str() != reposync_core::entry::ROOT_UNIT && reposync_core::path::is_within(&rel, u))
+        .filter(|u| u.as_str() != macsync_core::entry::ROOT_UNIT && macsync_core::path::is_within(&rel, u))
         .max_by_key(|u| u.len())
         .cloned();
     best.or_else(|| {
@@ -362,7 +362,7 @@ fn unit_of(root: &Path, canon_root: &Path, units: &[String], abs: &Path) -> Opti
         if rel.contains('/') || root.join(first).is_dir() {
             Some(first.to_string())
         } else {
-            Some(reposync_core::entry::ROOT_UNIT.to_string())
+            Some(macsync_core::entry::ROOT_UNIT.to_string())
         }
     })
 }
@@ -375,7 +375,7 @@ fn start_watcher(node: &Arc<Node>, shared: &Arc<Shared>) -> Result<notify::Recom
     let (r2, c2) = (root.clone(), canon.clone());
     let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
         Ok(ev) => {
-            // Reads (including RepoSync's own scans and hashing) are not
+            // Reads (including MacSync's own scans and hashing) are not
             // changes; only a close after writing is.
             if let notify::EventKind::Access(a) = ev.kind {
                 if a != notify::event::AccessKind::Close(notify::event::AccessMode::Write) {
@@ -420,7 +420,7 @@ fn peer(node: &Node, shared: &Shared) -> Option<Arc<NetPeer>> {
             let mut ps = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner());
             ps.online = true;
             ps.last_error.clear();
-            ps.last_contact_ms = reposync_fs::time::now_ms();
+            ps.last_contact_ms = macsync_fs::time::now_ms();
             Some(p)
         }
         Err(e) => {
@@ -648,7 +648,7 @@ fn anti_entropy(node: &Node, shared: &Shared, peer: &NetPeer) -> Result<()> {
         let mut ps = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner());
         ps.remote_roots = remote.iter().map(|r| (r.name.clone(), r.root)).collect();
         ps.online = true;
-        ps.last_contact_ms = reposync_fs::time::now_ms();
+        ps.last_contact_ms = macsync_fs::time::now_ms();
     }
     for r in &remote {
         if local.get(&r.name) != Some(&r.root) && !dirty.contains(&r.name) {
@@ -679,7 +679,7 @@ impl Daemon {
         v["daemon"] = json!(true);
         v["paused"] = json!(shared.paused.load(Ordering::SeqCst));
         v["peer_online"] = json!(online);
-        v["peer_last_contact"] = json!(if last > 0 { Some(reposync_fs::time::rfc3339(last)) } else { None });
+        v["peer_last_contact"] = json!(if last > 0 { Some(macsync_fs::time::rfc3339(last)) } else { None });
         v["peer_error"] = json!(if err.is_empty() { None } else { Some(err) });
         let peer_version = shared
             .peer
@@ -758,6 +758,6 @@ mod tests {
         assert_eq!(m("loose.txt").as_deref(), Some("."));
         assert_eq!(m("newdir").as_deref(), Some("newdir"));
         assert_eq!(m("other/x").as_deref(), Some("other"));
-        assert_eq!(m(".reposync/staging/x"), None);
+        assert_eq!(m(".macsync/staging/x"), None);
     }
 }

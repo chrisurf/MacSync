@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use reposync_engine::{Engine, EngineConfig, Mode, PullOptions, PullReport};
+use macsync_engine::{Engine, EngineConfig, Mode, PullOptions, PullReport};
 
 pub struct Pair {
     pub a: Engine,
@@ -49,11 +49,11 @@ impl Pair {
             let r1 = self.b.sync_from(&self.a, None, PullOptions::default()).unwrap();
             let r2 = self.a.sync_from(&self.b, None, PullOptions::default()).unwrap();
             for r in r1.iter().chain(r2.iter()) {
-                if let reposync_engine::Outcome::Failed(e) = &r.outcome {
+                if let macsync_engine::Outcome::Failed(e) = &r.outcome {
                     panic!("pull of {} failed: {e}", r.unit);
                 }
             }
-            let quiet = r1.iter().chain(r2.iter()).all(|r| r.outcome == reposync_engine::Outcome::InSync);
+            let quiet = r1.iter().chain(r2.iter()).all(|r| r.outcome == macsync_engine::Outcome::InSync);
             all.extend(r1);
             all.extend(r2);
             if quiet {
@@ -82,7 +82,7 @@ pub enum Node {
     Link(PathBuf),
 }
 
-/// Recursive snapshot of a directory (excluding `.reposync`, process-local
+/// Recursive snapshot of a directory (excluding `.macsync`, process-local
 /// Git files and the raw index, which is compared semantically).
 pub fn snapshot(root: &Path) -> BTreeMap<String, Node> {
     let mut out = BTreeMap::new();
@@ -96,7 +96,7 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Node>) {
     for e in rd {
         let p = e.path();
         let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
-        if rel == ".reposync" || rel.ends_with(".lock") {
+        if rel == ".macsync" || rel.ends_with(".lock") {
             continue;
         }
         let md = fs::symlink_metadata(&p).unwrap();
@@ -108,7 +108,7 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Node>) {
             walk(root, &p, out);
         } else if rel.ends_with(".git/index") {
             let data = fs::read(&p).unwrap();
-            let sem = reposync_gitaware::index::semantic_hash(&data, 20).map(|h| h.0.to_vec()).unwrap_or(data);
+            let sem = macsync_gitaware::index::semantic_hash(&data, 20).map(|h| h.0.to_vec()).unwrap_or(data);
             out.insert(rel, Node::File { mode, content: sem });
         } else {
             out.insert(rel, Node::File { mode, content: fs::read(&p).unwrap() });
@@ -158,7 +158,7 @@ pub fn assert_fsck(dir: &Path) {
     );
 }
 
-/// All refs, stashes and HEAD of a repository (to prove RepoSync never
+/// All refs, stashes and HEAD of a repository (to prove MacSync never
 /// creates history).
 pub fn refs(dir: &Path) -> String {
     let mut s = git(dir, &["for-each-ref", "--format=%(refname) %(objectname)"]);

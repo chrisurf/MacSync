@@ -2,6 +2,19 @@
 
 ## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 
+### Umbenennung RepoSync → MacSync (ADR-0011)
+- Alles heisst jetzt MacSync: Werkzeug `macsync` / `macsync-connect`, Crates
+  `macsync-*`, Konfiguration `~/.config/macsync/`, Zustand
+  `~/Library/Application Support/MacSync/` mit `macsync.db`, Privatordner
+  `.macsync/`, Umgebungsvariablen `MACSYNC_*`, Bonjour `_macsync._tcp`,
+  LaunchAgent `com.alpineperspective.macsync.daemon`
+- Bestehende Installationen werden automatisch übernommen (`macsync migrate`,
+  läuft vor jedem Befehl und beim App-Start); Kopplung bleibt erhalten
+- Protokollversion 2: **beide Macs aktualisieren** – 0.3.0 verbindet sich
+  nicht mit älteren Versionen
+- README neu mit Screenshots; `make screenshots` erzeugt sie mit Demo-Daten
+- `open -a MacSync --args --manager [Ordner]` öffnet den Manager direkt
+
 ### Geändert
 - Die App heisst **MacSync** (`MacSync.app`, Installer
   `MacSync-<version>-arm64.pkg`, Bundle-ID `com.alpineperspective.macsync`).

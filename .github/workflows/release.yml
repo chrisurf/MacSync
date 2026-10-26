@@ -85,8 +85,8 @@ jobs:
           echo "CODESIGN_IDENTITY=$CODESIGN_IDENTITY" >> "$GITHUB_ENV"
           echo "INSTALLER_IDENTITY=$INSTALLER_IDENTITY" >> "$GITHUB_ENV"
           if [ -n "$APPLE_ID" ]; then
-            xcrun notarytool store-credentials reposync --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
-            echo "NOTARY_PROFILE=reposync" >> "$GITHUB_ENV"
+            xcrun notarytool store-credentials macsync --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+            echo "NOTARY_PROFILE=macsync" >> "$GITHUB_ENV"
           fi
 
       - name: Build MacSync.app and installer

@@ -1,4 +1,4 @@
-//! The only Git commands RepoSync runs. None of them creates commits, refs,
+//! The only Git commands MacSync runs. None of them creates commits, refs,
 //! branches, tags or stashes.
 
 use std::io;
@@ -21,7 +21,7 @@ pub fn available() -> bool {
 }
 
 /// `git update-index --refresh -q`: refresh the stat cache of the index after
-/// files were written by RepoSync. Exit code 1 ("needs update") is expected
+/// files were written by MacSync. Exit code 1 ("needs update") is expected
 /// when the working tree differs from the index and is not an error.
 pub fn refresh_index(work: &Path) -> io::Result<()> {
     let out =

@@ -1,4 +1,4 @@
-# Plan v0.2.0: RepoSync als Mac-App mit Menüleiste und Release-Pipeline
+# Plan v0.2.0: MacSync als Mac-App mit Menüleiste und Release-Pipeline
 
 Status: umgesetzt (M1–M5). Branch `feature/0.2.0`. Merge nach `main` erzeugt automatisch das Release
 `v0.2.0` mit einem `.pkg`-Installer für Apple Silicon (M1–M4).
@@ -37,24 +37,26 @@ kein Terminal mehr nötig.
    Kindprozess der App gilt die Freigabe der App: einmal „Erlauben“, fertig.
    Autostart = App als Anmeldeobjekt.
 4. **Logik bleibt in Rust, die App ist dünn.** Bonjour-Suche und Pairing
-   wandern aus dem Shell-Skript in den Rust-Kern (`reposync discover`,
-   `reposync pair … --json`). App und `reposync-connect` nutzen dieselben
+   wandern aus dem Shell-Skript in den Rust-Kern (`macsync discover`,
+   `macsync pair … --json`). App und `macsync-connect` nutzen dieselben
    Befehle – eine Implementierung, zwei Oberflächen.
 5. **Ersteinrichtung als Assistent** statt Einstellungsmaske: Verzeichnis
    wählen → anderen Mac suchen → Code anzeigen/eingeben → fertig. Die
    Verwechslung „Code statt Verzeichnis“ ist damit konstruktiv ausgeschlossen.
 6. **Bestehende Einrichtung wird übernommen.** Die App liest dieselbe
-   Konfiguration (`~/.config/reposync/config.toml`) und denselben Zustand –
+   Konfiguration (`~/.config/macsync/config.toml`) und denselben Zustand –
    die beiden gekoppelten Macs müssen nicht neu gekoppelt werden.
 7. **Ohne Apple-Developer-Account** *(entschieden)*: ad-hoc signiert. Folgen:
    einmal pro Mac „Trotzdem öffnen“ (Systemeinstellungen → Datenschutz &
    Sicherheit) und nach Updates evtl. erneut „Lokales Netzwerk erlauben“.
    Die Pipeline enthält die Schritte für Developer-ID-Signatur und
    Notarisierung bereits; sie werden aktiv, sobald die Secrets gesetzt sind.
-8. **Namen vereinheitlichen (offen):** Repository heisst `MacSync`, Produkt
-   und Binary `RepoSync`. Entschieden (0.3.0): die App heisst **MacSync**
+8. **Namen vereinheitlichen:** Bis 0.2.0 hiessen Produkt, App und Binary
+   `RepoSync`/`reposync`. Entschieden (0.3.0): alles heisst **MacSync**
    (Bundle-ID `com.alpineperspective.macsync`, Entwickler Alpine Perspective
-   GmbH); CLI `reposync` und Konfiguration bleiben.
+   GmbH; CLI `macsync`, Konfiguration `~/.config/macsync`, Zustand
+   `~/Library/Application Support/MacSync`). Bestehende Installationen werden
+   beim ersten Start übernommen (ADR-0011).
 
 ## 4. Bedienkonzept
 
@@ -62,7 +64,7 @@ kein Terminal mehr nötig.
 
 ```
 ●  Synchron · vor 12 s                 ← Zustand (grün/blau/gelb/rot)
-   ~/RepoSyncTest                       ← Verzeichnis (Klick: im Finder öffnen)
+   ~/MacSync                       ← Verzeichnis (Klick: im Finder öffnen)
    ↔ MacBook Pro M4 CH · verbunden      ← anderer Mac
    2 Konflikte …                        ← nur wenn vorhanden
 ───────────────────────────────
@@ -71,7 +73,7 @@ kein Terminal mehr nötig.
 ───────────────────────────────
    Einstellungen …          ⌘,
    Protokoll anzeigen
-   RepoSync beenden         ⌘Q
+   MacSync beenden         ⌘Q
 ```
 
 Symbolzustände: synchron · überträgt · wartet auf Ruhe · pausiert ·
@@ -79,7 +81,7 @@ anderer Mac nicht erreichbar · Konflikt.
 
 ### Ersteinrichtung (Assistent, erscheint ohne Konfiguration)
 
-1. **Verzeichnis** – Ordnerauswahl (Vorschlag `~/RepoSyncTest`), Warnung bei
+1. **Verzeichnis** – Ordnerauswahl (Vorschlag `~/MacSync`), Warnung bei
    Git-Repository, iCloud, Schreibtisch/Dokumente.
 2. **Anderen Mac finden** – Liste per Bonjour; „Auf anderen Mac warten“ zeigt
    den Code groß an, „Verbinden“ fragt nach dem Code (6 Ziffern-Feld).
@@ -98,22 +100,22 @@ anderer Mac nicht erreichbar · Konflikt.
 ```
 MacSync.app/Contents/
   MacOS/MacSync           SwiftUI-App (Menüleiste, Einstellungen, Assistent)
-  Helpers/reposync        Rust-Binary (Daemon + CLI), unverändert nutzbar
-                          (nicht in MacOS/: APFS unterscheidet RepoSync/reposync nicht)
+  Helpers/macsync        Rust-Binary (Daemon + CLI), unverändert nutzbar
+                          (nicht in MacOS/: APFS unterscheidet MacSync/macsync nicht)
   Info.plist              LSUIElement, NSLocalNetworkUsageDescription,
-                          NSBonjourServices (_reposync._tcp, _reposync-pair._tcp)
+                          NSBonjourServices (_macsync._tcp, _macsync-pair._tcp)
 ```
 
-- **Prozess:** App startet `reposync daemon` als Kindprozess, überwacht ihn,
+- **Prozess:** App startet `macsync daemon` als Kindprozess, überwacht ihn,
   startet ihn nach Absturz neu, beendet ihn beim Beenden der App.
 - **Zustand:** App fragt den Daemon über den vorhandenen Unix-Socket
   (`daemon.sock`, JSON) alle 2 s nach `status`; Aktionen (`sync`, `pause`,
   `resume`, `resolve`) über denselben Socket.
-- **Einrichtung/Pairing:** App ruft `reposync init`, `reposync discover --json`,
-  `reposync pair listen|connect --json` auf und liest JSON-Zeilen.
+- **Einrichtung/Pairing:** App ruft `macsync init`, `macsync discover --json`,
+  `macsync pair listen|connect --json` auf und liest JSON-Zeilen.
 - **Autostart:** `SMAppService.mainApp.register()/unregister()`.
 - **CLI weiterhin verfügbar:** Menüpunkt „Befehlszeilenwerkzeug installieren“
-  legt `~/.local/bin/reposync` als Symlink in die App.
+  legt `~/.local/bin/macsync` als Symlink in die App.
 - **Mindestversion:** macOS 14 (Sonoma); Apple Silicon only.
 - **Build ohne Xcode-Projekt:** Swift Package unter `app/`, Bundle wird von
   `scripts/build-app.sh` zusammengesetzt (läuft lokal mit den Command Line
@@ -123,12 +125,12 @@ MacSync.app/Contents/
 
 | Befehl | Zweck |
 | --- | --- |
-| `reposync discover [--json] [--timeout-s N]` | Bonjour-Suche nach wartenden Macs (`_reposync-pair._tcp`) |
-| `reposync pair listen --json` | JSON-Ereignisse: `code`, `paired`, `error`; meldet sich selbst per Bonjour an |
-| `reposync pair connect … --json` | JSON-Ergebnis statt Text |
-| `reposync status --json` | vorhanden; ergänzt um Name/Adresse des Peers, falls nötig |
+| `macsync discover [--json] [--timeout-s N]` | Bonjour-Suche nach wartenden Macs (`_macsync-pair._tcp`) |
+| `macsync pair listen --json` | JSON-Ereignisse: `code`, `paired`, `error`; meldet sich selbst per Bonjour an |
+| `macsync pair connect … --json` | JSON-Ergebnis statt Text |
+| `macsync status --json` | vorhanden; ergänzt um Name/Adresse des Peers, falls nötig |
 
-`reposync-connect` wird danach auf diese Befehle umgestellt (kein `dns-sd` mehr).
+`macsync-connect` wird danach auf diese Befehle umgestellt (kein `dns-sd` mehr).
 
 ## 6. Release-Pipeline
 
@@ -149,7 +151,7 @@ Zusätzlich baut `ci.yml` in jedem PR das `.pkg` als Artefakt (zum Testen vor de
 
 | # | Inhalt | Abnahme |
 | --- | --- | --- |
-| M1 | Rust: `discover`, `pair --json`, Pairing-Anmeldung per Bonjour; Tests | `reposync discover` findet wartenden Mac; Skript ohne `dns-sd` |
+| M1 | Rust: `discover`, `pair --json`, Pairing-Anmeldung per Bonjour; Tests | `macsync discover` findet wartenden Mac; Skript ohne `dns-sd` |
 | M2 | App-Gerüst: Swift Package, Bundle-Skript, Menüleiste mit Zustand, Daemon als Kindprozess | App startet, Symbol zeigt „synchron“ mit bestehender Konfiguration |
 | M3 | Assistent + Einstellungen + Autostart | Einrichtung auf frischem Mac ohne Terminal |
 | M4 | Pipeline: `release.yml`, PR-Artefakt, `.pkg` | `.pkg` aus PR installiert sich auf beiden Macs |

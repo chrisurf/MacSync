@@ -5,10 +5,10 @@ mod common;
 use std::fs;
 
 use common::Pair;
-use reposync_engine::browse::{ItemState, Presence};
-use reposync_engine::PeerApi;
+use macsync_engine::browse::{ItemState, Presence};
+use macsync_engine::PeerApi;
 
-fn state(items: &[reposync_engine::browse::BrowseItem], name: &str) -> (ItemState, Presence, Presence) {
+fn state(items: &[macsync_engine::browse::BrowseItem], name: &str) -> (ItemState, Presence, Presence) {
     let i = items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} missing in {items:#?}"));
     (i.state, i.local, i.remote)
 }

@@ -1,4 +1,4 @@
-//! Pure, I/O-free core of RepoSync.
+//! Pure, I/O-free core of MacSync.
 //!
 //! Everything in here is deterministic and side-effect free so that it can be
 //! covered by property-based tests: content hashes, entries, version vectors,
@@ -27,4 +27,4 @@ pub type DeviceId = String;
 
 /// Protocol version spoken on the wire. Peers with a different major version
 /// refuse to talk to each other.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;

@@ -10,7 +10,7 @@ Diese Werte sind maschinenspezifisch und ändern sich durch lesende Befehle
 ## Entscheidung
 Jeder Eintrag trägt `blob` (BLAKE3 der Bytes, für Transfer und Prüfung) und
 `cmp` (Vergleichswert für Merkle-Baum und Versionsvektor). Für `.git/index`
-berechnet `reposync-gitaware` `cmp` über Version, Einträge (Modus, Objekt-ID,
+berechnet `macsync-gitaware` `cmp` über Version, Einträge (Modus, Objekt-ID,
 Flags inkl. Stage, `skip-worktree`, `intent-to-add`, Pfad) und die
 `REUC`-Erweiterung. Abgeleitete bzw. stat-artige Erweiterungen (`TREE`,
 `UNTR`, `FSMN`, `EOIE`, `IEOT`) werden ignoriert. Ist der Index nicht lesbar

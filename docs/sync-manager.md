@@ -26,10 +26,10 @@ Abzeichen bleiben als Ausbaustufe (Abschnitt 7).
 
 ## 3. Woher der Status kommt (ohne Mehraufwand im Normalfall)
 
-RepoSync hält pro Einheit einen **Merkle-Baum** (Hash pro Datei, Hash pro
+MacSync hält pro Einheit einen **Merkle-Baum** (Hash pro Datei, Hash pro
 Ordner über seinen Inhalt) und pro Eintrag einen **Versionsvektor**.
 
-`reposync browse` / IPC `browse` listet **ein Verzeichnis** zur Zeit:
+`macsync browse` / IPC `browse` listet **ein Verzeichnis** zur Zeit:
 
 1. Kinder des Verzeichnisses lokal (eigener Baum) und beim anderen Mac
    (eine `tree`-Anfrage).
@@ -81,7 +81,7 @@ geöffnete Verzeichnis verglichen.
 ┌ Empfange 42 % · noch ca. 2 Min. ───────────────────────────────────────┐
 │ ████████████░░░░░░░  3 von 120 Dateien · 120 MB von 290 MB · notes/a.mov│
 ├────────────────────────────────────────────────────────────────────────┤
-│ ‹  RepoSyncTest › notes          [Alle | Nicht synchron]  [Suchen    ] │
+│ ‹  MacSync › notes          [Alle | Nicht synchron]  [Suchen    ] │
 ├──────────────┬────────────┬──────────────┬─────────────────────┬──────┤
 │ Name         │ Dieser Mac │ MacBook M4   │ Status              │ Größe│
 │ 📁 sub       │ ✓ vorhanden│ ✓ vorhanden  │ ✓ Synchron          │  –   │

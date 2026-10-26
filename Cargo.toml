@@ -9,13 +9,13 @@ edition = "2021"
 repository = "https://github.com/chrisurf/MacSync"
 
 [workspace.dependencies]
-reposync-core = { path = "crates/core" }
-reposync-fs = { path = "crates/fs" }
-reposync-gitaware = { path = "crates/gitaware" }
-reposync-store = { path = "crates/store" }
-reposync-engine = { path = "crates/engine" }
-reposync-net = { path = "crates/net" }
-reposync-daemon = { path = "crates/daemon" }
+macsync-core = { path = "crates/core" }
+macsync-fs = { path = "crates/fs" }
+macsync-gitaware = { path = "crates/gitaware" }
+macsync-store = { path = "crates/store" }
+macsync-engine = { path = "crates/engine" }
+macsync-net = { path = "crates/net" }
+macsync-daemon = { path = "crates/daemon" }
 
 anyhow = "1"
 thiserror = "2"

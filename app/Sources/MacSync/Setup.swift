@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// A Mac that waits for pairing (`reposync discover --json`).
+/// A Mac that waits for pairing (`macsync discover --json`).
 struct Candidate: Decodable, Identifiable, Hashable {
     var device: String
     var name: String
@@ -30,7 +30,7 @@ final class SetupModel: ObservableObject {
     init(step: Step) {
         self.step = step
         let cfg = ConfigFile.load()
-        root = URL(fileURLWithPath: Paths.expand(cfg?.string("root") ?? Paths.home.appendingPathComponent("RepoSyncTest").path))
+        root = URL(fileURLWithPath: Paths.expand(cfg?.string("root") ?? Paths.home.appendingPathComponent("MacSync").path))
         name = cfg?.string("device_name") ?? Host.current().localizedName ?? "Mac"
         if step == .pair { startDiscovery() }
     }
@@ -44,7 +44,7 @@ final class SetupModel: ObservableObject {
         var dir = url.standardizedFileURL
         while dir.path != "/" {
             if FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git").path) {
-                return "Der Ordner liegt im Git-Repository \(Paths.display(dir.path)). Meist ist ein eigener Ordner wie ~/RepoSyncTest gemeint, der Repositories enthält."
+                return "Der Ordner liegt im Git-Repository \(Paths.display(dir.path)). Meist ist ein eigener Ordner wie ~/MacSync gemeint, der Repositories enthält."
             }
             dir.deleteLastPathComponent()
         }

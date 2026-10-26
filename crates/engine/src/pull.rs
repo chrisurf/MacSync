@@ -5,12 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use reposync_core::proto::{limits, UnitRoot};
-use reposync_core::{
+use macsync_core::proto::{limits, UnitRoot};
+use macsync_core::{
     decide, path as rpath, ConflictClass, Decision, Entry, GitClass, Hash, Kind, Policy, Tree, UnitKind,
 };
-use reposync_fs::{ops, scan};
-use reposync_store::Stored;
+use macsync_fs::{ops, scan};
+use macsync_store::Stored;
 use serde::Serialize;
 
 use crate::capture::ScanOptions;
@@ -200,7 +200,7 @@ impl Engine {
             }
             return Ok(rep);
         }
-        let unit_dir = reposync_fs::unit_dir(&root, unit);
+        let unit_dir = macsync_fs::unit_dir(&root, unit);
         if kind == UnitKind::Git && unit_dir.exists() {
             let g = self.gate.check(&unit_dir);
             if !g.is_open() {
@@ -257,7 +257,7 @@ impl Engine {
         let nested: Vec<String> = {
             let mut n: BTreeSet<String> = self.nested_units_of(unit)?.into_iter().collect();
             n.extend(remote_names.iter().filter(|r| r.starts_with(&format!("{unit}/"))).cloned());
-            if unit == reposync_core::entry::ROOT_UNIT {
+            if unit == macsync_core::entry::ROOT_UNIT {
                 n.clear();
             }
             n.into_iter().filter_map(|u| u.strip_prefix(&format!("{unit}/")).map(str::to_string)).collect()
@@ -377,7 +377,7 @@ impl Engine {
                     let local_live = l.filter(|s| !s.entry.deleted);
                     let reason = match (l, local.get(&path).map(|s| s.entry.vv.compare(&r.vv))) {
                         (None, _) => "new on peer".to_string(),
-                        (Some(_), Some(reposync_core::VvOrdering::Dominated)) => {
+                        (Some(_), Some(macsync_core::VvOrdering::Dominated)) => {
                             format!(
                                 "peer newer ({} → {})",
                                 l.map(|s| s.entry.vv.display()).unwrap_or_default(),
@@ -439,7 +439,7 @@ impl Engine {
                             unit,
                             "warning",
                             &path,
-                            "hook changed by sync (never executed by RepoSync)",
+                            "hook changed by sync (never executed by MacSync)",
                             "",
                         );
                     }
@@ -607,11 +607,11 @@ impl Engine {
             let Some(Source::Reflog { local_disk, local_blob, .. }) = op.source.clone() else {
                 continue;
             };
-            let local_abs = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &local_disk);
+            let local_abs = macsync_fs::abs_path(&self.cfg.root, &plan.unit, &local_disk);
             let Some(local_bytes) = ops::read_verified(&local_abs, &local_blob)? else {
                 return retry(format!("{} changed locally", op.path));
             };
-            let merged = reposync_gitaware::reflog::merge(&local_bytes, &std::fs::read(&remote_path)?);
+            let merged = macsync_gitaware::reflog::merge(&local_bytes, &std::fs::read(&remote_path)?);
             let h = Hash::of(&merged);
             ops::write_new(&staging.join(op.staged.as_ref().expect("staged")), &merged)?;
             op.entry.blob = Some(h);
@@ -621,7 +621,7 @@ impl Engine {
 
         // Pre-apply check: never overwrite a local change that was not captured.
         if plan.unit_kind == UnitKind::Git {
-            let g = self.gate.check(&reposync_fs::unit_dir(&self.cfg.root, &plan.unit));
+            let g = self.gate.check(&macsync_fs::unit_dir(&self.cfg.root, &plan.unit));
             if !g.is_open() {
                 return retry(g.describe());
             }
@@ -630,7 +630,7 @@ impl Engine {
             if op.kind == OpKind::DbOnly {
                 continue;
             }
-            let abs = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
+            let abs = macsync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
             let on_disk = scan::stat(&abs, op.path.clone(), op.disk.clone()).ok().flatten();
             match (local.get(&op.path).filter(|s| !s.entry.deleted), on_disk) {
                 (Some(s), Some(d)) => {
@@ -676,7 +676,7 @@ impl Engine {
                 unit: rep.unit.clone(),
                 files_total: needs.len() as u64,
                 bytes_total: needs.values().map(|n| n.size).sum(),
-                started_ms: reposync_fs::time::now_ms(),
+                started_ms: macsync_fs::time::now_ms(),
                 ..Default::default()
             })
         });
@@ -798,7 +798,7 @@ impl Engine {
     fn dedup_local(&self, hash: &Hash, dest: &Path) -> Result<bool> {
         let candidates = self.store().find_blob(hash)?;
         for (unit, _path, disk) in candidates {
-            let src = reposync_fs::abs_path(&self.cfg.root, &unit, &disk);
+            let src = macsync_fs::abs_path(&self.cfg.root, &unit, &disk);
             if ops::clone_or_copy(&src, dest).is_ok() && ops::hash_file(dest).ok() == Some(*hash) {
                 return Ok(true);
             }
@@ -840,8 +840,8 @@ impl Engine {
 
     fn post_apply(&self, plan: &Plan, rep: &mut PullReport) -> Result<()> {
         let unit = plan.unit.as_str();
-        let unit_dir = reposync_fs::unit_dir(&self.cfg.root, unit);
-        let is_git = plan.unit_kind == UnitKind::Git && reposync_gitaware::resolve_git_dir(&unit_dir).is_some();
+        let unit_dir = macsync_fs::unit_dir(&self.cfg.root, unit);
+        let is_git = plan.unit_kind == UnitKind::Git && macsync_gitaware::resolve_git_dir(&unit_dir).is_some();
         let touched_tree = plan.ops.iter().any(|o| o.kind != OpKind::DbOnly && !o.path.starts_with(".git/"));
         let touched_index = plan.ops.iter().any(|o| o.phase == Phase::Index);
         let touched_objects = plan.ops.iter().any(|o| {
@@ -851,14 +851,14 @@ impl Engine {
                     || o.path == ".git/packed-refs"
                     || o.path == ".git/HEAD")
         });
-        let git = is_git && reposync_gitaware::cmd::available();
+        let git = is_git && macsync_gitaware::cmd::available();
         if git && (touched_tree || touched_index) {
-            if let Err(e) = reposync_gitaware::cmd::refresh_index(&unit_dir) {
+            if let Err(e) = macsync_gitaware::cmd::refresh_index(&unit_dir) {
                 let _ = self.store().log(unit, "warning", ".git/index", "index refresh failed", &e.to_string());
             }
         }
         if git && touched_objects && self.cfg.fsck_after_apply {
-            if let Err(msg) = reposync_gitaware::cmd::fsck_connectivity(&unit_dir)? {
+            if let Err(msg) = macsync_gitaware::cmd::fsck_connectivity(&unit_dir)? {
                 let restored = self.restore_object_deletions(plan)?;
                 let _ = self.store().log(
                     unit,
@@ -1003,7 +1003,7 @@ fn descend(
             let lc = local.children(&l.dir).unwrap_or(&[]);
             let mut names: BTreeMap<
                 &str,
-                (Option<&reposync_core::merkle::Child>, Option<&reposync_core::merkle::Child>),
+                (Option<&macsync_core::merkle::Child>, Option<&macsync_core::merkle::Child>),
             > = BTreeMap::new();
             for c in &rc {
                 names.entry(c.name.as_str()).or_default().1 = Some(c);

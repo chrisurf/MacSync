@@ -3,8 +3,8 @@
 # pairing and (optionally) starting the daemon. Run the same command on both
 # Macs, in the directory that should be synchronised – no host names needed.
 #
-# Usage: reposync-connect [options] [DIR]   (or: make connect ROOT=DIR)
-#        reposync-connect --stop | --help
+# Usage: macsync-connect [options] [DIR]   (or: make connect ROOT=DIR)
+#        macsync-connect --stop | --help
 set -uo pipefail
 
 PROG=$(basename "$0")
@@ -13,7 +13,7 @@ PEER=""
 PORT=47123
 NAME=""
 MODE="two-way"
-CONFIG="${REPOSYNC_CONFIG:-$HOME/.config/reposync/config.toml}"
+CONFIG="${MACSYNC_CONFIG:-$HOME/.config/macsync/config.toml}"
 ROLE=auto
 WAIT_S=4
 TIMEOUT_S=300
@@ -24,7 +24,7 @@ STOP=0
 
 usage() {
   cat <<EOF
-$PROG – connect two Macs with RepoSync (configure, pair, start)
+$PROG – connect two Macs with MacSync (configure, pair, start)
 
 Usage: $PROG [options] [DIR]
 
@@ -35,7 +35,7 @@ Then both start synchronising (in the foreground; stop with Ctrl-C).
 
   DIR                 directory to synchronise; without DIR the script asks
                       (suggestion: current directory; in ~ or a Git repository
-                      the configured directory or ~/RepoSyncTest)
+                      the configured directory or ~/MacSync)
 
 Options:
   -p, --peer HOST[:PORT]
@@ -49,7 +49,7 @@ Options:
       --listen        always wait for the other Mac (show the code)
       --connect       always connect to the other Mac (enter the code)
   -w, --wait S        seconds to search for the other Mac (default 4)
-  -c, --config FILE   configuration file (default ~/.config/reposync/config.toml)
+  -c, --config FILE   configuration file (default ~/.config/macsync/config.toml)
   -f, --force         overwrite an existing configuration / pair again
       --run           start the daemon afterwards without asking
       --no-run        do not start the daemon
@@ -58,7 +58,7 @@ Options:
   -h, --help          this help
 
 Examples:
-  $PROG ~/RepoSyncTest                    # on both Macs
+  $PROG ~/MacSync                    # on both Macs
   $PROG                                    # asks for the directory
   $PROG --stop                             # stop synchronising
   $PROG --peer macbook-b.local             # Bonjour unavailable (guest Wi-Fi)
@@ -119,20 +119,20 @@ IS_MAC=0; [ "$(uname -s)" = Darwin ] && IS_MAC=1
 [ -n "$NAME" ] || NAME=$(scutil --get ComputerName 2>/dev/null || hostname -s)
 SELF_HOST=$( [ $IS_MAC = 1 ] && scutil --get LocalHostName 2>/dev/null || hostname -s)
 
-# --- reposync binary -------------------------------------------------------
-RS_BIN=$(command -v reposync || true)
-[ -n "$RS_BIN" ] || { [ -x "$HOME/.local/bin/reposync" ] && RS_BIN="$HOME/.local/bin/reposync"; }
-[ -n "$RS_BIN" ] || die "reposync is not installed – run 'make install' in the RepoSync repository"
+# --- macsync binary -------------------------------------------------------
+RS_BIN=$(command -v macsync || true)
+[ -n "$RS_BIN" ] || { [ -x "$HOME/.local/bin/macsync" ] && RS_BIN="$HOME/.local/bin/macsync"; }
+[ -n "$RS_BIN" ] || die "macsync is not installed – run 'make install' in the MacSync repository"
 rs() { "$RS_BIN" --config "$CONFIG" "$@"; }
 
 # --- stop ------------------------------------------------------------------
 if [ $STOP = 1 ]; then
   stopped=0
-  if pkill -INT -f "reposync .*daemon" 2>/dev/null; then
+  if pkill -INT -f "macsync .*daemon" 2>/dev/null; then
     stopped=1; sleep 1
-    pkill -f "reposync .*daemon" 2>/dev/null
+    pkill -f "macsync .*daemon" 2>/dev/null
   fi
-  pkill -f "reposync .*pair listen" 2>/dev/null && stopped=1
+  pkill -f "macsync .*pair listen" 2>/dev/null && stopped=1
   if [ $stopped = 1 ]; then info "stopped"; else info "nothing was running"; fi
   exit 0
 fi
@@ -141,7 +141,7 @@ fi
 if [ -z "$ROOT" ]; then
   suggest=$PWD
   if [ "$PWD" = "$HOME" ] || [ -e "$PWD/.git" ]; then
-    suggest="$HOME/RepoSyncTest"
+    suggest="$HOME/MacSync"
     prev=$(sed -n 's/^root *= *"\(.*\)"/\1/p' "$CONFIG" 2>/dev/null)
     [ -n "$prev" ] && [ -d "$prev" ] && [ ! -e "$prev/.git" ] && [ "$prev" != "$HOME" ] && suggest=$prev
   fi
@@ -165,7 +165,7 @@ fi
 ROOT=$(cd "$ROOT" && pwd -P)
 case "$ROOT" in
   /|"$HOME"|/Users|/Volumes|/System*|/Library*|/Applications*)
-    die "refusing to synchronise $ROOT – choose a dedicated directory, e.g. ~/RepoSyncTest" ;;
+    die "refusing to synchronise $ROOT – choose a dedicated directory, e.g. ~/MacSync" ;;
   "$HOME/Library"*) die "refusing to synchronise inside ~/Library" ;;
 esac
 case "$ROOT" in
@@ -175,10 +175,10 @@ esac
 repo=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)
 if [ -n "$repo" ]; then
   warn "$ROOT is inside the Git repository $repo"
-  ask "Synchronise it anyway? (usually you want a separate folder such as ~/RepoSyncTest)" n ||
-    die "nothing changed – run '$PROG ~/RepoSyncTest' or choose another directory"
+  ask "Synchronise it anyway? (usually you want a separate folder such as ~/MacSync)" n ||
+    die "nothing changed – run '$PROG ~/MacSync' or choose another directory"
 fi
-files=$(find "$ROOT" -mindepth 1 -maxdepth 1 ! -name .DS_Store ! -name .reposync 2>/dev/null | wc -l | tr -d ' ')
+files=$(find "$ROOT" -mindepth 1 -maxdepth 1 ! -name .DS_Store ! -name .macsync 2>/dev/null | wc -l | tr -d ' ')
 
 info "this Mac : $NAME ($SELF_HOST.local)"
 info "directory: $ROOT ($files entries)"
@@ -212,13 +212,13 @@ fi
 if [ "$write_config" = 1 ]; then
   args=(init --root "$ROOT" --name "$NAME" --mode "$MODE" --listen "0.0.0.0:$PORT" --force)
   [ -n "$PEER" ] && args+=(--peer "$PEER_HOST:$PEER_PORT")
-  rs "${args[@]}" >/dev/null || die "reposync init failed"
+  rs "${args[@]}" >/dev/null || die "macsync init failed"
   info "configuration written to $CONFIG"
 fi
 
 # --- 2. pairing ------------------------------------------------------------
 # Bonjour search for a Mac that is waiting with a pairing code
-# (reposync announces itself while waiting). Prints "host port name" lines.
+# (macsync announces itself while waiting). Prints "host port name" lines.
 browse() {
   rs discover --timeout-s "$WAIT_S" 2>/dev/null |
     awk -F'\t' '{ a = $1; p = a; sub(/:[0-9]+$/, "", a); sub(/^.*:/, "", p); gsub(/[][]/, "", a); print a, p, $3 }'
@@ -306,7 +306,7 @@ if [ "$RUN" = yes ]; then
   if [ $IS_MAC = 1 ] && [ "${TERM_PROGRAM:-}" != Apple_Terminal ]; then
     warn "not running in Terminal.app (${TERM_PROGRAM:-unknown}): macOS may block the local network ('No route to host')"
   fi
-  REPOSYNC_LOG=${REPOSYNC_LOG:-info} exec "$RS_BIN" --config "$CONFIG" daemon
+  MACSYNC_LOG=${MACSYNC_LOG:-info} exec "$RS_BIN" --config "$CONFIG" daemon
 fi
-echo "start later with: reposync --config $CONFIG daemon   (in Terminal.app, stop: Ctrl-C)"
-echo "check with      : reposync status"
+echo "start later with: macsync --config $CONFIG daemon   (in Terminal.app, stop: Ctrl-C)"
+echo "check with      : macsync status"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds build/MacSync.app (Apple Silicon): SwiftUI menu bar app plus the
-# Rust binary reposync. Signs with $CODESIGN_IDENTITY (Developer ID) if set,
+# Rust binary macsync. Signs with $CODESIGN_IDENTITY (Developer ID) if set,
 # otherwise ad-hoc.
 #
 # Usage: scripts/build-app.sh   (or: make app)
@@ -14,8 +14,8 @@ OUT=build
 APP="$OUT/MacSync.app"
 TARGET=aarch64-apple-darwin
 
-echo "==> reposync $VERSION (Rust, $TARGET)"
-cargo build --release --locked -p reposync-cli --target "$TARGET"
+echo "==> macsync $VERSION (Rust, $TARGET)"
+cargo build --release --locked -p macsync-cli --target "$TARGET"
 
 echo "==> MacSync (Swift)"
 swift build -c release --arch arm64 --package-path app
@@ -25,8 +25,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 cp app/.build/arm64-apple-macosx/release/MacSync "$APP/Contents/MacOS/MacSync"
 # Helpers: the place for bundled command line tools.
-cp "target/$TARGET/release/reposync" "$APP/Contents/Helpers/reposync"
-cp scripts/connect.sh "$APP/Contents/Resources/reposync-connect"
+cp "target/$TARGET/release/macsync" "$APP/Contents/Helpers/macsync"
+cp scripts/connect.sh "$APP/Contents/Resources/macsync-connect"
 cp app/Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat >"$APP/Contents/Info.plist" <<EOF
@@ -53,8 +53,8 @@ cat >"$APP/Contents/Info.plist" <<EOF
   <string>MacSync synchronisiert deine Dateien direkt mit deinem anderen Mac im lokalen Netzwerk.</string>
   <key>NSBonjourServices</key>
   <array>
-    <string>_reposync._tcp</string>
-    <string>_reposync-pair._tcp</string>
+    <string>_macsync._tcp</string>
+    <string>_macsync-pair._tcp</string>
   </array>
 </dict>
 </plist>
@@ -69,7 +69,7 @@ else
   sign=(codesign --force --sign -)
 fi
 # Inner executables first, then the bundle.
-"${sign[@]}" --identifier "$BUNDLE_ID.cli" "$APP/Contents/Helpers/reposync"
+"${sign[@]}" --identifier "$BUNDLE_ID.cli" "$APP/Contents/Helpers/macsync"
 "${sign[@]}" "$APP"
 codesign --verify --strict "$APP"
 

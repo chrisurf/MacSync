@@ -1,6 +1,6 @@
 import Foundation
 
-/// Runs `reposync daemon` as a child process. As a child of MacSync.app it
+/// Runs `macsync daemon` as a child process. As a child of MacSync.app it
 /// inherits the app's Local Network permission (ADR-0010).
 @MainActor
 final class DaemonProcess {
@@ -20,9 +20,9 @@ final class DaemonProcess {
         p.executableURL = bin
         p.arguments = ["--config", Paths.config.path, "daemon"]
         var env = ProcessInfo.processInfo.environment
-        env["REPOSYNC_LOG"] = env["REPOSYNC_LOG"] ?? "info"
+        env["MACSYNC_LOG"] = env["MACSYNC_LOG"] ?? "info"
         env["NO_COLOR"] = "1" // plain log file
-        env["REPOSYNC_PARENT_PID"] = String(getpid()) // daemon exits with the app
+        env["MACSYNC_PARENT_PID"] = String(getpid()) // daemon exits with the app
         p.environment = env
         if let log = Self.openLog() {
             p.standardOutput = log

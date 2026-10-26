@@ -1,11 +1,11 @@
 # Getting Started: Test auf zwei Macs im eigenen WLAN
 
-Diese Anleitung bringt RepoSync auf zwei Macs zum Laufen, die im selben
+Diese Anleitung bringt MacSync auf zwei Macs zum Laufen, die im selben
 Netz hinter deinem Router hängen. Zeitaufwand: ca. 20 Minuten pro Mac
 (überwiegend der erste Build).
 
 > **Erst mit Testdaten.** Der erste Test läuft in einem eigenen Ordner
-> `~/RepoSyncTest` mit Beispieldaten – nicht mit deinem echten Code-Ordner.
+> `~/MacSync` mit Beispieldaten – nicht mit deinem echten Code-Ordner.
 > Erst wenn alles wie erwartet läuft, auf echte Daten wechseln (Abschnitt 8).
 
 ## 1. Überblick: welcher Netzweg?
@@ -17,7 +17,7 @@ Netz hinter deinem Router hängen. Zeitaufwand: ca. 20 Minuten pro Mac
 | Bluetooth | ❌ | Dass sich die Macs „über Bluetooth finden“, ist Apples Continuity/AirDrop (Bluetooth LE zum Entdecken, ein separates Apple-WLAN-Protokoll für Daten). Das steht normalen Programmen nicht als Netzwerkverbindung zur Verfügung und wäre für Datenmengen viel zu langsam. |
 | Gäste-WLAN / Firmen-WLAN mit „Client-Isolation“ | ❌ | Geräte dürfen dort nicht miteinander sprechen. |
 
-RepoSync spricht ausschliesslich mit privaten Adressen (192.168.x.x, 10.x.x.x,
+MacSync spricht ausschliesslich mit privaten Adressen (192.168.x.x, 10.x.x.x,
 172.16–31.x.x, 169.254.x.x, fdxx::) und nur mit dem einmal gepairten Mac.
 Der Router muss nicht angepasst werden; keine Portfreigabe ins Internet.
 
@@ -45,14 +45,14 @@ identischem Compiler und identischen Bibliotheken (`Cargo.lock`).
 ## 3. Bauen und installieren (auf beiden Macs)
 
 ```sh
-make install          # baut target/release/reposync und kopiert es nach ~/.local/bin
+make install          # baut target/release/macsync und kopiert es nach ~/.local/bin
 ```
 
 Falls `make doctor` meldet, dass `~/.local/bin` nicht im `PATH` ist:
 
 ```sh
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
-reposync --version    # z. B. reposync 0.1.0 (a1b2c3d4e5, 2026-10-20)
+macsync --version    # z. B. macsync 0.1.0 (a1b2c3d4e5, 2026-10-20)
 ```
 
 Die Version enthält den Git-Commit. Beide Macs zeigen sich gegenseitig im
@@ -60,30 +60,30 @@ Die Version enthält den Git-Commit. Beide Macs zeigen sich gegenseitig im
 
 ## Am einfachsten: die App
 
-Ab 0.2.0 gibt es die App `MacSync.app` (bis 0.2.0: RepoSync.app) mit Symbol in der Menüleiste: Installer aus
+Ab 0.2.0 gibt es die App `MacSync.app` (in 0.2.0: RepoSync.app) mit Symbol in der Menüleiste: Installer aus
 den Releases (oder `make install-app`) auf beiden Macs installieren, starten,
 dem Einrichtungsassistenten folgen. Die App startet die Synchronisation
 selbst; macOS fragt einmal nach dem Zugriff aufs lokale Netzwerk →
 **Erlauben**. Alles Weitere in diesem Dokument betrifft den Terminal-Betrieb.
 
-## Kurzweg: `reposync-connect`
+## Kurzweg: `macsync-connect`
 
-`make install` installiert neben `reposync` das Skript `reposync-connect`.
+`make install` installiert neben `macsync` das Skript `macsync-connect`.
 Es erledigt Schritte 4–7 in einem Aufruf, ohne Rechnernamen: auf **beiden**
 Macs im zu synchronisierenden Verzeichnis ausführen (in Terminal.app),
 zuerst auf dem einen, dann auf dem anderen.
 
 ```sh
-cd ~/RepoSyncTest && reposync-connect      # Mac 1: wartet und zeigt einen Code
-cd ~/RepoSyncTest && reposync-connect      # Mac 2: findet Mac 1 per Bonjour, fragt nach dem Code
+cd ~/MacSync && macsync-connect      # Mac 1: wartet und zeigt einen Code
+cd ~/MacSync && macsync-connect      # Mac 2: findet Mac 1 per Bonjour, fragt nach dem Code
 ```
 
 Ohne Verzeichnis-Argument fragt das Skript, welches Verzeichnis
 synchronisiert werden soll. Danach fragt es, ob es die Synchronisation gleich
-startet; stoppen mit `Ctrl-C` oder `reposync-connect --stop` (`make stop`).
+startet; stoppen mit `Ctrl-C` oder `macsync-connect --stop` (`make stop`).
 Kurzfassung: [MAKE-HELP.md](../MAKE-HELP.md).
-Alternativ aus dem Repository: `make connect ROOT=~/RepoSyncTest`.
-Optionen (`reposync-connect --help`): Verzeichnis als Argument, `--peer HOST`
+Alternativ aus dem Repository: `make connect ROOT=~/MacSync`.
+Optionen (`macsync-connect --help`): Verzeichnis als Argument, `--peer HOST`
 ohne Bonjour, `--port`, `--name`, `--send`/`--receive` (Spiegel-Modus),
 `--listen`/`--connect`, `--yes`, `--force`.
 
@@ -107,18 +107,18 @@ Erreichbarkeit testen (auf Mac A): `ping -c 3 mac-b.local`.
 
 ```sh
 # Mac A
-make sandbox                                   # ~/RepoSyncTest mit Beispiel-Repo
+make sandbox                                   # ~/MacSync mit Beispiel-Repo
 make init PEER=mac-b.local:47123
 
 # Mac B – leere Testwurzel, Daten kommen von A
-mkdir -p ~/RepoSyncTest
+mkdir -p ~/MacSync
 make init PEER=mac-a.local:47123
 ```
 
 `PEER=<name>.local:47123` sorgt dafür, dass die Macs sich auch nach einem
 neuen DHCP-Lease des Routers wiederfinden. Ohne `PEER` wird Bonjour bzw.
 die Adresse vom Pairing verwendet. Die Konfiguration liegt in
-`~/.config/reposync/config.toml` (Optionen: [operations.md](operations.md)).
+`~/.config/macsync/config.toml` (Optionen: [operations.md](operations.md)).
 
 ## 6. Pairing (einmalig)
 
@@ -126,14 +126,14 @@ die Adresse vom Pairing verwendet. Die Konfiguration liegt in
 # Mac B
 make pair-listen
 #   pairing code: 123 456
-#   on the other Mac run: reposync pair connect 192.168.1.23:47124 123456
+#   on the other Mac run: macsync pair connect 192.168.1.23:47124 123456
 
 # Mac A
 make pair-connect HOST=mac-b.local CODE=123456
 #   paired with Mac B (…) at 192.168.1.23:47123
 ```
 
-Bei einer Firewall-Abfrage „reposync … eingehende Verbindungen akzeptieren?“
+Bei einer Firewall-Abfrage „macsync … eingehende Verbindungen akzeptieren?“
 auf **Erlauben** klicken. Ein falscher Code wird abgelehnt (maximal 3 Versuche).
 Warnungen zu unterschiedlicher CPU-Architektur oder unterschiedlichem
 Root-Pfad sind für den Test unkritisch.
@@ -154,7 +154,7 @@ Nicht ausgenommen sind andere Terminal-Apps (VS Code, iTerm …), die eine
 eigene Freigabe brauchen, und – wichtig – **per launchd gestartete,
 unsignierte Hintergrundprogramme**: Für diese wird der Zugriff unter
 macOS 26/27 vielfach ohne Nachfrage verweigert (Fehler „No route to host“).
-RepoSync weist im Log ausdrücklich darauf hin, wenn das passiert.
+MacSync weist im Log ausdrücklich darauf hin, wenn das passiert.
 
 Dann ausprobieren (in einem zweiten Terminal-Fenster):
 
@@ -162,18 +162,18 @@ Dann ausprobieren (in einem zweiten Terminal-Fenster):
 make status                                    # beide Seiten, Roots, Konflikte, Version des Peers
 
 # Mac A: Änderung → nach ca. 0,5 s auf Mac B
-echo "Hallo von A" > ~/RepoSyncTest/notes/hallo.txt
+echo "Hallo von A" > ~/MacSync/notes/hallo.txt
 
 # Mac B: im Repo committen → auf Mac A sichtbar
-cd ~/RepoSyncTest/demo-repo && echo "// B" >> index.js && git commit -qam "von B" && git log --oneline
+cd ~/MacSync/demo-repo && echo "// B" >> index.js && git commit -qam "von B" && git log --oneline
 
 # Konflikt provozieren: auf beiden Macs gleichzeitig dieselbe Datei ändern
 # (z. B. beide Daemons mit Ctrl-C stoppen, auf A und B unterschiedlich bearbeiten, neu starten)
-reposync conflicts
-reposync resolve <id> --keep remote            # oder local / both
+macsync conflicts
+macsync resolve <id> --keep remote            # oder local / both
 
 make log                                       # Journal: jede Aktion mit Begründung
-reposync verify                                # Vollprüfung gegen das Dateisystem
+macsync verify                                # Vollprüfung gegen das Dateisystem
 ```
 
 Stoppen: `Ctrl-C` im Terminal-Fenster des Daemons.
@@ -182,8 +182,8 @@ Stoppen: `Ctrl-C` im Terminal-Fenster des Daemons.
 
 1. **Spiegel-Modus zuerst** (Empfehlung des Konzepts): auf dem führenden Mac
    `mode = "mirror-send"`, auf dem anderen `mode = "mirror-receive"` in
-   `~/.config/reposync/config.toml`; einige Wochen laufen lassen, täglich
-   `reposync verify`. Dann auf `two-way` umstellen.
+   `~/.config/macsync/config.toml`; einige Wochen laufen lassen, täglich
+   `macsync verify`. Dann auf `two-way` umstellen.
 2. **Wurzel wechseln:** `root = "/Users/<du>/Code"` setzen. Ordner in
    Schreibtisch/Dokumente/iCloud vermeiden (macOS fragt dann zusätzlich nach
    Dateizugriff).
@@ -216,11 +216,11 @@ Wie die Bibliotheken aktuell gehalten werden: [maintenance.md](maintenance.md).
 | `ping mac-b.local` geht nicht | beide im selben WLAN? Gäste-WLAN/Client-Isolation? Notfalls IP-Adresse statt Name verwenden (`ipconfig getifaddr en0`) |
 | `Connection refused` | Daemon auf dem anderen Mac läuft nicht (`make run`) |
 | Pairing „wrong pairing code“ | Code neu erzeugen (`make pair-listen`), innerhalb von 5 Minuten eingeben |
-| Firewall blockiert | Systemeinstellungen → Netzwerk → Firewall → Optionen → `reposync` erlauben (nach jedem neuen Build kann macOS erneut fragen) |
+| Firewall blockiert | Systemeinstellungen → Netzwerk → Firewall → Optionen → `macsync` erlauben (nach jedem neuen Build kann macOS erneut fragen) |
 | Unterschiedliche Builds | `make update` auf beiden Macs, Daemons neu starten |
-| Datei versehentlich überschrieben | `reposync trash list`, `reposync restore <eintrag>` |
-| Ausführliche Logs | `REPOSYNC_LOG=reposync=debug make run` |
-| Alles zurücksetzen (nur Testumgebung!) | Daemons stoppen, `rm -rf ~/.config/reposync "~/Library/Application Support/RepoSync" ~/RepoSyncTest/.reposync` |
+| Datei versehentlich überschrieben | `macsync trash list`, `macsync restore <eintrag>` |
+| Ausführliche Logs | `MACSYNC_LOG=macsync=debug make run` |
+| Alles zurücksetzen (nur Testumgebung!) | Daemons stoppen, `rm -rf ~/.config/macsync "~/Library/Application Support/MacSync" ~/MacSync/.macsync` |
 
 ## Quellen zur macOS-Netzwerkprüfung
 

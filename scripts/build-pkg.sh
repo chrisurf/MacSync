@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds build/MacSync-<version>-arm64.pkg, which installs MacSync.app into
-# /Applications (and removes RepoSync.app, its name in 0.2.0). Signs with
+# /Applications (and removes RepoSync.app, the app's name in 0.2.0). Signs with
 # $INSTALLER_IDENTITY ("Developer ID Installer: …") if set; notarises if
 # $NOTARY_PROFILE (xcrun notarytool keychain profile) is set.
 #
@@ -24,8 +24,8 @@ cp -R "$OUT/MacSync.app" "$stage/root/"
 pkgbuild --analyze --root "$stage/root" "$stage/component.plist" >/dev/null
 plutil -replace BundleIsRelocatable -bool NO "$stage/component.plist"
 
-# Quit a running copy before replacing it (RepoSync = name in 0.2.0, removed);
-# start MacSync again afterwards.
+# Quit a running copy before replacing it (RepoSync = the app's name in 0.2.0,
+# removed); start MacSync again afterwards.
 cat >"$stage/scripts/preinstall" <<'EOF'
 #!/bin/sh
 pkill -x MacSync 2>/dev/null || true

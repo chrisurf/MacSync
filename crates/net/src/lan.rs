@@ -1,4 +1,4 @@
-//! LAN-only enforcement: RepoSync never talks to public addresses.
+//! LAN-only enforcement: MacSync never talks to public addresses.
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 

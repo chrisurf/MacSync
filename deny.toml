@@ -2,7 +2,7 @@
 # Docs: https://embarkstudios.github.io/cargo-deny/
 
 [graph]
-# Only the platforms RepoSync is built for.
+# Only the platforms MacSync is built for.
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 
 [advisories]

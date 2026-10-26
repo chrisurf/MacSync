@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use reposync_engine::{Engine, EngineConfig, PeerApi, PullOptions};
-use reposync_net::client::HelloInfo;
-use reposync_net::{Identity, NetPeer, Server};
+use macsync_engine::{Engine, EngineConfig, PeerApi, PullOptions};
+use macsync_net::client::HelloInfo;
+use macsync_net::{Identity, NetPeer, Server};
 
 fn start(dir: &std::path::Path, name: &str) -> (Arc<Engine>, Identity) {
     let id = Identity::load_or_create(&dir.join(format!("{name}-state"))).unwrap();
