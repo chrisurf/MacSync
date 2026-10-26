@@ -79,9 +79,23 @@ impl Engine {
     /// List `dir` of `unit`; `unit == None` lists the sync root (all units
     /// plus the loose files of the root). `peer == None`: other Mac offline.
     pub fn browse(&self, peer: Option<&dyn PeerApi>, unit: Option<&str>, dir: &str) -> Result<Vec<BrowseItem>> {
-        let remote_roots: Option<HashMap<String, Hash>> =
+        // A unit whose entries are all deletion records (tombstones, kept so
+        // that the other Mac learns about the deletion) has the empty root:
+        // it does not exist any more on that side.
+        let empty = reposync_core::merkle::empty_root();
+        let remote_all: Option<Vec<(String, Hash)>> =
             peer.and_then(|p| p.roots().ok()).map(|r| r.into_iter().map(|u| (u.name, u.root)).collect());
-        let local_roots: HashMap<String, Hash> = self.local_roots()?.into_iter().map(|u| (u.name, u.root)).collect();
+        let local_all: Vec<(String, Hash)> = self.local_roots()?.into_iter().map(|u| (u.name, u.root)).collect();
+        let live = |v: &[(String, Hash)]| -> HashMap<String, Hash> {
+            v.iter().filter(|(_, h)| *h != empty).cloned().collect()
+        };
+        let gone = |v: &[(String, Hash)]| -> BTreeSet<String> {
+            v.iter().filter(|(_, h)| *h == empty).map(|(n, _)| n.clone()).collect()
+        };
+        let remote_roots = remote_all.as_deref().map(live);
+        let remote_gone = remote_all.as_deref().map(gone).unwrap_or_default();
+        let local_roots = live(&local_all);
+        let local_gone = gone(&local_all);
         let paused: BTreeSet<String> = self.store().units()?.into_iter().filter(|u| u.paused).map(|u| u.name).collect();
 
         let mut items = Vec::new();
@@ -105,7 +119,14 @@ impl Engine {
                 (_, None) => (Presence::Present, Presence::Unknown, ItemState::Unknown),
                 (Some(a), Some(Some(b))) if a == b => (Presence::Present, Presence::Present, ItemState::Synced),
                 (Some(_), Some(Some(_))) => (Presence::Present, Presence::Present, ItemState::Differs),
+                // Deleted there (only tombstones left) vs. new here.
+                (Some(_), Some(None)) if remote_gone.contains(name) => {
+                    (Presence::Present, Presence::Deleted, ItemState::DeleteHere)
+                }
                 (Some(_), Some(None)) => (Presence::Present, Presence::Missing, ItemState::ToPeer),
+                (None, Some(_)) if local_gone.contains(name) => {
+                    (Presence::Deleted, Presence::Present, ItemState::DeleteOnPeer)
+                }
                 (None, Some(_)) => (Presence::Missing, Presence::Present, ItemState::FromPeer),
             };
             items.push(BrowseItem {

@@ -61,3 +61,34 @@ fn listing_shows_direction_per_item() {
     assert!(a.iter().all(|i| i.state == ItemState::Synced), "{a:#?}");
     assert!(a.iter().all(|i| i.name != "gone.txt"));
 }
+
+#[test]
+fn deleted_unit_disappears() {
+    let p = Pair::new();
+    fs::create_dir_all(p.ra().join("old")).unwrap();
+    fs::write(p.ra().join("old/a.txt"), "a").unwrap();
+    fs::create_dir_all(p.ra().join("keep")).unwrap();
+    fs::write(p.ra().join("keep/b.txt"), "b").unwrap();
+    p.sync();
+    assert!(p.rb().join("old/a.txt").exists());
+
+    // Deleted on A: B still has it until it pulls.
+    fs::remove_dir_all(p.ra().join("old")).unwrap();
+    p.a.scan_all(false).unwrap();
+    let a = p.a.browse(Some(&p.b as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&a, "old"), (ItemState::DeleteOnPeer, Presence::Deleted, Presence::Present));
+    let b = p.b.browse(Some(&p.a as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&b, "old"), (ItemState::DeleteHere, Presence::Present, Presence::Deleted));
+
+    // After the sync the tombstones stay in both databases, but the unit is
+    // gone from the listing on both sides.
+    p.sync();
+    assert!(!p.rb().join("old").exists());
+    for (e, peer) in [(&p.a, &p.b), (&p.b, &p.a)] {
+        let items = e.browse(Some(peer as &dyn PeerApi), None, "").unwrap();
+        assert!(items.iter().all(|i| i.name != "old"), "{items:#?}");
+        assert_eq!(state(&items, "keep").0, ItemState::Synced);
+        let offline = e.browse(None, None, "").unwrap();
+        assert!(offline.iter().all(|i| i.name != "old"));
+    }
+}

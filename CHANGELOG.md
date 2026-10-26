@@ -24,6 +24,10 @@
 - **Fortschritt**: Prozent, Dateien, Bytes, aktuelle Datei, Geschwindigkeit
   und Restzeit im Menü und im Manager; der sendende Mac zeigt „Sende an …“
 - Das Menüleisten-Symbol dreht sich während der Synchronisation
+- Gelöschte Hauptordner verschwinden aus dem Manager, sobald beide Macs die
+  Löschung kennen (vorher erschienen sie wegen der 30 Tage aufbewahrten
+  Löschvermerke weiter als „vorhanden · synchron“); bis dahin „Wird auf …
+  gelöscht“ bzw. „Wird hier gelöscht“
 - `reposync browse [VERZEICHNIS] [--json]`, IPC `browse`; `status` liefert
   `transfer`, `served_bytes`, `served_ms`
 - App-Icon (`app/Resources/AppIcon.icns`, erzeugt von `app/Icon/make-icon.swift`)
