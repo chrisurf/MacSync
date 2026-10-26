@@ -40,7 +40,7 @@ struct Payload {
 /// Random 6-digit code.
 pub fn generate_code() -> String {
     let mut b = [0u8; 4];
-    getrandom::getrandom(&mut b).expect("OS random number generator");
+    getrandom::fill(&mut b).expect("OS random number generator");
     format!("{:06}", u32::from_le_bytes(b) % 1_000_000)
 }
 

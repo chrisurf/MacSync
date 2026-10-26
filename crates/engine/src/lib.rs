@@ -307,7 +307,7 @@ impl Engine {
 /// Random transaction id (hex).
 fn new_tx_id() -> String {
     let mut b = [0u8; 8];
-    let _ = getrandom::getrandom(&mut b);
+    let _ = getrandom::fill(&mut b);
     format!("{}-{}", reposync_fs::time::compact_utc(reposync_fs::time::now_ms() / 1000), hex::encode(b))
 }
 

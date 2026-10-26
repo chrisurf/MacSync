@@ -1177,7 +1177,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "hex",
  "proptest",
  "reposync-core",
@@ -1223,7 +1223,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "blake3",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "hex",
  "mdns-sd",
  "reposync-core",

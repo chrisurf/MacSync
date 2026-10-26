@@ -34,7 +34,7 @@ unicode-normalization = "0.1"
 libc = "0.2"
 snow = "0.10"
 spake2 = "0.4"
-getrandom = "0.2"
+getrandom = "0.4"
 zstd = "0.14"
 notify = "8"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
