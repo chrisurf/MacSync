@@ -2,7 +2,7 @@
 //! (protocol server, watcher, scheduler, IPC).
 
 use std::collections::{BTreeSet, HashMap};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -46,7 +46,7 @@ impl Node {
     /// Peer address: configured address, Bonjour, or the address seen at pairing.
     pub fn peer_addr(&self, row: &PeerRow) -> Result<SocketAddr> {
         if let Some(a) = &self.cfg.peer.address {
-            return a.to_socket_addrs()?.next().with_context(|| format!("cannot resolve {a}"));
+            return reposync_net::lan::resolve(a);
         }
         if self.cfg.peer.discovery {
             if let Ok(Some(a)) = discovery::find(&row.device, Duration::from_secs(3)) {

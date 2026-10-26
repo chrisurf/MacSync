@@ -6,7 +6,7 @@
 
 mod output;
 
-use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -501,7 +501,7 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             } else {
                 format!("{addr}:{}", cfg.pair_port)
             };
-            let sa = with_port.to_socket_addrs()?.next().with_context(|| format!("cannot resolve {addr}"))?;
+            let sa = reposync_net::lan::resolve(&with_port)?;
             let r = pairing::connect(sa, &code, &id, &hello, port)?;
             store_peer(cfg, &r)
         }
