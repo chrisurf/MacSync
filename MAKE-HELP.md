@@ -24,6 +24,20 @@ reposync-connect       # oder: make connect
 
 Nur einmal nötig: Beim nächsten Mal ist die Kopplung bekannt, das Skript startet direkt.
 
+Startreihenfolge egal – beim ersten Koppeln wie bei jedem späteren Start.
+Gestartet wird immer nur der Daemon; die Macs finden sich selbst.
+
+## Wo liegt was (je Mac, nichts davon wird synchronisiert)
+
+| Ort | Inhalt | Löschen? |
+| --- | --- | --- |
+| `~/.config/reposync/config.toml` | Konfiguration (Verzeichnis, Modus, Port) | ja, `reposync-connect` legt sie neu an |
+| `~/Library/Application Support/RepoSync/` | Geräteschlüssel, Datenbank, Kopplung | nur zum kompletten Zurücksetzen (danach neu koppeln) |
+| `<Sync-Verzeichnis>/.reposync/` | Zwischenablage für Übertragungen, Papierkorb | nur bei gestopptem Daemon; entsteht neu |
+
+Komplett zurücksetzen (Daemon vorher stoppen):
+`rm -rf ~/.config/reposync "~/Library/Application Support/RepoSync" ~/RepoSyncTest/.reposync`
+
 ## Stoppen
 
 | Situation | Befehl |
@@ -64,3 +78,4 @@ Mit make: `make connect ARGS="--send"`.
 | `No route to host` | in Terminal.app starten; anderer Mac wach und im selben WLAN? |
 | Bonjour findet nichts | `--peer NAME.local` oder IP angeben (`ipconfig getifaddr en0` auf dem anderen Mac) |
 | Beide Macs warten | auf einem `Ctrl-C`, dort erneut starten |
+| Falsches Verzeichnis vorgeschlagen | Verzeichnis direkt angeben: `reposync-connect ~/RepoSyncTest` |

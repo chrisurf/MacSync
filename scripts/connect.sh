@@ -148,12 +148,22 @@ if [ -z "$ROOT" ]; then
     [ -n "$prev" ] && [ -d "$prev" ] && [ ! -e "$prev/.git" ] && [ "$prev" != "$HOME" ] && suggest=$prev
   fi
   if [ $YES = 0 ] && [ -t 0 ]; then
-    read -r -p "Directory to synchronise [$suggest]: " ROOT || exit 1
+    while :; do
+      read -r -p "Directory to synchronise [$suggest]: " ROOT || exit 1
+      case "$ROOT" in
+        *[!0-9\ ]*|'') break ;;
+        *) echo "that looks like a pairing code – the code is asked for later; enter a directory or press Enter" ;;
+      esac
+    done
   fi
   ROOT=${ROOT:-$suggest}
 fi
 ROOT=${ROOT/#\~/$HOME}
-mkdir -p "$ROOT" || die "cannot create $ROOT"
+case "$ROOT" in /*) ;; *) ROOT="$PWD/$ROOT" ;; esac
+if [ ! -d "$ROOT" ]; then
+  ask "$ROOT does not exist. Create it?" y || die "no directory – nothing changed"
+  mkdir -p "$ROOT" || die "cannot create $ROOT"
+fi
 ROOT=$(cd "$ROOT" && pwd -P)
 case "$ROOT" in
   /|"$HOME"|/Users|/Volumes|/System*|/Library*|/Applications*)
@@ -164,6 +174,12 @@ case "$ROOT" in
   "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Downloads"*|"$HOME/Library/Mobile Documents"*)
     warn "$ROOT is privacy-protected or in iCloud; macOS will ask Terminal for access" ;;
 esac
+repo=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)
+if [ -n "$repo" ]; then
+  warn "$ROOT is inside the Git repository $repo"
+  ask "Synchronise it anyway? (usually you want a separate folder such as ~/RepoSyncTest)" n ||
+    die "nothing changed – run '$PROG ~/RepoSyncTest' or choose another directory"
+fi
 files=$(find "$ROOT" -mindepth 1 -maxdepth 1 ! -name .DS_Store ! -name .reposync 2>/dev/null | wc -l | tr -d ' ')
 
 info "this Mac : $NAME ($SELF_HOST.local)"
