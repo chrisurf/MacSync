@@ -21,13 +21,35 @@ use crate::runtime::{Daemon, Node, Shared};
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum IpcRequest {
     Status,
-    Sync { units: Option<Vec<String>>, dry_run: bool },
-    Pause { unit: Option<String> },
-    Resume { unit: Option<String> },
-    Prefer { unit: String, side: String },
-    Resolve { id: i64, choice: String },
-    Verify { unit: Option<String> },
+    Sync {
+        units: Option<Vec<String>>,
+        dry_run: bool,
+    },
+    Pause {
+        unit: Option<String>,
+    },
+    Resume {
+        unit: Option<String>,
+    },
+    Prefer {
+        unit: String,
+        side: String,
+    },
+    Resolve {
+        id: i64,
+        choice: String,
+    },
+    Verify {
+        unit: Option<String>,
+    },
     Rescan,
+    /// One directory with the state of every item on both Macs.
+    Browse {
+        #[serde(default)]
+        unit: Option<String>,
+        #[serde(default)]
+        dir: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -146,6 +168,7 @@ fn dispatch(req: IpcRequest, node: &Node, shared: &Shared) -> Result<Value> {
             Daemon::kick(shared);
             serde_json::to_value(r)?
         }
+        IpcRequest::Browse { unit, dir } => Daemon::ipc_browse(node, shared, unit.as_deref(), &dir)?,
     })
 }
 

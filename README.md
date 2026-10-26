@@ -15,6 +15,7 @@ werden nie still aufgelöst.
 | [docs/concept.md](docs/concept.md) | Originalkonzept |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | Bewertung, MVP-Umfang, Meilensteine, Gates |
 | [docs/app-plan.md](docs/app-plan.md) | Plan v0.2.0: Menüleisten-App, Release-Pipeline |
+| [docs/sync-manager.md](docs/sync-manager.md) | Synchronisations-Manager, Fortschritt, Status-Symbol |
 | [docs/architecture.md](docs/architecture.md) | Umsetzung: Crates, Datenmodell, Protokoll, Abläufe |
 | [MAKE-HELP.md](MAKE-HELP.md) | **Kurzanleitung: verbinden, stoppen, Hilfe** |
 | [docs/getting-started-mac.md](docs/getting-started-mac.md) | **Test auf zwei Macs im eigenen WLAN – Schritt für Schritt** |

@@ -92,6 +92,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// One directory with the state of every item on both Macs.
+    Browse {
+        /// Directory relative to the sync root, e.g. `notes/sub` (default: root).
+        #[arg(default_value = "")]
+        dir: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Synchronise now.
     Sync {
         units: Vec<String>,
@@ -293,6 +301,23 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Browse { dir, json } => {
+            let (unit, sub) = split_root_path(&cfg, &dir)?;
+            let req = IpcRequest::Browse { unit: unit.clone(), dir: sub.clone() };
+            let v = via_daemon(&cfg, req, |n| {
+                let p = n.connect_peer().ok();
+                let items =
+                    n.engine.browse(p.as_ref().map(|p| p as &dyn reposync_engine::PeerApi), unit.as_deref(), &sub)?;
+                let name = n.engine.store().peers()?.into_iter().last().map(|r| r.name);
+                Ok(json!({ "online": p.is_some(), "peer": name, "items": items }))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                output::browse(&v);
+            }
+            Ok(())
+        }
         Cmd::Sync { units, dry_run, json } => {
             let units = (!units.is_empty()).then_some(units);
             let v = via_daemon(&cfg, IpcRequest::Sync { units: units.clone(), dry_run }, |n| {
@@ -400,6 +425,28 @@ fn filter_units(mut v: Value, unit: Option<&str>) -> Value {
         arr.retain(|x| x["name"] == u);
     }
     v
+}
+
+/// Splits a root-relative directory into (unit, unit-relative dir): the
+/// longest known unit name that prefixes the path wins (nested repositories).
+fn split_root_path(cfg: &Config, dir: &str) -> Result<(Option<String>, String)> {
+    let dir = dir.trim_matches('/');
+    if dir.is_empty() || dir == "." {
+        return Ok((None, String::new()));
+    }
+    let mut units: Vec<String> = open_store(cfg)?.units()?.into_iter().map(|u| u.name).collect();
+    units.sort_by_key(|u| std::cmp::Reverse(u.len()));
+    for u in units {
+        if dir == u {
+            return Ok((Some(u), String::new()));
+        }
+        if let Some(rest) = dir.strip_prefix(&format!("{u}/")) {
+            return Ok((Some(u), rest.to_string()));
+        }
+    }
+    // Not a unit here (yet): the first component is the unit.
+    let (u, rest) = dir.split_once('/').unwrap_or((dir, ""));
+    Ok((Some(u.to_string()), rest.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]

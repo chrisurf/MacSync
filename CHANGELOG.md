@@ -14,6 +14,16 @@
   Anmeldung (abschaltbar in den Einstellungen)
 
 ### Hinzugefügt
+- **Synchronisations-Manager** (Menü → Synchronisations-Manager …, ⌘M):
+  Verzeichnisansicht mit dem Zustand jeder Datei auf beiden Macs (synchron,
+  wird gesendet/geholt, wird gelöscht, Konflikt), Filter „Nicht synchron“,
+  Suche; Aktionen Jetzt synchronisieren, Pausieren (Hauptordner), Konflikt
+  lösen, Im Finder zeigen, In den Papierkorb (docs/sync-manager.md)
+- **Fortschritt**: Prozent, Dateien, Bytes, aktuelle Datei, Geschwindigkeit
+  und Restzeit im Menü und im Manager; der sendende Mac zeigt „Sende an …“
+- Das Menüleisten-Symbol dreht sich während der Synchronisation
+- `reposync browse [VERZEICHNIS] [--json]`, IPC `browse`; `status` liefert
+  `transfer`, `served_bytes`, `served_ms`
 - App-Icon (`app/Resources/AppIcon.icns`, erzeugt von `app/Icon/make-icon.swift`)
 - Entwickler-Angabe: Alpine Perspective GmbH, alpineperspective.com – im
   Fenster „Über MacSync“, in den Einstellungen und im Copyright der App

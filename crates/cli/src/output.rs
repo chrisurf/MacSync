@@ -179,3 +179,26 @@ fn collect(base: &Path, dir: &Path, out: &mut Vec<String>) {
         }
     }
 }
+
+/// `reposync browse`: one line per item.
+pub fn browse(v: &Value) {
+    let peer = v["peer"].as_str().unwrap_or("peer");
+    if v["online"] != Value::Bool(true) {
+        println!("({peer} not reachable – local view only)");
+    }
+    for i in v["items"].as_array().into_iter().flatten() {
+        let state = match i["state"].as_str().unwrap_or("") {
+            "synced" => "in sync".to_string(),
+            "to-peer" => format!("→ {peer}"),
+            "from-peer" => format!("← {peer}"),
+            "delete-on-peer" => format!("delete on {peer}"),
+            "delete-here" => "delete here".to_string(),
+            "differs" => "changes inside".to_string(),
+            "unknown" => "?".to_string(),
+            s => s.to_string(),
+        };
+        let dir = if i["kind"] == "dir" { "/" } else { "" };
+        let paused = if i["paused"] == Value::Bool(true) { " (paused)" } else { "" };
+        println!("{:<22} {}{dir}{paused}", state, i["name"].as_str().unwrap_or(""));
+    }
+}

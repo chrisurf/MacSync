@@ -96,6 +96,17 @@ fn retry<T>(msg: impl Into<String>) -> Result<T> {
 struct Need {
     size: u64,
     dests: Vec<PathBuf>,
+    /// Unit-relative path, for progress display.
+    label: String,
+}
+
+/// Clears the transfer progress when the fetch ends, also on errors.
+struct TransferGuard<'a>(&'a Engine);
+
+impl Drop for TransferGuard<'_> {
+    fn drop(&mut self) {
+        self.0.update_transfer(|t| *t = None);
+    }
 }
 
 impl Engine {
@@ -528,18 +539,18 @@ impl Engine {
         rep: &mut PullReport,
     ) -> Result<()> {
         let mut needs: BTreeMap<Hash, Need> = BTreeMap::new();
-        let mut add_need = |hash: Hash, size: u64, dest: PathBuf| {
-            needs.entry(hash).or_insert(Need { size, dests: Vec::new() }).dests.push(dest);
+        let mut add_need = |hash: Hash, size: u64, dest: PathBuf, label: &str| {
+            needs.entry(hash).or_insert(Need { size, dests: Vec::new(), label: label.to_string() }).dests.push(dest);
         };
         let mut reflog_remote: Vec<(usize, PathBuf)> = Vec::new();
         for (i, op) in plan.ops.iter().enumerate() {
             match &op.source {
                 Some(Source::Blob { hash, size }) => {
-                    add_need(*hash, *size, staging.join(op.staged.as_ref().expect("staged name")));
+                    add_need(*hash, *size, staging.join(op.staged.as_ref().expect("staged name")), &op.path);
                 }
                 Some(Source::Reflog { remote, remote_size, .. }) => {
                     let p = staging.join(format!("reflog-remote-{i}"));
-                    add_need(*remote, *remote_size, p.clone());
+                    add_need(*remote, *remote_size, p.clone(), &op.path);
                     reflog_remote.push((i, p));
                 }
                 Some(Source::File { .. }) | None => {}
@@ -552,7 +563,7 @@ impl Engine {
                     continue;
                 }
                 if let Some(b) = r.blob {
-                    add_need(b, r.size, dir.join(if r.path.is_empty() { "_unit_root" } else { &r.path }));
+                    add_need(b, r.size, dir.join(if r.path.is_empty() { "_unit_root" } else { &r.path }), &r.path);
                 }
             }
         }
@@ -659,6 +670,27 @@ impl Engine {
     ) -> Result<()> {
         let mut remote_small: Vec<Hash> = Vec::new();
         let mut remote_large: Vec<Hash> = Vec::new();
+        let _guard = TransferGuard(self);
+        self.update_transfer(|t| {
+            *t = Some(crate::Transfer {
+                unit: rep.unit.clone(),
+                files_total: needs.len() as u64,
+                bytes_total: needs.values().map(|n| n.size).sum(),
+                started_ms: reposync_fs::time::now_ms(),
+                ..Default::default()
+            })
+        });
+        let progress = |files: u64, bytes: u64, current: &str| {
+            self.update_transfer(|t| {
+                if let Some(t) = t {
+                    t.files_done += files;
+                    t.bytes_done += bytes;
+                    if !current.is_empty() {
+                        t.current = current.to_string();
+                    }
+                }
+            })
+        };
         for (hash, need) in needs {
             for d in &need.dests {
                 if let Some(p) = d.parent().filter(|p| *p != staging) {
@@ -668,6 +700,7 @@ impl Engine {
             if self.dedup_local(hash, &need.dests[0])? {
                 rep.bytes_deduped += need.size;
                 copy_rest(&need.dests)?;
+                progress(1, need.size, &need.label);
             } else if need.size <= limits::SMALL_FILE {
                 remote_small.push(*hash);
             } else {
@@ -684,6 +717,7 @@ impl Engine {
                 j += 1;
             }
             let batch = &remote_small[i..j];
+            progress(0, 0, &needs[&batch[0]].label);
             let mut blobs = peer.blobs(batch)?;
             blobs.resize(batch.len(), None);
             let mut items: Vec<(&Need, Vec<u8>)> = Vec::with_capacity(batch.len());
@@ -696,11 +730,13 @@ impl Engine {
                 items.push((&needs[h], data));
             }
             write_parallel(&items)?;
+            progress(batch.len() as u64, items.iter().map(|(n, _)| n.size).sum(), "");
             i = j;
         }
         // Large files in ranges.
         for h in remote_large {
             let need = &needs[&h];
+            progress(0, 0, &need.label);
             let mut attempt = 0;
             loop {
                 attempt += 1;
@@ -711,6 +747,7 @@ impl Engine {
                 }
             }
             copy_rest(&need.dests)?;
+            progress(1, 0, "");
         }
         // One bundled flush for everything staged (instead of one per file).
         let all: Vec<PathBuf> = needs.values().flat_map(|n| n.dests.iter().cloned()).collect();
@@ -747,6 +784,11 @@ impl Engine {
             f.write_all(&chunk)?;
             off += chunk.len() as u64;
             rep.bytes_fetched += chunk.len() as u64;
+            self.update_transfer(|t| {
+                if let Some(t) = t {
+                    t.bytes_done += chunk.len() as u64;
+                }
+            });
         }
         Ok(Hash::from_blake3(hasher.finalize()) == *h)
     }

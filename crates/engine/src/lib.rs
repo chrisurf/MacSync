@@ -10,6 +10,7 @@
 //! * [`Engine::resolve`] resolves recorded conflicts.
 
 mod apply;
+pub mod browse;
 mod capture;
 mod plan;
 mod pull;
@@ -23,7 +24,7 @@ pub use resolve::Choice;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::Result;
@@ -130,9 +131,48 @@ pub struct Engine {
     /// Fault injection: abort the apply after this many file operations
     /// (negative = disabled).
     fault_after_ops: AtomicI64,
+    /// The transfer in progress (receiving side), for progress display.
+    transfer: Mutex<Option<Transfer>>,
+    /// Bytes served to the peer so far and when the last ones went out.
+    served_bytes: AtomicU64,
+    served_ms: AtomicI64,
+}
+
+/// Progress of the content transfer of one pull (receiving side).
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Transfer {
+    pub unit: String,
+    pub files_total: u64,
+    pub files_done: u64,
+    pub bytes_total: u64,
+    pub bytes_done: u64,
+    pub started_ms: i64,
+    /// Unit-relative path of the file currently being transferred.
+    pub current: String,
 }
 
 impl Engine {
+    /// The content transfer in progress, if any.
+    pub fn transfer(&self) -> Option<Transfer> {
+        self.transfer.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub(crate) fn update_transfer(&self, f: impl FnOnce(&mut Option<Transfer>)) {
+        f(&mut self.transfer.lock().unwrap_or_else(|e| e.into_inner()));
+    }
+
+    /// Total bytes served to the peer and the time of the last served bytes (ms).
+    pub fn served(&self) -> (u64, i64) {
+        (self.served_bytes.load(AtomicOrdering::Relaxed), self.served_ms.load(AtomicOrdering::Relaxed))
+    }
+
+    pub(crate) fn count_served(&self, bytes: u64) {
+        if bytes > 0 {
+            self.served_bytes.fetch_add(bytes, AtomicOrdering::Relaxed);
+            self.served_ms.store(reposync_fs::time::now_ms(), AtomicOrdering::Relaxed);
+        }
+    }
+
     /// Open the engine: database, private directories, crash recovery.
     pub fn open(cfg: EngineConfig) -> Result<Engine> {
         std::fs::create_dir_all(&cfg.root)?;
@@ -152,6 +192,9 @@ impl Engine {
             trees: Mutex::new(HashMap::new()),
             case_insensitive,
             fault_after_ops: AtomicI64::new(-1),
+            transfer: Mutex::new(None),
+            served_bytes: AtomicU64::new(0),
+            served_ms: AtomicI64::new(0),
         };
         engine.recover()?;
         Ok(engine)

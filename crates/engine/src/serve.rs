@@ -64,6 +64,7 @@ impl Engine {
             total += b.as_ref().map(|b| b.len() as u64).unwrap_or(0);
             out.push(b);
         }
+        self.count_served(total);
         Ok(out)
     }
 
@@ -85,7 +86,9 @@ impl Engine {
                 && now.ino == stored.stat.ino
                 && now.ctime_ns == stored.stat.ctime_ns;
             if unchanged {
-                return Ok(Some(ops::read_range(&abs, offset, len)?));
+                let data = ops::read_range(&abs, offset, len)?;
+                self.count_served(data.len() as u64);
+                return Ok(Some(data));
             }
         }
         Ok(None)

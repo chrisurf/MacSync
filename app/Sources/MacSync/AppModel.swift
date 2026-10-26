@@ -31,8 +31,23 @@ struct Status: Decodable {
     var peerLastContact: String?
     var peerError: String?
     var peerVersion: String?
+    struct Transfer: Decodable {
+        var unit: String
+        var filesTotal: Int64
+        var filesDone: Int64
+        var bytesTotal: Int64
+        var bytesDone: Int64
+        var startedMs: Int64
+        var current: String
+    }
+
     var units: [Unit]
     var version: String?
+    /// Content transfer in progress (this Mac receives).
+    var transfer: Transfer?
+    /// Bytes served to the other Mac so far, and when the last ones went out.
+    var servedBytes: Int64?
+    var servedMs: Int64?
 
     var conflicts: Int { units.reduce(0) { $0 + $1.conflicts } }
     var lastSync: Date? {
@@ -43,6 +58,52 @@ struct Status: Decodable {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    }
+}
+
+/// What is moving right now, for the progress display.
+struct Activity: Equatable {
+    enum Direction { case receiving, sending }
+    var direction: Direction
+    var unit: String = ""
+    var current: String = ""
+    var filesDone: Int64 = 0
+    var filesTotal: Int64 = 0
+    var bytesDone: Int64 = 0
+    var bytesTotal: Int64 = 0
+    /// Bytes per second (smoothed).
+    var rate: Double = 0
+
+    var fraction: Double? {
+        bytesTotal > 0 ? min(1, Double(bytesDone) / Double(bytesTotal)) : (filesTotal > 0 ? Double(filesDone) / Double(filesTotal) : nil)
+    }
+
+    var remaining: TimeInterval? {
+        guard direction == .receiving, rate > 0, bytesTotal > bytesDone else { return nil }
+        return Double(bytesTotal - bytesDone) / rate
+    }
+
+    static func bytes(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
+
+    static func duration(_ t: TimeInterval) -> String {
+        if t < 60 { return "unter 1 Min." }
+        let f = DateComponentsFormatter()
+        f.allowedUnits = t < 3600 ? [.minute] : [.hour, .minute]
+        f.unitsStyle = .abbreviated
+        return f.string(from: t) ?? ""
+    }
+
+    /// One line for the menu.
+    func summary(peer: String) -> String {
+        switch direction {
+        case .sending:
+            return "Sende an \(peer)" + (rate > 0 ? " · \(Activity.bytes(Int64(rate)))/s" : "")
+        case .receiving:
+            var s = "Empfange"
+            if let f = fraction { s += " \(Int(f * 100)) %" }
+            if let r = remaining { s += " · noch ca. \(Activity.duration(r))" }
+            return s
+        }
     }
 }
 
@@ -69,6 +130,12 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var status: Status?
     @Published private(set) var state: SyncState = .starting
+    @Published private(set) var activity: Activity?
+    /// Frame of the turning menu bar arrows while syncing.
+    @Published private(set) var spinFrame = 0
+    private var spinTimer: Timer?
+    private var lastSample: (bytes: Int64, served: Int64, at: Date)?
+    private var rate: Double = 0
     @Published var lastError: String?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -91,7 +158,11 @@ final class AppModel: ObservableObject {
         } else {
             SetupWindow.shared.show()
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+        // `open -a MacSync --args --manager` opens the sync manager directly.
+        if isConfigured, CommandLine.arguments.contains("--manager") {
+            ManagerWindow.shared.show()
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             Task { @MainActor in await AppModel.shared.refresh() }
         }
         Task { await refresh() }
@@ -119,8 +190,56 @@ final class AppModel: ObservableObject {
             s = try? Self.decoder.decode(Status.self, from: Data(out.utf8))
         }
         status = s
+        activity = fromDaemon != nil ? measure(s) : nil
         state = Self.state(s, daemonRunning: fromDaemon != nil, starting: running, exit: daemon.lastExit)
+        if state == .inSync || state == .offline, activity != nil { state = .syncing }
+        updateSpin()
         notifyConflicts(s?.conflicts ?? 0)
+    }
+
+    /// Current transfer with a smoothed rate from consecutive samples.
+    private func measure(_ s: Status?) -> Activity? {
+        let now = Date()
+        let served = s?.servedBytes ?? 0
+        let received = s?.transfer?.bytesDone ?? 0
+        defer { lastSample = (received, served, now) }
+        let dt = lastSample.map { now.timeIntervalSince($0.at) } ?? 0
+        if let t = s?.transfer {
+            var a = Activity(direction: .receiving, unit: t.unit, current: t.current, filesDone: t.filesDone,
+                             filesTotal: t.filesTotal, bytesDone: t.bytesDone, bytesTotal: t.bytesTotal)
+            if let last = lastSample, dt > 0, received >= last.bytes {
+                rate = rate == 0 ? Double(received - last.bytes) / dt : 0.7 * rate + 0.3 * Double(received - last.bytes) / dt
+            } else {
+                let elapsed = now.timeIntervalSince1970 - Double(t.startedMs) / 1000
+                rate = elapsed > 0 ? Double(t.bytesDone) / elapsed : 0
+            }
+            a.rate = rate
+            return a
+        }
+        // Sending: the other Mac fetched data from us within the last 3 s.
+        if let ms = s?.servedMs, ms > 0, now.timeIntervalSince1970 - Double(ms) / 1000 < 3 {
+            var a = Activity(direction: .sending)
+            if let last = lastSample, dt > 0, served >= last.served {
+                rate = 0.5 * rate + 0.5 * Double(served - last.served) / dt
+            }
+            a.rate = rate
+            return a
+        }
+        rate = 0
+        return nil
+    }
+
+    private func updateSpin() {
+        let spinning = state == .syncing
+        if spinning, spinTimer == nil {
+            spinTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                Task { @MainActor in AppModel.shared.spinFrame = (AppModel.shared.spinFrame + 1) % MenuIcon.frames }
+            }
+        } else if !spinning, let t = spinTimer {
+            t.invalidate()
+            spinTimer = nil
+            spinFrame = 0
+        }
     }
 
     private static let decoder: JSONDecoder = {

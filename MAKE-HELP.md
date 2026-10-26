@@ -12,6 +12,8 @@ make pkg               # nur bauen: build/MacSync-<version>-arm64.pkg
 
 Oder den Installer aus den GitHub-Releases nehmen. Danach alles über das
 Symbol in der Menüleiste: Einrichtung, Zustand, Einstellungen, Beenden.
+**Synchronisations-Manager …** (⌘M) zeigt jede Datei mit ihrem Zustand auf
+beiden Macs; im Terminal: `reposync browse notes`.
 Die folgenden Abschnitte betreffen den Betrieb im Terminal.
 
 ## Einmalig (beide Macs)

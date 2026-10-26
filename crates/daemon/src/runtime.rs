@@ -689,7 +689,27 @@ impl Daemon {
             .and_then(|p| p.remote_hello())
             .map(|h| h.version);
         v["peer_version"] = json!(peer_version);
+        v["transfer"] = json!(node.engine.transfer());
+        let (served, served_ms) = node.engine.served();
+        v["served_bytes"] = json!(served);
+        v["served_ms"] = json!(served_ms);
         Ok(v)
+    }
+
+    pub(crate) fn ipc_browse(node: &Node, shared: &Shared, unit: Option<&str>, dir: &str) -> Result<Value> {
+        let p = peer(node, shared);
+        let items = match &p {
+            Some(peer_conn) => match node.engine.browse(Some(peer_conn.as_ref() as &dyn PeerApi), unit, dir) {
+                Ok(items) => items,
+                Err(e) => {
+                    peer_failed(shared, &e);
+                    node.engine.browse(None, unit, dir)?
+                }
+            },
+            None => node.engine.browse(None, unit, dir)?,
+        };
+        let name = node.engine.store().peers()?.into_iter().last().map(|r| r.name);
+        Ok(json!({ "online": p.is_some(), "peer": name, "items": items }))
     }
 
     pub(crate) fn ipc_sync(node: &Node, shared: &Shared, units: Option<Vec<String>>, dry_run: bool) -> Result<Value> {

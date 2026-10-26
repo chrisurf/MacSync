@@ -10,7 +10,7 @@ struct MacSyncApp: App {
         MenuBarExtra {
             MenuContent().environmentObject(model)
         } label: {
-            Image(nsImage: MenuIcon.image(for: model.state)).renderingMode(.original)
+            Image(nsImage: MenuIcon.image(for: model.state, frame: model.spinFrame)).renderingMode(.original)
         }
         .menuBarExtraStyle(.menu)
 
@@ -43,6 +43,9 @@ struct MenuContent: View {
 
     var body: some View {
         Text(statusLine)
+        if let a = model.activity {
+            Text(a.summary(peer: model.status?.peer?.name ?? "anderer Mac"))
+        }
         if let root = model.status?.root {
             Button(Paths.display(root)) { model.openRoot() }
         }
@@ -63,6 +66,10 @@ struct MenuContent: View {
         default:
             Button("Jetzt synchronisieren") { model.syncNow() }
             Button("Pausieren") { model.pause() }
+        }
+        if model.isConfigured {
+            Button("Synchronisations-Manager …") { ManagerWindow.shared.show() }
+                .keyboardShortcut("m")
         }
         Divider()
         Button("Über MacSync") { About.show() }
