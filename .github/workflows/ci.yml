@@ -16,7 +16,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The toolchain version comes from rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -29,7 +29,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Git identity for test repositories
@@ -43,7 +43,7 @@ jobs:
         run: OUT=target/e2e-summary-${{ matrix.os }}.json make e2e
       - name: Benchmark (100k files, in-process)
         run: make bench
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: e2e-${{ matrix.os }}
@@ -54,14 +54,14 @@ jobs:
     # (Actions → this run → Artifacts).
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - run: rustup target add aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - run: make pkg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RepoSync-pkg
           path: build/RepoSync-*.pkg*
