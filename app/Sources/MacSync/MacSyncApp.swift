@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct RepoSyncApp: App {
+struct MacSyncApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
 
@@ -10,7 +10,7 @@ struct RepoSyncApp: App {
         MenuBarExtra {
             MenuContent().environmentObject(model)
         } label: {
-            Image(systemName: model.state.symbol)
+            Image(nsImage: MenuIcon.image(for: model.state, frame: model.spinFrame)).renderingMode(.original)
         }
         .menuBarExtraStyle(.menu)
 
@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sigterm: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // `pkill RepoSync` (e.g. by the installer): stop the daemon cleanly.
+        // `pkill MacSync` (e.g. by the installer): stop the daemon cleanly.
         signal(SIGTERM, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         src.setEventHandler { MainActor.assumeIsolated { AppModel.shared.quit() } }
@@ -43,6 +43,9 @@ struct MenuContent: View {
 
     var body: some View {
         Text(statusLine)
+        if let a = model.activity {
+            Text(a.summary(peer: model.status?.peer?.name ?? "anderer Mac"))
+        }
         if let root = model.status?.root {
             Button(Paths.display(root)) { model.openRoot() }
         }
@@ -64,12 +67,17 @@ struct MenuContent: View {
             Button("Jetzt synchronisieren") { model.syncNow() }
             Button("Pausieren") { model.pause() }
         }
+        if model.isConfigured {
+            Button("Synchronisations-Manager …") { ManagerWindow.shared.show() }
+                .keyboardShortcut("m")
+        }
         Divider()
+        Button("Über MacSync") { About.show() }
         SettingsLink { Text("Einstellungen …") }
             .keyboardShortcut(",")
         Button("Protokoll anzeigen") { model.openLog() }
         Divider()
-        Button("RepoSync beenden") { model.quit() }
+        Button("MacSync beenden") { model.quit() }
             .keyboardShortcut("q")
     }
 

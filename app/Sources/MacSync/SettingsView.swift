@@ -27,11 +27,17 @@ private struct GeneralTab: View {
                 .onChange(of: notifyConflicts) { _, on in if on { model.requestNotificationPermission() } }
             LabeledContent("Befehlszeile") {
                 VStack(alignment: .trailing) {
-                    Button("Werkzeug „reposync“ installieren") { cliMessage = model.installCommandLineTool() }
+                    Button("Werkzeug „macsync“ installieren") { cliMessage = model.installCommandLineTool() }
                     if let m = cliMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
                 }
             }
-            LabeledContent("Version", value: model.status?.version ?? Bundle.main.shortVersion)
+            LabeledContent("Version", value: Bundle.main.shortVersion)
+            LabeledContent("Entwickelt von") {
+                VStack(alignment: .trailing) {
+                    Text(About.company)
+                    Link("alpineperspective.com", destination: About.website)
+                }
+            }
             if let e = model.lastError {
                 Text(e).foregroundStyle(.red).font(.caption)
             }

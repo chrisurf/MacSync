@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use reposync_core::Hash;
+use macsync_core::Hash;
 
 /// Stream a file through BLAKE3.
 pub fn hash_file(path: &Path) -> io::Result<Hash> {
@@ -172,9 +172,9 @@ fn unique(p: PathBuf) -> PathBuf {
 
 /// True if the volume holding `dir` treats `A` and `a` as the same name.
 pub fn is_case_insensitive(dir: &Path) -> io::Result<bool> {
-    let probe = dir.join(format!(".reposync-CaseProbe-{}", std::process::id()));
+    let probe = dir.join(format!(".macsync-CaseProbe-{}", std::process::id()));
     write_new(&probe, b"")?;
-    let lower = dir.join(format!(".reposync-caseprobe-{}", std::process::id()));
+    let lower = dir.join(format!(".macsync-caseprobe-{}", std::process::id()));
     let insensitive = fs::symlink_metadata(&lower).is_ok();
     let _ = fs::remove_file(&probe);
     Ok(insensitive)

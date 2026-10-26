@@ -1,15 +1,15 @@
 > Originalkonzept (Stand 20.10.2026). Abweichungen der MVP-Umsetzung sind in
 > [`implementation-plan.md`](implementation-plan.md) und den [ADRs](adr/) dokumentiert.
 
-# RepoSync – Konzept für Git-bewusste LAN-Synchronisierung zwischen zwei Macs
+# MacSync – Konzept für Git-bewusste LAN-Synchronisierung zwischen zwei Macs
 
 Oct 20, 2026 · @Chris
 
 ## Zusammenfassung
 
-RepoSync ist ein Daemon für zwei Macs, der ein Wurzelverzeichnis mit Git-Repositories und gewöhnlichen Ordnern ohne Git bitgenau über das lokale WLAN spiegelt – inklusive `.git`, `node_modules` und aller übrigen Dateien – ohne je einen Commit, Branch oder Stash zu erzeugen.
+MacSync ist ein Daemon für zwei Macs, der ein Wurzelverzeichnis mit Git-Repositories und gewöhnlichen Ordnern ohne Git bitgenau über das lokale WLAN spiegelt – inklusive `.git`, `node_modules` und aller übrigen Dateien – ohne je einen Commit, Branch oder Stash zu erzeugen.
 
-Bestehende Tools scheitern, weil sie ein Repository als Sammlung unabhängiger Dateien behandeln. Ein Repo ist aber ein Zustand, dessen Dateien untereinander konsistent sein müssen. RepoSync behandelt deshalb jedes Repo als **Transaktionseinheit**: Es wird nur in einem ruhigen, konsistenten Zustand erfasst und auf der Gegenseite ganz oder gar nicht angewendet.
+Bestehende Tools scheitern, weil sie ein Repository als Sammlung unabhängiger Dateien behandeln. Ein Repo ist aber ein Zustand, dessen Dateien untereinander konsistent sein müssen. MacSync behandelt deshalb jedes Repo als **Transaktionseinheit**: Es wird nur in einem ruhigen, konsistenten Zustand erfasst und auf der Gegenseite ganz oder gar nicht angewendet.
 
 Die sechs Kernprinzipien:
 
@@ -75,7 +75,7 @@ Auf jedem Mac läuft derselbe Daemon; er erkennt Änderungen, wartet auf Ruhe, f
 
 ```mermaid
 flowchart LR
-  subgraph A[Mac A – reposync daemon]
+  subgraph A[Mac A – macsync daemon]
     A1[Watcher<br/>FSEvents] --> A2[Ruhe-Gate]
     A2 --> A3[Snapshot<br/>APFS-Klon]
     A3 --> A4[Index & Merkle<br/>SQLite + BLAKE3]
@@ -83,7 +83,7 @@ flowchart LR
     A6[Staging] --> A7[Git-Anwender<br/>geordnet, atomar]
     A7 --> A8[Konfliktspeicher<br/>& Journal]
   end
-  subgraph B[Mac B – reposync daemon]
+  subgraph B[Mac B – macsync daemon]
     B5[Transport] --> B6[Staging]
     B6 --> B7[Git-Anwender<br/>geordnet, atomar]
     B7 --> B8[Konfliktspeicher<br/>& Journal]
@@ -152,7 +152,7 @@ Jedes Repo wird durch ein Manifest beschrieben, dessen Merkle-Root den gesamten 
 
 **Persistenz**
 
-SQLite im WAL-Modus unter `~/Library/Application Support/RepoSync/`: Tabellen `units`, `entries`, `nodes`, `peers`, `journal`, `conflicts`. Inhalte selbst werden nicht doppelt gespeichert; der Daemon liest immer aus dem Arbeitsverzeichnis bzw. dem Staging-Klon.
+SQLite im WAL-Modus unter `~/Library/Application Support/MacSync/`: Tabellen `units`, `entries`, `nodes`, `peers`, `journal`, `conflicts`. Inhalte selbst werden nicht doppelt gespeichert; der Daemon liest immer aus dem Arbeitsverzeichnis bzw. dem Staging-Klon.
 
 ## Übertragungsprotokoll und Performance
 
@@ -212,7 +212,7 @@ Die Zielseite schreibt alles zuerst in einen Staging-Ordner und setzt es dann in
 
 **Garbage Collection**
 
-Weil Objekte per Sync nie gelöscht werden, könnte `.git/objects` langsam wachsen. RepoSync löscht Packfiles nur dann auf beiden Seiten, wenn ein `git gc` auf einem Mac sie ersetzt hat **und** alle enthaltenen Objekte im neuen Pack nachweislich vorhanden sind. Optional kann `gc.auto=0` gesetzt und GC zeitgesteuert vom Daemon ausgelöst werden – das reduziert Drift durch Hintergrund-Wartung erheblich.
+Weil Objekte per Sync nie gelöscht werden, könnte `.git/objects` langsam wachsen. MacSync löscht Packfiles nur dann auf beiden Seiten, wenn ein `git gc` auf einem Mac sie ersetzt hat **und** alle enthaltenen Objekte im neuen Pack nachweislich vorhanden sind. Optional kann `gc.auto=0` gesetzt und GC zeitgesteuert vom Daemon ausgelöst werden – das reduziert Drift durch Hintergrund-Wartung erheblich.
 
 ## Konflikt- und Drift-Management
 
@@ -233,7 +233,7 @@ Konflikte werden nach Klassen behandelt: was mathematisch konfliktfrei ist, wird
 
 **Konfliktspeicher**
 
-Fremde Versionen landen unter `~/Library/Application Support/RepoSync/conflicts/<repo>/<zeitstempel>/` mit identischer Pfadstruktur. So verschmutzen sie weder `git status` noch das Projekt. Die Menüleisten-App zeigt pro Konflikt: Pfad, beide Versionen, Diff, wer wann geändert hat, und die Aktionen *Meine behalten*, *Andere übernehmen*, *Beide behalten*, *In Editor öffnen*.
+Fremde Versionen landen unter `~/Library/Application Support/MacSync/conflicts/<repo>/<zeitstempel>/` mit identischer Pfadstruktur. So verschmutzen sie weder `git status` noch das Projekt. Die Menüleisten-App zeigt pro Konflikt: Pfad, beide Versionen, Diff, wer wann geändert hat, und die Aktionen *Meine behalten*, *Andere übernehmen*, *Beide behalten*, *In Editor öffnen*.
 
 **Kohärenz-Regel für Git-Zustand**
 
@@ -274,7 +274,7 @@ Standardausschlüsse (abschaltbar): `.DS_Store`, `.Spotlight-V100`, `.Trashes`, 
 
 ## Ordner ohne Git und alle macOS-Dateitypen
 
-RepoSync synchronisiert jeden Ordner unterhalb der Wurzel, mit oder ohne Git, und jedes Dateisystemobjekt, das macOS auf APFS kennt – inklusive aller Metadaten.
+MacSync synchronisiert jeden Ordner unterhalb der Wurzel, mit oder ohne Git, und jedes Dateisystemobjekt, das macOS auf APFS kennt – inklusive aller Metadaten.
 
 **Zwei Arten von Sync-Einheiten**
 
@@ -333,7 +333,7 @@ Die beiden Macs finden sich per Bonjour, vertrauen sich nach einmaligem Pairing 
 
 **Discovery**
 
-- Bonjour/mDNS-Dienst `_reposync._udp.local` mit TXT-Eintrag (Geräte-ID-Hash, Protokollversion). Kein zentraler Server.
+- Bonjour/mDNS-Dienst `_macsync._udp.local` mit TXT-Eintrag (Geräte-ID-Hash, Protokollversion). Kein zentraler Server.
 - Fallback: manuell eingetragene IP oder Hostname `.local`, z. B. bei Gäste-WLANs mit Client-Isolation.
 - Mehrere Schnittstellen gleichzeitig (WLAN, Ethernet, Thunderbolt Bridge); die schnellste wird bevorzugt, Wechsel ohne Abbruch dank QUIC-Connection-Migration.
 
@@ -369,18 +369,18 @@ Jede Entscheidung des Daemons ist nachvollziehbar: die Menüleiste zeigt den Zus
 - Pause global oder pro Repo; "Jetzt synchronisieren"; Richtung festlegen.
 - Mitteilungen nur bei Konflikten, Drift-Reparaturen und Verbindungsabbrüchen über 5 Minuten.
 
-**CLI `reposync`**
+**CLI `macsync`**
 
 | Befehl | Zweck |
 | --- | --- |
-| `reposync status [repo]` | Zustand, ausstehende Änderungen, Konflikte |
-| `reposync diff <repo>` | welche Pfade sich zwischen den Macs unterscheiden |
-| `reposync sync [repo] --dry-run` | zeigen, was übertragen würde, ohne zu schreiben |
-| `reposync verify [repo]` | vollständiger Hash-Abgleich gegen das Dateisystem |
-| `reposync conflicts` / `resolve <id> --keep local\|remote\|both` | Konflikte auflisten und lösen |
-| `reposync log [repo] --since 1h` | Journal lesen |
-| `reposync pause` / `resume` | Sync anhalten und fortsetzen |
-| `reposync handoff` | Führung an den anderen Mac übergeben (Übergabe-Modus) |
+| `macsync status [repo]` | Zustand, ausstehende Änderungen, Konflikte |
+| `macsync diff <repo>` | welche Pfade sich zwischen den Macs unterscheiden |
+| `macsync sync [repo] --dry-run` | zeigen, was übertragen würde, ohne zu schreiben |
+| `macsync verify [repo]` | vollständiger Hash-Abgleich gegen das Dateisystem |
+| `macsync conflicts` / `resolve <id> --keep local\|remote\|both` | Konflikte auflisten und lösen |
+| `macsync log [repo] --since 1h` | Journal lesen |
+| `macsync pause` / `resume` | Sync anhalten und fortsetzen |
+| `macsync handoff` | Führung an den anderen Mac übergeben (Übergabe-Modus) |
 
 **Journal**
 
@@ -388,7 +388,7 @@ Jede Aktion wird als strukturierter Eintrag in SQLite gespeichert: Zeitpunkt, Re
 
 **Konfiguration**
 
-Eine TOML-Datei pro Mac (`~/.config/reposync/config.toml`): Wurzelverzeichnis, Betriebsmodus, optionale Ausschlüsse, Ruhezeiten, Bandbreitenlimit, Quarantäne-Verhalten. Änderungen werden ohne Neustart übernommen.
+Eine TOML-Datei pro Mac (`~/.config/macsync/config.toml`): Wurzelverzeichnis, Betriebsmodus, optionale Ausschlüsse, Ruhezeiten, Bandbreitenlimit, Quarantäne-Verhalten. Änderungen werden ohne Neustart übernommen.
 
 ## Technologie-Stack
 
@@ -436,14 +436,14 @@ Jeder Abbruch hinterlässt entweder den alten oder den neuen Zustand eines Repos
 | Ziel-Volume voll | Prüfung des benötigten Platzes vor Transfer; Repo wird übersprungen und gemeldet |
 | Datei während Snapshot geändert | erneute Gate-Prüfung schlägt fehl → Snapshot verworfen, neuer Versuch |
 | Hash-Mismatch nach Empfang | Chunk wird verworfen und neu angefordert; nach 3 Fehlschlägen Fehlermeldung |
-| Git-Befehl startet während Anwendung | blockiert an RepoSyncs `index.lock` mit Git-Standardmeldung; nach Sekunden wieder frei |
+| Git-Befehl startet während Anwendung | blockiert an MacSyncs `index.lock` mit Git-Standardmeldung; nach Sekunden wieder frei |
 | Peer lange offline | Änderungen sammeln sich lokal; beim Wiedersehen normaler Reconcile über Merkle-Bäume |
 | Uhren beider Macs weichen ab | irrelevant: Entscheidungen beruhen auf Versionsvektoren, nicht auf Zeit |
 | Datenbank beschädigt | Neuaufbau aus Dateisystem-Scan; Versionsvektoren werden aus dem Peer-Stand rekonstruiert, Abweichungen als Konflikte gemeldet statt überschrieben |
 
 **Sicherheitsnetz**
 
-Vor dem Überschreiben oder Löschen einer Datei wird die alte Version per `clonefile()` in einen Papierkorb unter `~/Library/Application Support/RepoSync/trash/` gelegt (Copy-on-Write, kostet fast keinen Platz). Aufbewahrung 14 Tage, Wiederherstellung über `reposync restore`.
+Vor dem Überschreiben oder Löschen einer Datei wird die alte Version per `clonefile()` in einen Papierkorb unter `~/Library/Application Support/MacSync/trash/` gelegt (Copy-on-Write, kostet fast keinen Platz). Aufbewahrung 14 Tage, Wiederherstellung über `macsync restore`.
 
 ## Teststrategie
 
@@ -451,11 +451,11 @@ Zuverlässigkeit wird durch Tests bewiesen, die echte Git-Arbeit gegen den laufe
 
 - **Eigenschaftsbasierte Tests (`proptest`)** für `core`: zufällige Folgen von Änderungen auf zwei simulierten Seiten; Invarianten: nach Konvergenz gleiche Roots, kein Datenverlust, Konflikte genau dann, wenn nebenläufig.
 - **Deterministische Simulation:** Netzwerk, Uhr und Dateisystem als austauschbare Schnittstellen; Tausende Szenarien mit zufälligen Verzögerungen, Abbrüchen und Neustarts pro Minute reproduzierbar per Seed.
-- **Git-Torture-Test:** zwei Repos auf zwei Volumes (oder zwei Macs), Skripte führen parallel `commit`, `rebase`, `checkout`, `stash`, `gc`, `npm install` aus, während RepoSync läuft. Nach jeder Runde `git fsck --full` und `git status` auf beiden Seiten, Root-Hash-Vergleich.
+- **Git-Torture-Test:** zwei Repos auf zwei Volumes (oder zwei Macs), Skripte führen parallel `commit`, `rebase`, `checkout`, `stash`, `gc`, `npm install` aus, während MacSync läuft. Nach jeder Runde `git fsck --full` und `git status` auf beiden Seiten, Root-Hash-Vergleich.
 - **Crash-Tests:** Daemon an zufälligen Stellen per `SIGKILL` beenden; danach muss jeder Repo-Zustand entweder alt oder neu und `fsck`-gültig sein.
 - **Performance-Benchmarks:** Referenzdatensatz mit 50 Repos, 1 Mio. Dateien, 20 GB; gemessen werden Erst-Sync, Latenz einer Einzeländerung, Leerlauf-CPU, Zeit nach `npm install` in einem Projekt.
 - **Dateisystem-Randfälle:** Symlink-Schleifen, Unicode-Namen, Case-Kollisionen, 0-Byte-Dateien, Dateien über 10 GB, xattrs, Hardlinks, Bundles, Sparse Files, Resource Forks, geschützte Dateien, iCloud-Platzhalter, geöffnete SQLite-Datenbanken, Ordner ohne Git und Wechsel zwischen Ordner und Repo.
-- **Dogfooding:** mindestens 4 Wochen Betrieb auf den eigenen zwei Macs im Spiegel-Modus mit täglichem `reposync verify`, bevor Zweiweg aktiviert wird.
+- **Dogfooding:** mindestens 4 Wochen Betrieb auf den eigenen zwei Macs im Spiegel-Modus mit täglichem `macsync verify`, bevor Zweiweg aktiviert wird.
 
 ## Roadmap
 

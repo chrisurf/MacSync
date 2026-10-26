@@ -71,16 +71,29 @@ enum IPC {
     }
 }
 
-/// Runs the bundled `reposync` CLI.
+/// Runs the bundled `macsync` CLI.
 enum CLI {
     struct Failure: LocalizedError {
         let message: String
         var errorDescription: String? { message }
     }
 
+    /// Takes over a RepoSync (≤ 0.2.x) installation before the app looks for
+    /// its configuration: `macsync migrate` moves config, state and database.
+    static func migrate() {
+        guard let bin = Paths.binary else { return }
+        let p = Process()
+        p.executableURL = bin
+        p.arguments = ["migrate"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+    }
+
     /// Runs to completion; returns stdout, throws with stderr on failure.
     static func run(_ args: [String]) async throws -> String {
-        guard let bin = Paths.binary else { throw Failure(message: "reposync nicht gefunden") }
+        guard let bin = Paths.binary else { throw Failure(message: "macsync nicht gefunden") }
         return try await withCheckedThrowingContinuation { cont in
             let p = Process()
             p.executableURL = bin
@@ -105,7 +118,7 @@ enum CLI {
     /// Starts a long-running command and delivers each stdout line.
     static func stream(_ args: [String], line: @escaping @Sendable (String) -> Void,
                        done: @escaping @Sendable (Int32, String) -> Void) -> Process? {
-        guard let bin = Paths.binary else { done(1, "reposync nicht gefunden"); return nil }
+        guard let bin = Paths.binary else { done(1, "macsync nicht gefunden"); return nil }
         let p = Process()
         p.executableURL = bin
         p.arguments = ["--config", Paths.config.path] + args

@@ -1,6 +1,6 @@
 [package]
-name = "reposync-core"
-description = "Pure data model of RepoSync: hashes, entries, version vectors, Merkle trees, decision logic"
+name = "macsync-core"
+description = "Pure data model of MacSync: hashes, entries, version vectors, Merkle trees, decision logic"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

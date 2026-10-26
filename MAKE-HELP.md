@@ -5,31 +5,33 @@ Alle `make`-Befehle im Repository-Ordner. Übersicht aller Targets: `make help`.
 ## Mit der App (empfohlen)
 
 ```sh
-make install-app       # baut RepoSync.app + Installer, installiert nach /Programme
-make app               # nur bauen: build/RepoSync.app
-make pkg               # nur bauen: build/RepoSync-<version>-arm64.pkg
+make install-app       # baut MacSync.app + Installer, installiert nach /Programme
+make app               # nur bauen: build/MacSync.app
+make pkg               # nur bauen: build/MacSync-<version>-arm64.pkg
 ```
 
 Oder den Installer aus den GitHub-Releases nehmen. Danach alles über das
 Symbol in der Menüleiste: Einrichtung, Zustand, Einstellungen, Beenden.
+**Synchronisations-Manager …** (⌘M) zeigt jede Datei mit ihrem Zustand auf
+beiden Macs; im Terminal: `macsync browse notes`.
 Die folgenden Abschnitte betreffen den Betrieb im Terminal.
 
 ## Einmalig (beide Macs)
 
 ```sh
 make doctor            # Voraussetzungen prüfen
-make install           # baut reposync, installiert reposync + reposync-connect
+make install           # baut macsync, installiert macsync + macsync-connect
 ```
 
 ## Verbinden (beide Macs, in Terminal.app)
 
 ```sh
-reposync-connect       # oder: make connect
+macsync-connect       # oder: make connect
 ```
 
 1. Das Skript fragt nach dem Verzeichnis, das synchronisiert werden soll
-   (Enter = Vorschlag). Direkt angeben: `reposync-connect ~/RepoSyncTest`
-   bzw. `make connect ROOT=~/RepoSyncTest`.
+   (Enter = Vorschlag). Direkt angeben: `macsync-connect ~/MacSync`
+   bzw. `make connect ROOT=~/MacSync`.
 2. **Reihenfolge egal:** Der erste Mac wartet und zeigt einen 6-stelligen Code.
    Dann auf dem **anderen** Mac starten – er findet den ersten und fragt nach dem Code.
 3. Danach startet die Synchronisation im Vordergrund.
@@ -43,30 +45,30 @@ Gestartet wird immer nur der Daemon; die Macs finden sich selbst.
 
 | Ort | Inhalt | Löschen? |
 | --- | --- | --- |
-| `~/.config/reposync/config.toml` | Konfiguration (Verzeichnis, Modus, Port) | ja, `reposync-connect` legt sie neu an |
-| `~/Library/Application Support/RepoSync/` | Geräteschlüssel, Datenbank, Kopplung | nur zum kompletten Zurücksetzen (danach neu koppeln) |
-| `<Sync-Verzeichnis>/.reposync/` | Zwischenablage für Übertragungen, Papierkorb | nur bei gestopptem Daemon; entsteht neu |
+| `~/.config/macsync/config.toml` | Konfiguration (Verzeichnis, Modus, Port) | ja, `macsync-connect` legt sie neu an |
+| `~/Library/Application Support/MacSync/` | Geräteschlüssel, Datenbank, Kopplung | nur zum kompletten Zurücksetzen (danach neu koppeln) |
+| `<Sync-Verzeichnis>/.macsync/` | Zwischenablage für Übertragungen, Papierkorb | nur bei gestopptem Daemon; entsteht neu |
 
 Komplett zurücksetzen (Daemon vorher stoppen):
-`rm -rf ~/.config/reposync "~/Library/Application Support/RepoSync" ~/RepoSyncTest/.reposync`
+`rm -rf ~/.config/macsync "~/Library/Application Support/MacSync" ~/MacSync/.macsync`
 
 ## Stoppen
 
 | Situation | Befehl |
 | --- | --- |
 | Läuft im aktuellen Fenster | `Ctrl-C` |
-| Läuft in einem anderen Fenster | `reposync-connect --stop` oder `make stop` |
+| Läuft in einem anderen Fenster | `macsync-connect --stop` oder `make stop` |
 
 ## Anderes Verzeichnis / neu koppeln
 
 ```sh
-reposync-connect --force ~/AnderesVerzeichnis   # Konfiguration ersetzen, neu koppeln
+macsync-connect --force ~/AnderesVerzeichnis   # Konfiguration ersetzen, neu koppeln
 ```
 
 ## Hilfe und Zustand
 
 ```sh
-reposync-connect --help    # alle Optionen (oder: make connect-help)
+macsync-connect --help    # alle Optionen (oder: make connect-help)
 make status                # Zustand beider Seiten
 make log                   # was in der letzten Stunde passiert ist
 ```
@@ -90,4 +92,4 @@ Mit make: `make connect ARGS="--send"`.
 | `No route to host` | in Terminal.app starten; anderer Mac wach und im selben WLAN? |
 | Bonjour findet nichts | `--peer NAME.local` oder IP angeben (`ipconfig getifaddr en0` auf dem anderen Mac) |
 | Beide Macs warten | auf einem `Ctrl-C`, dort erneut starten |
-| Falsches Verzeichnis vorgeschlagen | Verzeichnis direkt angeben: `reposync-connect ~/RepoSyncTest` |
+| Falsches Verzeichnis vorgeschlagen | Verzeichnis direkt angeben: `macsync-connect ~/MacSync` |

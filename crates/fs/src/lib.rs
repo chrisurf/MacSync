@@ -12,10 +12,21 @@ pub use scan::{scan_unit, ScanResult, Scanned};
 
 use std::path::{Path, PathBuf};
 
-use reposync_core::entry::ROOT_UNIT;
+use macsync_core::entry::ROOT_UNIT;
 
-/// Name of RepoSync's private directory inside the root.
-pub const PRIVATE_DIR: &str = ".reposync";
+/// Name of MacSync's private directory inside the root.
+pub const PRIVATE_DIR: &str = ".macsync";
+/// Its name up to 0.2.x (RepoSync). Renamed when the engine opens; always
+/// excluded, so a leftover is never synchronised.
+pub const LEGACY_PRIVATE_DIR: &str = ".reposync";
+
+/// True for MacSync's private directory (current or legacy name) and
+/// everything inside it; `root_rel` is relative to the sync root.
+pub fn is_private(root_rel: &str) -> bool {
+    [PRIVATE_DIR, LEGACY_PRIVATE_DIR]
+        .iter()
+        .any(|d| root_rel == *d || root_rel.strip_prefix(d).is_some_and(|r| r.starts_with('/')))
+}
 
 /// Absolute directory of a unit.
 pub fn unit_dir(root: &Path, unit: &str) -> PathBuf {

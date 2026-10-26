@@ -2,9 +2,9 @@
 //! version from the conflict store, or keep both.
 
 use anyhow::{bail, Context, Result};
-use reposync_core::{path as rpath, ConflictClass, Entry, Hash, Kind};
-use reposync_fs::ops;
-use reposync_store::Stored;
+use macsync_core::{path as rpath, ConflictClass, Entry, Hash, Kind};
+use macsync_fs::ops;
+use macsync_store::Stored;
 
 use crate::capture::ScanOptions;
 use crate::plan::{class_of, rank_of, Op, OpKind, Phase, Plan, Source};
@@ -72,14 +72,14 @@ impl Engine {
                             let row = match cur {
                                 Some(mut s) => {
                                     s.entry.vv = s.entry.vv.merge_bump(&r.vv, &me);
-                                    s.changed_ms = reposync_fs::time::now_ms();
+                                    s.changed_ms = macsync_fs::time::now_ms();
                                     s
                                 }
                                 None => Stored {
                                     entry: Entry::tombstone(&r.path, r.kind, r.vv.merge_bump(&r.vv, &me)),
                                     disk: r.path.clone(),
                                     stat: Default::default(),
-                                    changed_ms: reposync_fs::time::now_ms(),
+                                    changed_ms: macsync_fs::time::now_ms(),
                                 },
                             };
                             st.put_entry(&unit, &row)?;
@@ -91,7 +91,7 @@ impl Engine {
                     let r = &c.remotes[0];
                     let src = std::path::Path::new(&c.stored).join(&r.path);
                     let sibling = sibling_name(&r.path, &c.remotes[0].vv.0.keys().next().cloned().unwrap_or_default());
-                    let dest = reposync_fs::abs_path(&self.cfg.root, &unit, &sibling);
+                    let dest = macsync_fs::abs_path(&self.cfg.root, &unit, &sibling);
                     if let Some(p) = dest.parent() {
                         std::fs::create_dir_all(p)?;
                     }
@@ -117,9 +117,9 @@ impl Engine {
         Ok(format!("conflict #{id} ({} {}) resolved: {}", c.class, c.path, choice.as_str()))
     }
 
-    fn apply_conflict_remote(&self, c: &reposync_store::ConflictRow, staging: &std::path::Path) -> Result<()> {
+    fn apply_conflict_remote(&self, c: &macsync_store::ConflictRow, staging: &std::path::Path) -> Result<()> {
         let unit = c.unit.as_str();
-        let kind = self.store().unit(unit)?.map(|u| u.kind).unwrap_or(reposync_core::UnitKind::Folder);
+        let kind = self.store().unit(unit)?.map(|u| u.kind).unwrap_or(macsync_core::UnitKind::Folder);
         let me = self.cfg.device.clone();
         let tx = staging.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut plan = Plan {
@@ -180,16 +180,16 @@ impl Engine {
             });
         }
         plan.sort();
-        if kind == reposync_core::UnitKind::Git {
-            let g = self.gate.check(&reposync_fs::unit_dir(&self.cfg.root, unit));
+        if kind == macsync_core::UnitKind::Git {
+            let g = self.gate.check(&macsync_fs::unit_dir(&self.cfg.root, unit));
             if !g.is_open() {
                 bail!("unit {unit} is busy: {}", g.describe());
             }
         }
         self.execute(&mut plan, staging)?;
-        let unit_dir = reposync_fs::unit_dir(&self.cfg.root, unit);
-        if kind == reposync_core::UnitKind::Git && reposync_gitaware::cmd::available() {
-            let _ = reposync_gitaware::cmd::refresh_index(&unit_dir);
+        let unit_dir = macsync_fs::unit_dir(&self.cfg.root, unit);
+        if kind == macsync_core::UnitKind::Git && macsync_gitaware::cmd::available() {
+            let _ = macsync_gitaware::cmd::refresh_index(&unit_dir);
         }
         Ok(())
     }
@@ -200,7 +200,7 @@ fn sibling_name(path: &str, device: &str) -> String {
     let dir = rpath::parent(path).unwrap_or("");
     let name = rpath::file_name(path);
     let dev = &device[..device.len().min(8)];
-    let ts = reposync_fs::time::compact_utc(reposync_fs::time::now_ms() / 1000);
+    let ts = macsync_fs::time::compact_utc(macsync_fs::time::now_ms() / 1000);
     let new = match name.rfind('.') {
         Some(i) if i > 0 => format!("{}.conflict-{dev}-{ts}{}", &name[..i], &name[i..]),
         _ => format!("{name}.conflict-{dev}-{ts}"),

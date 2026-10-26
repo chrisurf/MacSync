@@ -1,15 +1,15 @@
 [package]
-name = "reposync-engine"
-description = "Synchronisation engine of RepoSync: capture, serve, pull, plan, atomic Git-ordered apply, recovery"
+name = "macsync-engine"
+description = "Synchronisation engine of MacSync: capture, serve, pull, plan, atomic Git-ordered apply, recovery"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-reposync-core.workspace = true
-reposync-fs.workspace = true
-reposync-gitaware.workspace = true
-reposync-store.workspace = true
+macsync-core.workspace = true
+macsync-fs.workspace = true
+macsync-gitaware.workspace = true
+macsync-store.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,7 +21,7 @@ tracing.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
-reposync-gitaware.workspace = true
+macsync-gitaware.workspace = true
 xattr.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

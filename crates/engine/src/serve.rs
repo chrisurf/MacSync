@@ -1,9 +1,9 @@
 //! Answering a peer's requests from the local index.
 
 use anyhow::Result;
-use reposync_core::proto::{limits, DirListing, Request, Response, UnitRoot};
-use reposync_core::{path as rpath, Entry, Hash};
-use reposync_fs::ops;
+use macsync_core::proto::{limits, DirListing, Request, Response, UnitRoot};
+use macsync_core::{path as rpath, Entry, Hash};
+use macsync_fs::ops;
 
 use crate::{Engine, PeerApi};
 
@@ -48,7 +48,7 @@ impl Engine {
     pub fn serve_blob(&self, hash: &Hash) -> Result<Option<Vec<u8>>> {
         let candidates = self.store().find_blob(hash)?;
         for (unit, _path, disk) in candidates {
-            let abs = reposync_fs::abs_path(&self.cfg.root, &unit, &disk);
+            let abs = macsync_fs::abs_path(&self.cfg.root, &unit, &disk);
             if let Ok(Some(data)) = ops::read_verified(&abs, hash) {
                 return Ok(Some(data));
             }
@@ -64,6 +64,7 @@ impl Engine {
             total += b.as_ref().map(|b| b.len() as u64).unwrap_or(0);
             out.push(b);
         }
+        self.count_served(total);
         Ok(out)
     }
 
@@ -76,8 +77,8 @@ impl Engine {
             let Some(stored) = self.store().entry(&unit, &path)? else {
                 continue;
             };
-            let abs = reposync_fs::abs_path(&self.cfg.root, &unit, &disk);
-            let Ok(Some(now)) = reposync_fs::scan::stat(&abs, stored.entry.path.clone(), disk.clone()) else {
+            let abs = macsync_fs::abs_path(&self.cfg.root, &unit, &disk);
+            let Ok(Some(now)) = macsync_fs::scan::stat(&abs, stored.entry.path.clone(), disk.clone()) else {
                 continue;
             };
             let unchanged = now.size == stored.entry.size
@@ -85,7 +86,9 @@ impl Engine {
                 && now.ino == stored.stat.ino
                 && now.ctime_ns == stored.stat.ctime_ns;
             if unchanged {
-                return Ok(Some(ops::read_range(&abs, offset, len)?));
+                let data = ops::read_range(&abs, offset, len)?;
+                self.count_served(data.len() as u64);
+                return Ok(Some(data));
             }
         }
         Ok(None)

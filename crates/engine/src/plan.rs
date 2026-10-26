@@ -3,7 +3,7 @@
 //! before the first file is touched so that an interrupted apply can be
 //! completed after a crash.
 
-use reposync_core::{gitpath, path as rpath, Entry, GitClass, Hash, UnitKind};
+use macsync_core::{gitpath, path as rpath, Entry, GitClass, Hash, UnitKind};
 use serde::{Deserialize, Serialize};
 
 /// What happens to a path (for reports, dry runs and `diff`).
@@ -159,7 +159,7 @@ pub(crate) fn rank_of(class: Option<GitClass>) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reposync_core::{Kind, VersionVector};
+    use macsync_core::{Kind, VersionVector};
 
     fn op(path: &str, kind: OpKind, phase: Phase) -> Op {
         let class = class_of(UnitKind::Git, path);

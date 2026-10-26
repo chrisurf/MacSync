@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub const LABEL: &str = "com.reposync.daemon";
+pub const LABEL: &str = "com.alpineperspective.macsync.daemon";
 
 pub fn launchd_plist(binary: &Path, config: &Path, log_dir: &Path) -> String {
     format!(
@@ -35,7 +35,7 @@ pub fn launchd_plist(binary: &Path, config: &Path, log_dir: &Path) -> String {
 
 pub fn systemd_unit(binary: &Path, config: &Path) -> String {
     format!(
-        "[Unit]\nDescription=RepoSync daemon\nAfter=network-online.target\n\n[Service]\nExecStart={} --config {} daemon\nRestart=always\nRestartSec=5\nNice=10\nIOSchedulingClass=idle\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=MacSync daemon\nAfter=network-online.target\n\n[Service]\nExecStart={} --config {} daemon\nRestart=always\nRestartSec=5\nNice=10\nIOSchedulingClass=idle\n\n[Install]\nWantedBy=default.target\n",
         binary.display(),
         config.display()
     )
@@ -47,7 +47,7 @@ pub fn install_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         home.join("Library/LaunchAgents").join(format!("{LABEL}.plist"))
     } else {
-        home.join(".config/systemd/user/reposync.service")
+        home.join(".config/systemd/user/macsync.service")
     }
 }
 
@@ -57,10 +57,10 @@ mod tests {
 
     #[test]
     fn renders() {
-        let p = launchd_plist(Path::new("/usr/local/bin/reposync"), Path::new("/c.toml"), Path::new("/logs"));
-        assert!(p.contains("<string>/usr/local/bin/reposync</string>"));
+        let p = launchd_plist(Path::new("/usr/local/bin/macsync"), Path::new("/c.toml"), Path::new("/logs"));
+        assert!(p.contains("<string>/usr/local/bin/macsync</string>"));
         assert!(p.contains("KeepAlive"));
-        let u = systemd_unit(Path::new("/bin/reposync"), Path::new("/c.toml"));
-        assert!(u.contains("ExecStart=/bin/reposync --config /c.toml daemon"));
+        let u = systemd_unit(Path::new("/bin/macsync"), Path::new("/c.toml"));
+        assert!(u.contains("ExecStart=/bin/macsync --config /c.toml daemon"));
     }
 }

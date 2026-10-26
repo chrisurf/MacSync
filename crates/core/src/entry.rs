@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::hash::Hash;
 use crate::vv::VersionVector;
 
-/// Type of a file system object that RepoSync can transfer.
+/// Type of a file system object that MacSync can transfer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum Kind {
     File,

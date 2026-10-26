@@ -1,4 +1,4 @@
-# RepoSync – build, install, test and operate on macOS (and Linux).
+# MacSync – build, install, test and operate on macOS (and Linux).
 #
 #   make help        list all targets
 #   make doctor      check prerequisites (read-only)
@@ -11,8 +11,8 @@ SHELL      := /bin/bash
 
 PREFIX     ?= $(HOME)/.local
 BINDIR     ?= $(PREFIX)/bin
-CONFIG     ?= $(HOME)/.config/reposync/config.toml
-ROOT       ?= $(HOME)/RepoSyncTest
+CONFIG     ?= $(HOME)/.config/macsync/config.toml
+ROOT       ?= $(HOME)/MacSync
 NAME       ?= $(shell scutil --get ComputerName 2>/dev/null || hostname -s)
 MODE       ?= two-way
 PEER       ?=
@@ -20,8 +20,8 @@ HOST       ?=
 CODE       ?=
 PORT       ?= 47123
 CARGO      ?= cargo
-BIN        := target/release/reposync
-RS         := $(BINDIR)/reposync --config $(CONFIG)
+BIN        := target/release/macsync
+RS         := $(BINDIR)/macsync --config $(CONFIG)
 export BINDIR CONFIG
 
 ##@ Setup
@@ -51,37 +51,43 @@ tools: ## Install dev tools (cargo-deny for security/licence checks)
 
 .PHONY: build
 build: ## Build the optimised release binary (uses Cargo.lock exactly)
-	$(CARGO) build --release --locked -p reposync-cli
+	$(CARGO) build --release --locked -p macsync-cli
 	@$(BIN) --version
 
 .PHONY: install
-install: build ## Build and install reposync to $(BINDIR)
+install: build ## Build and install macsync to $(BINDIR)
 	@mkdir -p $(BINDIR)
-	install -m 755 $(BIN) $(BINDIR)/reposync
-	install -m 755 scripts/connect.sh $(BINDIR)/reposync-connect
-	@echo "installed $$($(BINDIR)/reposync --version) → $(BINDIR)/reposync"
+	install -m 755 $(BIN) $(BINDIR)/macsync
+	install -m 755 scripts/connect.sh $(BINDIR)/macsync-connect
+	@rm -f $(BINDIR)/reposync $(BINDIR)/reposync-connect # names up to 0.2.x
+	@$(BINDIR)/macsync migrate | grep -v '^nothing' || true
+	@echo "installed $$($(BINDIR)/macsync --version) → $(BINDIR)/macsync"
 	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "note: add $(BINDIR) to PATH: echo 'export PATH=\"$(BINDIR):\$$PATH\"' >> ~/.zshrc";; esac
 
 .PHONY: app
-app: ## Build the menu bar app build/RepoSync.app (Apple Silicon)
+app: ## Build the menu bar app build/MacSync.app (Apple Silicon)
 	scripts/build-app.sh
 
 .PHONY: pkg
-pkg: app ## Build the installer build/RepoSync-<version>-arm64.pkg
+pkg: app ## Build the installer build/MacSync-<version>-arm64.pkg
 	scripts/build-pkg.sh
 
+.PHONY: screenshots
+screenshots: app ## Render the README screenshots (docs/images) from demo data
+	scripts/screenshots.sh
+
 .PHONY: install-app
-install-app: pkg ## Build and install RepoSync.app into /Applications (asks for your password)
-	sudo installer -pkg build/RepoSync-$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)-arm64.pkg -target /
+install-app: pkg ## Build and install MacSync.app into /Applications (asks for your password)
+	sudo installer -pkg build/MacSync-$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)-arm64.pkg -target /
 
 .PHONY: uninstall
 uninstall: ## Remove the installed binary (configuration and data stay)
-	rm -f $(BINDIR)/reposync $(BINDIR)/reposync-connect
+	rm -f $(BINDIR)/macsync $(BINDIR)/macsync-connect
 
 .PHONY: version
 version: ## Show installed, built and repository versions
 	@echo "repository: $$(git describe --always --dirty --abbrev=10) on $$(git rev-parse --abbrev-ref HEAD)"
-	@echo "installed : $$($(BINDIR)/reposync --version 2>/dev/null || echo 'not installed')"
+	@echo "installed : $$($(BINDIR)/macsync --version 2>/dev/null || echo 'not installed')"
 	@echo "toolchain : $$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml) (pinned)"
 
 .PHONY: update
@@ -117,7 +123,7 @@ e2e: build ## End-to-end test: two daemons on this machine
 
 .PHONY: bench
 bench: ## Benchmark with 100 000 files (in-process)
-	$(CARGO) test --release --locked -p reposync-engine --test bench -- --ignored --nocapture
+	$(CARGO) test --release --locked -p macsync-engine --test bench -- --ignored --nocapture
 
 .PHONY: check
 check: lint test audit ## Everything CI checks (lint, tests, audit)
@@ -155,7 +161,7 @@ connect: ## One step on both Macs: choose directory, find the other Mac, pair, s
 	  $(ARGS) $(if $(filter command line environment,$(origin ROOT)),"$(ROOT)",)
 
 .PHONY: connect-help
-connect-help: ## All options of reposync-connect
+connect-help: ## All options of macsync-connect
 	@scripts/connect.sh --help
 
 .PHONY: stop
@@ -172,7 +178,7 @@ sandbox: ## Create a safe test root $(ROOT) with a sample Git repo and folder
 
 .PHONY: init
 init: ## Create the configuration (ROOT, NAME, MODE, optional PEER=host:port)
-	$(BINDIR)/reposync --config $(CONFIG) init --root "$(ROOT)" --name "$(NAME)" --mode $(MODE) $(if $(PEER),--peer $(PEER),)
+	$(BINDIR)/macsync --config $(CONFIG) init --root "$(ROOT)" --name "$(NAME)" --mode $(MODE) $(if $(PEER),--peer $(PEER),)
 
 .PHONY: pair-listen
 pair-listen: ## Show a pairing code and wait for the other Mac
@@ -185,7 +191,7 @@ pair-connect: ## Pair with the listening Mac: make pair-connect HOST=other-mac.l
 
 .PHONY: run
 run: ## Run the daemon in the foreground (recommended in Terminal.app for testing)
-	REPOSYNC_LOG=$${REPOSYNC_LOG:-info} $(RS) daemon
+	MACSYNC_LOG=$${MACSYNC_LOG:-info} $(RS) daemon
 
 .PHONY: status
 status: ## Show the synchronisation state
@@ -201,5 +207,5 @@ service-install: ## Install the LaunchAgent (see the Local Network note in the d
 
 .PHONY: service-uninstall
 service-uninstall: ## Remove the LaunchAgent
-	-launchctl bootout gui/$$(id -u)/com.reposync.daemon 2>/dev/null
+	-launchctl bootout gui/$$(id -u)/com.alpineperspective.macsync.daemon 2>/dev/null
 	$(RS) service uninstall

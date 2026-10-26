@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use reposync_store::{ConflictRow, LogRow};
+use macsync_store::{ConflictRow, LogRow};
 use serde_json::Value;
 
 fn s(v: &Value) -> String {
@@ -15,7 +15,7 @@ fn s(v: &Value) -> String {
 
 pub fn status(v: &Value) {
     println!(
-        "RepoSync · {} ({}) · {} · root {}{}",
+        "MacSync · {} ({}) · {} · root {}{}",
         s(&v["name"]),
         s(&v["device"]),
         s(&v["mode"]),
@@ -125,21 +125,21 @@ pub fn conflicts(rows: &[ConflictRow]) {
             c.unit,
             c.path,
             state,
-            reposync_fs::time::rfc3339(c.created_ms)
+            macsync_fs::time::rfc3339(c.created_ms)
         );
         for r in &c.remotes {
             println!("       remote: {} ({}){}", r.path, r.vv.display(), if r.deleted { " deleted" } else { "" });
         }
         println!("       stored: {}", c.stored);
     }
-    println!("\nresolve with: reposync resolve <id> --keep local|remote|both");
+    println!("\nresolve with: macsync resolve <id> --keep local|remote|both");
 }
 
 pub fn journal(rows: &[LogRow]) {
     for r in rows {
         println!(
             "{}  {:<10} {:<24} {:<40} {}{}",
-            reposync_fs::time::rfc3339(r.ts_ms),
+            macsync_fs::time::rfc3339(r.ts_ms),
             r.action,
             r.unit,
             r.path,
@@ -177,5 +177,28 @@ fn collect(base: &Path, dir: &Path, out: &mut Vec<String>) {
         } else {
             out.push(p.strip_prefix(base).unwrap_or(&p).to_string_lossy().into_owned());
         }
+    }
+}
+
+/// `macsync browse`: one line per item.
+pub fn browse(v: &Value) {
+    let peer = v["peer"].as_str().unwrap_or("peer");
+    if v["online"] != Value::Bool(true) {
+        println!("({peer} not reachable – local view only)");
+    }
+    for i in v["items"].as_array().into_iter().flatten() {
+        let state = match i["state"].as_str().unwrap_or("") {
+            "synced" => "in sync".to_string(),
+            "to-peer" => format!("→ {peer}"),
+            "from-peer" => format!("← {peer}"),
+            "delete-on-peer" => format!("delete on {peer}"),
+            "delete-here" => "delete here".to_string(),
+            "differs" => "changes inside".to_string(),
+            "unknown" => "?".to_string(),
+            s => s.to_string(),
+        };
+        let dir = if i["kind"] == "dir" { "/" } else { "" };
+        let paused = if i["paused"] == Value::Bool(true) { " (paused)" } else { "" };
+        println!("{:<22} {}{dir}{paused}", state, i["name"].as_str().unwrap_or(""));
     }
 }

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
+
+### Umbenennung RepoSync → MacSync (ADR-0011)
+- Alles heisst jetzt MacSync: Werkzeug `macsync` / `macsync-connect`, Crates
+  `macsync-*`, Konfiguration `~/.config/macsync/`, Zustand
+  `~/Library/Application Support/MacSync/` mit `macsync.db`, Privatordner
+  `.macsync/`, Umgebungsvariablen `MACSYNC_*`, Bonjour `_macsync._tcp`,
+  LaunchAgent `com.alpineperspective.macsync.daemon`
+- Bestehende Installationen werden automatisch übernommen (`macsync migrate`,
+  läuft vor jedem Befehl und beim App-Start); Kopplung bleibt erhalten
+- Protokollversion 2: **beide Macs aktualisieren** – 0.3.0 verbindet sich
+  nicht mit älteren Versionen
+- README neu mit Screenshots; `make screenshots` erzeugt sie mit Demo-Daten
+- `open -a MacSync --args --manager [Ordner]` öffnet den Manager direkt
+
+### Geändert
+- Die App heisst **MacSync** (`MacSync.app`, Installer
+  `MacSync-<version>-arm64.pkg`, Bundle-ID `com.alpineperspective.macsync`).
+  Der Installer entfernt `RepoSync.app` aus 0.2.0; Konfiguration, Kopplung und
+  das CLI `reposync` bleiben unverändert
+- Menüleisten-Symbol: Synchronisationspfeile plus farbiger Zustandspunkt –
+  grün ✓ synchron, blau … überträgt, orange ❙❙ pausiert, orange ! anderer Mac
+  nicht erreichbar, rot ! Konflikt, rot ✕ gestoppt
+- Bereits eingerichtete Macs starten MacSync beim ersten Start künftig bei der
+  Anmeldung (abschaltbar in den Einstellungen)
+
+### Hinzugefügt
+- **Synchronisations-Manager** (Menü → Synchronisations-Manager …, ⌘M):
+  Verzeichnisansicht mit dem Zustand jeder Datei auf beiden Macs (synchron,
+  wird gesendet/geholt, wird gelöscht, Konflikt), Filter „Nicht synchron“,
+  Suche; Aktionen Jetzt synchronisieren, Pausieren (Hauptordner), Konflikt
+  lösen, Im Finder zeigen, In den Papierkorb; links ein ein-/ausblendbarer,
+  in der Breite verstellbarer Verzeichnisbaum mit Markierung geänderter
+  Ordner (docs/sync-manager.md)
+- **Fortschritt**: Prozent, Dateien, Bytes, aktuelle Datei, Geschwindigkeit
+  und Restzeit im Menü und im Manager; der sendende Mac zeigt „Sende an …“
+- Das Menüleisten-Symbol dreht sich während der Synchronisation
+- Gelöschte Hauptordner verschwinden aus dem Manager, sobald beide Macs die
+  Löschung kennen (vorher erschienen sie wegen der 30 Tage aufbewahrten
+  Löschvermerke weiter als „vorhanden · synchron“); bis dahin „Wird auf …
+  gelöscht“ bzw. „Wird hier gelöscht“
+- `reposync browse [VERZEICHNIS] [--json]`, IPC `browse`; `status` liefert
+  `transfer`, `served_bytes`, `served_ms`
+- App-Icon (`app/Resources/AppIcon.icns`, erzeugt von `app/Icon/make-icon.swift`)
+- Entwickler-Angabe: Alpine Perspective GmbH, alpineperspective.com – im
+  Fenster „Über MacSync“, in den Einstellungen und im Copyright der App
+
 ## 0.2.0 – Mac-App (2026-10-26)
 
 ### Hinzugefügt

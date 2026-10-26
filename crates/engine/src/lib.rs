@@ -10,6 +10,7 @@
 //! * [`Engine::resolve`] resolves recorded conflicts.
 
 mod apply;
+pub mod browse;
 mod capture;
 mod plan;
 mod pull;
@@ -23,15 +24,15 @@ pub use resolve::Choice;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::Result;
-use reposync_core::proto::{DirListing, UnitRoot};
-use reposync_core::{DeviceId, Entry, Hash, Policy, Tree, UnitKind};
-use reposync_fs::Excludes;
-use reposync_gitaware::Gate;
-use reposync_store::Store;
+use macsync_core::proto::{DirListing, UnitRoot};
+use macsync_core::{DeviceId, Entry, Hash, Policy, Tree, UnitKind};
+use macsync_fs::Excludes;
+use macsync_gitaware::Gate;
+use macsync_store::Store;
 
 /// Operating mode of this device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -99,7 +100,7 @@ impl EngineConfig {
 }
 
 /// The remote side as seen by the puller. Implemented in-process by
-/// [`Engine`] itself (tests) and over the network by `reposync-net`.
+/// [`Engine`] itself (tests) and over the network by `macsync-net`.
 pub trait PeerApi {
     fn roots(&self) -> Result<Vec<UnitRoot>>;
     fn tree(&self, unit: &str, dirs: &[String]) -> Result<Vec<DirListing>>;
@@ -130,20 +131,64 @@ pub struct Engine {
     /// Fault injection: abort the apply after this many file operations
     /// (negative = disabled).
     fault_after_ops: AtomicI64,
+    /// The transfer in progress (receiving side), for progress display.
+    transfer: Mutex<Option<Transfer>>,
+    /// Bytes served to the peer so far and when the last ones went out.
+    served_bytes: AtomicU64,
+    served_ms: AtomicI64,
+}
+
+/// Progress of the content transfer of one pull (receiving side).
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Transfer {
+    pub unit: String,
+    pub files_total: u64,
+    pub files_done: u64,
+    pub bytes_total: u64,
+    pub bytes_done: u64,
+    pub started_ms: i64,
+    /// Unit-relative path of the file currently being transferred.
+    pub current: String,
 }
 
 impl Engine {
+    /// The content transfer in progress, if any.
+    pub fn transfer(&self) -> Option<Transfer> {
+        self.transfer.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub(crate) fn update_transfer(&self, f: impl FnOnce(&mut Option<Transfer>)) {
+        f(&mut self.transfer.lock().unwrap_or_else(|e| e.into_inner()));
+    }
+
+    /// Total bytes served to the peer and the time of the last served bytes (ms).
+    pub fn served(&self) -> (u64, i64) {
+        (self.served_bytes.load(AtomicOrdering::Relaxed), self.served_ms.load(AtomicOrdering::Relaxed))
+    }
+
+    pub(crate) fn count_served(&self, bytes: u64) {
+        if bytes > 0 {
+            self.served_bytes.fetch_add(bytes, AtomicOrdering::Relaxed);
+            self.served_ms.store(macsync_fs::time::now_ms(), AtomicOrdering::Relaxed);
+        }
+    }
+
     /// Open the engine: database, private directories, crash recovery.
     pub fn open(cfg: EngineConfig) -> Result<Engine> {
         std::fs::create_dir_all(&cfg.root)?;
         std::fs::create_dir_all(&cfg.state_dir)?;
-        let private = cfg.root.join(reposync_fs::PRIVATE_DIR);
+        let private = cfg.root.join(macsync_fs::PRIVATE_DIR);
+        // Staging and trash from the RepoSync era (≤ 0.2.x) move along.
+        let legacy = cfg.root.join(macsync_fs::LEGACY_PRIVATE_DIR);
+        if legacy.is_dir() && !private.exists() {
+            std::fs::rename(&legacy, &private)?;
+        }
         std::fs::create_dir_all(private.join("staging"))?;
         std::fs::create_dir_all(private.join("trash"))?;
         // Keep Spotlight away from staging and trash.
         let _ = std::fs::write(private.join(".metadata_never_index"), b"");
-        let store = Store::open(&cfg.state_dir.join("reposync.db"))?;
-        let case_insensitive = reposync_fs::ops::is_case_insensitive(&private).unwrap_or(false);
+        let store = Store::open(&macsync_store::db_path(&cfg.state_dir)?)?;
+        let case_insensitive = macsync_fs::ops::is_case_insensitive(&private).unwrap_or(false);
         let engine = Engine {
             cfg,
             store: Mutex::new(store),
@@ -152,6 +197,9 @@ impl Engine {
             trees: Mutex::new(HashMap::new()),
             case_insensitive,
             fault_after_ops: AtomicI64::new(-1),
+            transfer: Mutex::new(None),
+            served_bytes: AtomicU64::new(0),
+            served_ms: AtomicI64::new(0),
         };
         engine.recover()?;
         Ok(engine)
@@ -244,7 +292,7 @@ impl Engine {
     }
 
     fn private_dir(&self) -> PathBuf {
-        self.cfg.root.join(reposync_fs::PRIVATE_DIR)
+        self.cfg.root.join(macsync_fs::PRIVATE_DIR)
     }
 
     fn staging_root(&self) -> PathBuf {
@@ -261,7 +309,7 @@ impl Engine {
 
     /// Units below `unit` that are units of their own (nested repositories).
     fn nested_units_of(&self, unit: &str) -> Result<Vec<String>> {
-        if unit == reposync_core::entry::ROOT_UNIT {
+        if unit == macsync_core::entry::ROOT_UNIT {
             return Ok(Vec::new());
         }
         let prefix = format!("{unit}/");
@@ -270,7 +318,7 @@ impl Engine {
 
     /// Remove expired trash, tombstones of in-sync units and old journal rows.
     pub fn housekeeping(&self, in_sync_units: &[String]) -> Result<()> {
-        let now = reposync_fs::time::now_ms();
+        let now = macsync_fs::time::now_ms();
         let day = 86_400_000i64;
         let trash_cutoff = now - self.cfg.trash_retention_days as i64 * day;
         if let Ok(rd) = std::fs::read_dir(self.trash_root()) {
@@ -281,7 +329,7 @@ impl Engine {
                         .unwrap_or(false)
                 });
                 if old {
-                    let _ = reposync_fs::ops::remove_any(&e.path());
+                    let _ = macsync_fs::ops::remove_any(&e.path());
                 }
             }
         }
@@ -308,14 +356,14 @@ impl Engine {
 fn new_tx_id() -> String {
     let mut b = [0u8; 8];
     let _ = getrandom::fill(&mut b);
-    format!("{}-{}", reposync_fs::time::compact_utc(reposync_fs::time::now_ms() / 1000), hex::encode(b))
+    format!("{}-{}", macsync_fs::time::compact_utc(macsync_fs::time::now_ms() / 1000), hex::encode(b))
 }
 
 /// Unit names are relative paths; they must never point into a `.git`
-/// directory or RepoSync's private directory.
+/// directory or MacSync's private directory.
 pub fn validate_unit_name(name: &str) -> Result<()> {
-    reposync_core::path::validate_unit(name).map_err(anyhow::Error::msg)?;
-    if name.split('/').any(|c| c == ".git" || c == reposync_fs::PRIVATE_DIR) {
+    macsync_core::path::validate_unit(name).map_err(anyhow::Error::msg)?;
+    if name.split('/').any(|c| c == ".git" || c == macsync_fs::PRIVATE_DIR) {
         anyhow::bail!("invalid unit name {name:?}");
     }
     Ok(())

@@ -6,7 +6,7 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use reposync_core::Kind;
+use macsync_core::Kind;
 
 /// macOS quarantine attribute (configurable stripping).
 pub const QUARANTINE: &str = "com.apple.quarantine";

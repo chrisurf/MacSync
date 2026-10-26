@@ -1,4 +1,4 @@
-//! `reposync` – command line interface.
+//! `macsync` – command line interface.
 //!
 //! Mutating commands talk to a running daemon over its control socket; if no
 //! daemon runs they are executed directly. Read-only commands read the
@@ -12,22 +12,22 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use reposync_daemon::config::{self, Config};
-use reposync_daemon::ipc::{self, IpcRequest};
-use reposync_daemon::{Daemon, Node};
-use reposync_net::client::HelloInfo;
-use reposync_net::{pairing, Identity};
-use reposync_store::{PeerRow, Store};
+use macsync_daemon::config::{self, Config};
+use macsync_daemon::ipc::{self, IpcRequest};
+use macsync_daemon::{Daemon, Node};
+use macsync_net::client::HelloInfo;
+use macsync_net::{pairing, Identity};
+use macsync_store::{PeerRow, Store};
 use serde_json::{json, Value};
 
 /// Package version plus the Git commit the binary was built from.
 const VERSION: &str =
-    concat!(env!("CARGO_PKG_VERSION"), " (", env!("REPOSYNC_GIT"), ", ", env!("REPOSYNC_GIT_DATE"), ")");
+    concat!(env!("CARGO_PKG_VERSION"), " (", env!("MACSYNC_GIT"), ", ", env!("MACSYNC_GIT_DATE"), ")");
 
 #[derive(Parser)]
-#[command(name = "reposync", version = VERSION, about = "Git-aware LAN synchronisation between two Macs")]
+#[command(name = "macsync", version = VERSION, about = "Git-aware LAN synchronisation between two Macs")]
 struct Cli {
-    /// Configuration file (default: ~/.config/reposync/config.toml or $REPOSYNC_CONFIG).
+    /// Configuration file (default: ~/.config/macsync/config.toml or $MACSYNC_CONFIG).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     /// More log output.
@@ -61,6 +61,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Take over configuration and state from RepoSync (≤ 0.2.x); runs
+    /// automatically before every command.
+    Migrate,
     /// Find Macs that wait for pairing (Bonjour).
     Discover {
         #[arg(long, default_value_t = 4)]
@@ -89,6 +92,14 @@ enum Cmd {
     /// Which paths differ from the peer (and what would happen).
     Diff {
         unit: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// One directory with the state of every item on both Macs.
+    Browse {
+        /// Directory relative to the sync root, e.g. `notes/sub` (default: root).
+        #[arg(default_value = "")]
+        dir: String,
         #[arg(long)]
         json: bool,
     },
@@ -196,13 +207,13 @@ enum ServiceCmd {
 
 fn main() {
     let cli = Cli::parse();
-    reposync_net::set_build_version(VERSION);
+    macsync_net::set_build_version(VERSION);
     let default = match (&cli.cmd, cli.verbose) {
         (_, true) => "debug",
         (Cmd::Daemon, _) => "info",
         _ => "warn",
     };
-    let filter = tracing_subscriber::EnvFilter::try_from_env("REPOSYNC_LOG")
+    let filter = tracing_subscriber::EnvFilter::try_from_env("MACSYNC_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
     if let Err(e) = run(cli) {
@@ -216,7 +227,7 @@ fn config_path(cli: &Cli) -> PathBuf {
 }
 
 fn open_store(cfg: &Config) -> Result<Store> {
-    Store::open(&cfg.state_dir().join("reposync.db"))
+    Store::open(&macsync_store::db_path(&cfg.state_dir())?)
 }
 
 /// Run `req` in the daemon, or `local` if no daemon is running.
@@ -229,6 +240,22 @@ fn via_daemon(cfg: &Config, req: IpcRequest, local: impl FnOnce(&Node) -> Result
 }
 
 fn run(cli: Cli) -> Result<()> {
+    // Only for the standard installation: a test or custom setup passed with
+    // --config must never move the real configuration of the user.
+    let moved =
+        if config_path(&cli) == config::default_config_path() { macsync_daemon::migrate::legacy() } else { Vec::new() };
+    if matches!(cli.cmd, Cmd::Migrate) {
+        if moved.is_empty() {
+            println!("nothing to migrate");
+        }
+        for m in &moved {
+            println!("{m}");
+        }
+        return Ok(());
+    }
+    for m in &moved {
+        eprintln!("migration: {m}");
+    }
     let path = config_path(&cli);
     if let Cmd::Init { root, name, listen, peer, mode, state_dir, force } = &cli.cmd {
         return init(&path, root, name, *listen, peer, mode, state_dir, *force);
@@ -238,7 +265,7 @@ fn run(cli: Cli) -> Result<()> {
     }
     let cfg = Config::load(&path)?;
     match cli.cmd {
-        Cmd::Init { .. } | Cmd::Discover { .. } => unreachable!(),
+        Cmd::Init { .. } | Cmd::Discover { .. } | Cmd::Migrate => unreachable!(),
         Cmd::Pair { cmd } => pair(&cfg, cmd),
         Cmd::Peers => {
             let peers = open_store(&cfg)?.peers()?;
@@ -246,7 +273,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("not paired");
             }
             for p in peers {
-                println!("{}  {}  {}  paired {}", p.device, p.name, p.addr, reposync_fs::time::rfc3339(p.paired_ms));
+                println!("{}  {}  {}  paired {}", p.device, p.name, p.addr, macsync_fs::time::rfc3339(p.paired_ms));
             }
             Ok(())
         }
@@ -261,12 +288,12 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Daemon => {
             let node = Node::open(cfg)?;
             let d = Daemon::start(node)?;
-            eprintln!("reposync daemon running on {} (Ctrl-C to stop)", d.server_addr());
+            eprintln!("macsync daemon running on {} (Ctrl-C to stop)", d.server_addr());
             d.run_until_signal()
         }
         Cmd::Status { unit, json } => {
             let v = via_daemon(&cfg, IpcRequest::Status, |n| {
-                let remote = n.connect_peer().ok().and_then(|p| reposync_engine::PeerApi::roots(&p).ok());
+                let remote = n.connect_peer().ok().and_then(|p| macsync_engine::PeerApi::roots(&p).ok());
                 let map = remote.map(|r| r.into_iter().map(|r| (r.name, r.root)).collect());
                 let mut v = n.status(map.as_ref(), &Default::default())?;
                 v["daemon"] = json!(false);
@@ -290,6 +317,23 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 output::reports(&v, true);
+            }
+            Ok(())
+        }
+        Cmd::Browse { dir, json } => {
+            let (unit, sub) = split_root_path(&cfg, &dir)?;
+            let req = IpcRequest::Browse { unit: unit.clone(), dir: sub.clone() };
+            let v = via_daemon(&cfg, req, |n| {
+                let p = n.connect_peer().ok();
+                let items =
+                    n.engine.browse(p.as_ref().map(|p| p as &dyn macsync_engine::PeerApi), unit.as_deref(), &sub)?;
+                let name = n.engine.store().peers()?.into_iter().last().map(|r| r.name);
+                Ok(json!({ "online": p.is_some(), "peer": name, "items": items }))
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                output::browse(&v);
             }
             Ok(())
         }
@@ -332,7 +376,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Resolve { id, keep } => {
             let v = via_daemon(&cfg, IpcRequest::Resolve { id, choice: keep.clone() }, |n| {
-                let c = reposync_engine::Choice::parse(&keep).context("--keep must be local, remote or both")?;
+                let c = macsync_engine::Choice::parse(&keep).context("--keep must be local, remote or both")?;
                 Ok(json!(n.engine.resolve(id, c)?))
             })?;
             println!("{}", v.as_str().unwrap_or_default());
@@ -340,7 +384,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Log { unit, since, limit, json } => {
             let since_ms = match since {
-                Some(s) => reposync_fs::time::now_ms() - parse_duration(&s)?.as_millis() as i64,
+                Some(s) => macsync_fs::time::now_ms() - parse_duration(&s)?.as_millis() as i64,
                 None => 0,
             };
             let rows = open_store(&cfg)?.journal(since_ms, unit.as_deref(), limit)?;
@@ -365,7 +409,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Prefer { unit, side } => {
-            let p = reposync_core::Prefer::parse(&side).context("side must be local, remote or none")?;
+            let p = macsync_core::Prefer::parse(&side).context("side must be local, remote or none")?;
             if !open_store(&cfg)?.set_prefer(&unit, p)? {
                 bail!("unknown unit {unit}");
             }
@@ -373,7 +417,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Trash { cmd: TrashCmd::List } => {
-            let trash = cfg.root().join(".reposync/trash");
+            let trash = cfg.root().join(".macsync/trash");
             output::trash(&trash)?;
             Ok(())
         }
@@ -400,6 +444,28 @@ fn filter_units(mut v: Value, unit: Option<&str>) -> Value {
         arr.retain(|x| x["name"] == u);
     }
     v
+}
+
+/// Splits a root-relative directory into (unit, unit-relative dir): the
+/// longest known unit name that prefixes the path wins (nested repositories).
+fn split_root_path(cfg: &Config, dir: &str) -> Result<(Option<String>, String)> {
+    let dir = dir.trim_matches('/');
+    if dir.is_empty() || dir == "." {
+        return Ok((None, String::new()));
+    }
+    let mut units: Vec<String> = open_store(cfg)?.units()?.into_iter().map(|u| u.name).collect();
+    units.sort_by_key(|u| std::cmp::Reverse(u.len()));
+    for u in units {
+        if dir == u {
+            return Ok((Some(u), String::new()));
+        }
+        if let Some(rest) = dir.strip_prefix(&format!("{u}/")) {
+            return Ok((Some(u), rest.to_string()));
+        }
+    }
+    // Not a unit here (yet): the first component is the unit.
+    let (u, rest) = dir.split_once('/').unwrap_or((dir, ""));
+    Ok((Some(u.to_string()), rest.to_string()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -433,12 +499,12 @@ fn init(
     std::fs::create_dir_all(cfg.root())?;
     cfg.save(path)?;
     let id = Identity::load_or_create(&cfg.state_dir())?;
-    let _ = Store::open(&cfg.state_dir().join("reposync.db"))?;
+    let _ = Store::open(&macsync_store::db_path(&cfg.state_dir())?)?;
     println!("configuration written to {}", path.display());
     println!("device  {} ({})", cfg.device_name, id.device_id());
     println!("root    {}", cfg.root().display());
     println!("state   {}", cfg.state_dir().display());
-    println!("\nnext: `reposync pair listen` on one Mac, `reposync pair connect <host> <code>` on the other");
+    println!("\nnext: `macsync pair listen` on one Mac, `macsync pair connect <host> <code>` on the other");
     Ok(())
 }
 
@@ -447,7 +513,7 @@ fn local_ips() -> Vec<String> {
         .unwrap_or_default()
         .into_iter()
         .map(|i| i.ip())
-        .filter(|ip| !ip.is_loopback() && ip.is_ipv4() && reposync_net::lan::is_local(ip))
+        .filter(|ip| !ip.is_loopback() && ip.is_ipv4() && macsync_net::lan::is_local(ip))
         .map(|ip| ip.to_string())
         .collect();
     ips.sort();
@@ -459,7 +525,7 @@ fn local_ips() -> Vec<String> {
 fn discover(config_path: &Path, timeout_s: u64, json: bool) -> Result<()> {
     let own = Config::load(config_path).ok().and_then(|c| Identity::load_or_create(&c.state_dir()).ok());
     let own = own.map(|id| id.device_id());
-    let found = reposync_net::discovery::browse_pairing(own.as_deref(), Duration::from_secs(timeout_s))?;
+    let found = macsync_net::discovery::browse_pairing(own.as_deref(), Duration::from_secs(timeout_s))?;
     if json {
         println!("{}", serde_json::to_string(&found)?);
     } else {
@@ -486,7 +552,7 @@ fn store_peer(cfg: &Config, r: &pairing::PairResult) -> Result<Value> {
         name: r.info.name.clone(),
         pubkey: r.pubkey.clone(),
         addr: addr.to_string(),
-        paired_ms: reposync_fs::time::now_ms(),
+        paired_ms: macsync_fs::time::now_ms(),
     })?;
     if r.info.arch != std::env::consts::ARCH {
         warnings.push(format!(
@@ -538,7 +604,7 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             let code = pairing::generate_code();
             // Lets the other Mac find this one without knowing its name.
             let _advert =
-                reposync_net::discovery::Advertiser::start_pairing(&id.device_id(), &cfg.device_name, cfg.pair_port)
+                macsync_net::discovery::Advertiser::start_pairing(&id.device_id(), &cfg.device_name, cfg.pair_port)
                     .map_err(|e| tracing::warn!("Bonjour announcement failed: {e:#}"))
                     .ok();
             let ips = local_ips();
@@ -550,10 +616,10 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             } else {
                 println!("pairing code: {} {}", &code[..3], &code[3..]);
                 if ips.is_empty() {
-                    println!("on the other Mac run: reposync pair connect <this-mac>.local {code}");
+                    println!("on the other Mac run: macsync pair connect <this-mac>.local {code}");
                 }
                 for ip in ips {
-                    println!("on the other Mac run: reposync pair connect {ip}:{} {code}", cfg.pair_port);
+                    println!("on the other Mac run: macsync pair connect {ip}:{} {code}", cfg.pair_port);
                 }
                 println!("waiting up to {timeout_s} s …");
             }
@@ -568,7 +634,7 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             } else {
                 format!("{addr}:{}", cfg.pair_port)
             };
-            let sa = reposync_net::lan::resolve(&with_port)?;
+            let sa = macsync_net::lan::resolve(&with_port)?;
             let r = pairing::connect(sa, &code, &id, &hello, port)?;
             print_paired(&store_peer(cfg, &r)?, json);
             Ok(())
@@ -577,8 +643,8 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
 }
 
 fn restore(cfg: &Config, rel: &str, to: Option<&Path>) -> Result<()> {
-    reposync_core::path::validate(rel).map_err(anyhow::Error::msg)?;
-    let trash = cfg.root().join(".reposync/trash");
+    macsync_core::path::validate(rel).map_err(anyhow::Error::msg)?;
+    let trash = cfg.root().join(".macsync/trash");
     let src = trash.join(rel);
     if std::fs::symlink_metadata(&src).is_err() {
         bail!("{} not found in the trash", rel);
@@ -595,13 +661,13 @@ fn restore(cfg: &Config, rel: &str, to: Option<&Path>) -> Result<()> {
     if let Some(p) = dest.parent() {
         std::fs::create_dir_all(p)?;
     }
-    reposync_fs::ops::copy_tree(&src, &dest)?;
+    macsync_fs::ops::copy_tree(&src, &dest)?;
     println!("restored {}", dest.display());
     Ok(())
 }
 
 fn service(cfg: &Config, config_path: &Path, cmd: ServiceCmd) -> Result<()> {
-    use reposync_daemon::service as svc;
+    use macsync_daemon::service as svc;
     let bin = std::env::current_exe()?;
     let def = if cfg!(target_os = "macos") {
         svc::launchd_plist(&bin, config_path, &cfg.state_dir())
@@ -620,7 +686,7 @@ fn service(cfg: &Config, config_path: &Path, cmd: ServiceCmd) -> Result<()> {
             if cfg!(target_os = "macos") {
                 println!("activate with: launchctl bootstrap gui/$(id -u) {}", target.display());
             } else {
-                println!("activate with: systemctl --user daemon-reload && systemctl --user enable --now reposync");
+                println!("activate with: systemctl --user daemon-reload && systemctl --user enable --now macsync");
             }
         }
         ServiceCmd::Uninstall => {

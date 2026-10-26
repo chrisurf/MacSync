@@ -7,14 +7,14 @@ Begründungen für Abweichungen stehen in den [ADRs](adr/).
 
 ```mermaid
 flowchart BT
-  core[reposync-core<br/>Datenmodell, Merkle, decide, Protokoll]
-  fs[reposync-fs<br/>Scan, Metadaten, Staging, Papierkorb]
-  git[reposync-gitaware<br/>Ruhe-Gate, Index-Hash, Reflog-Merge]
-  store[reposync-store<br/>SQLite WAL]
-  engine[reposync-engine<br/>Capture, Serve, Pull, Apply, Recovery]
-  net[reposync-net<br/>Noise/TCP, Pairing, LAN, mDNS]
-  daemon[reposync-daemon<br/>Watcher, Scheduler, IPC]
-  cli[reposync-cli<br/>Binary reposync]
+  core[macsync-core<br/>Datenmodell, Merkle, decide, Protokoll]
+  fs[macsync-fs<br/>Scan, Metadaten, Staging, Papierkorb]
+  git[macsync-gitaware<br/>Ruhe-Gate, Index-Hash, Reflog-Merge]
+  store[macsync-store<br/>SQLite WAL]
+  engine[macsync-engine<br/>Capture, Serve, Pull, Apply, Recovery]
+  net[macsync-net<br/>Noise/TCP, Pairing, LAN, mDNS]
+  daemon[macsync-daemon<br/>Watcher, Scheduler, IPC]
+  cli[macsync-cli<br/>Binary macsync]
   fs --> core
   git --> core
   store --> core
@@ -91,7 +91,7 @@ sequenceDiagram
 ```
 
 * Vor jedem Überschreiben wird die alte Version per Hardlink (O(1)) in
-  `<root>/.reposync/trash/<tx>/` gesichert; Löschungen werden dorthin verschoben.
+  `<root>/.macsync/trash/<tx>/` gesichert; Löschungen werden dorthin verschoben.
 * Ein Ordner, der nach dem Löschen seiner bekannten Kinder nicht leer ist
   (nicht synchronisierte Dateien), bleibt erhalten.
 * Schlägt `git fsck --connectivity-only` fehl, werden in dieser Transaktion
@@ -143,9 +143,9 @@ Ergänzend:
 
 | Ort | Inhalt |
 | --- | --- |
-| `~/.config/reposync/config.toml` | Konfiguration |
-| `<state_dir>/reposync.db` | SQLite (WAL) |
+| `~/.config/macsync/config.toml` | Konfiguration |
+| `<state_dir>/macsync.db` | SQLite (WAL) |
 | `<state_dir>/identity.key` | X25519-Schlüsselpaar (0600) |
 | `<state_dir>/conflicts/` | fremde Versionen bei Konflikten |
-| `<root>/.reposync/staging/` | Staging je Transaktion |
-| `<root>/.reposync/trash/` | Papierkorb (14 Tage) |
+| `<root>/.macsync/staging/` | Staging je Transaktion |
+| `<root>/.macsync/trash/` | Papierkorb (14 Tage) |

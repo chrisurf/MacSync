@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --release
-install -m 755 target/release/reposync /usr/local/bin/reposync
+install -m 755 target/release/macsync /usr/local/bin/macsync
 ```
 
 Voraussetzungen: macOS (APFS) oder Linux, `git` im `PATH`. Auf macOS beim
@@ -15,34 +15,34 @@ dem Binary *Festplattenvollzugriff* geben (Dokumente-Ordner).
 
 ```sh
 # beide Macs
-reposync init --root ~/Code --name "MacBook Pro"
+macsync init --root ~/Code --name "MacBook Pro"
 
 # Mac A: Code anzeigen               Mac B: Code eingeben
-reposync pair listen                 reposync pair connect 192.168.1.20:47124 123456
+macsync pair listen                 macsync pair connect 192.168.1.20:47124 123456
 ```
 
 Beim Pairing wird gewarnt, wenn CPU-Architektur oder Root-Pfad abweichen
 (native Module in `node_modules`, absolute Pfade in virtualenvs).
-Ein neues Pairing ersetzt das alte; `reposync unpair <device>` widerruft den
+Ein neues Pairing ersetzt das alte; `macsync unpair <device>` widerruft den
 Zugriff sofort.
 
 Dienst:
 
 ```sh
-reposync service install     # LaunchAgent bzw. systemd-User-Unit
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.reposync.daemon.plist
+macsync service install     # LaunchAgent bzw. systemd-User-Unit
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.alpineperspective.macsync.daemon.plist
 ```
 
 Erst-Sync grosser Datenmengen: beide Macs per Thunderbolt-Kabel
 (Thunderbolt Bridge) oder Ethernet verbinden und `[peer] address` auf die
 Bridge-Adresse setzen.
 
-## Konfiguration (`~/.config/reposync/config.toml`)
+## Konfiguration (`~/.config/macsync/config.toml`)
 
 ```toml
 device_name = "MacBook Pro"
 root = "/Users/chris/Code"
-# state_dir = "~/Library/Application Support/RepoSync"
+# state_dir = "~/Library/Application Support/MacSync"
 listen = "0.0.0.0:47123"      # Verbindungen werden nur aus dem LAN angenommen
 pair_port = 47124
 mode = "two-way"              # two-way | mirror-send | mirror-receive
@@ -73,17 +73,17 @@ Konfigurationsänderungen werden beim Neustart des Daemons übernommen.
 
 | Befehl | Zweck |
 | --- | --- |
-| `reposync status [unit] [--json]` | Zustand, Root-Hashes beider Seiten, Konflikte |
-| `reposync diff [unit]` | Trockenlauf: abweichende Pfade und geplante Aktion mit Grund |
-| `reposync sync [units…] [--dry-run]` | sofort synchronisieren |
-| `reposync verify [unit]` | vollständiges Neu-Hashen, meldet „stille“ Änderungen |
-| `reposync conflicts [--all]` | Konflikte inkl. Speicherort der fremden Version |
-| `reposync resolve <id> --keep local\|remote\|both` | Konflikt lösen |
-| `reposync log [--unit u] [--since 1h] [--json]` | Journal |
-| `reposync pause [unit]` / `resume [unit]` | anhalten / fortsetzen |
-| `reposync prefer <unit> local\|remote\|none` | „dieser Mac gewinnt“ |
-| `reposync trash list` / `restore <pfad> [--to ziel]` | Papierkorb |
-| `reposync peers` / `unpair <device>` | Peers verwalten |
+| `macsync status [unit] [--json]` | Zustand, Root-Hashes beider Seiten, Konflikte |
+| `macsync diff [unit]` | Trockenlauf: abweichende Pfade und geplante Aktion mit Grund |
+| `macsync sync [units…] [--dry-run]` | sofort synchronisieren |
+| `macsync verify [unit]` | vollständiges Neu-Hashen, meldet „stille“ Änderungen |
+| `macsync conflicts [--all]` | Konflikte inkl. Speicherort der fremden Version |
+| `macsync resolve <id> --keep local\|remote\|both` | Konflikt lösen |
+| `macsync log [--unit u] [--since 1h] [--json]` | Journal |
+| `macsync pause [unit]` / `resume [unit]` | anhalten / fortsetzen |
+| `macsync prefer <unit> local\|remote\|none` | „dieser Mac gewinnt“ |
+| `macsync trash list` / `restore <pfad> [--to ziel]` | Papierkorb |
+| `macsync peers` / `unpair <device>` | Peers verwalten |
 
 Läuft ein Daemon, gehen ändernde Befehle über seinen Steuer-Socket; sonst
 werden sie direkt ausgeführt.
@@ -106,6 +106,6 @@ werden sie direkt ausgeführt.
 | `peer … not reachable` | Peer-Daemon läuft nicht, Firewall, Gäste-WLAN mit Client-Isolation → `[peer] address` setzen |
 | Einheit bleibt `waiting: index.lock exists` | ein Git-Befehl hängt oder ist abgestürzt; `.git/index.lock` prüfen |
 | Konflikt `git-state` | auf beiden Macs wurde im selben Repo committet: Objekte sind vereinigt, `git log --all`/`git merge <hash>` nutzen, dann `resolve --keep local` oder `remote` |
-| Datei versehentlich überschrieben | `reposync trash list`, `reposync restore <tx>/<pfad>` |
-| Datenbank beschädigt | Daemon stoppen, `reposync.db*` löschen, starten: Neuaufbau per Scan; abweichende Stände werden als Konflikte gemeldet, nie überschrieben |
-| Ausführliche Logs | `REPOSYNC_LOG=reposync=debug reposync daemon` |
+| Datei versehentlich überschrieben | `macsync trash list`, `macsync restore <tx>/<pfad>` |
+| Datenbank beschädigt | Daemon stoppen, `macsync.db*` löschen, starten: Neuaufbau per Scan; abweichende Stände werden als Konflikte gemeldet, nie überschrieben |
+| Ausführliche Logs | `MACSYNC_LOG=macsync=debug macsync daemon` |

@@ -1,8 +1,8 @@
 //! Exclusion rules.
 //!
-//! RepoSync synchronises *everything* below the root unless the user
+//! MacSync synchronises *everything* below the root unless the user
 //! explicitly excludes it. The only built-in exclusions are macOS volume
-//! metadata files (switchable) and RepoSync's own private directory.
+//! metadata files (switchable) and MacSync's own private directory.
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
@@ -41,7 +41,7 @@ impl Excludes {
 
     /// `root_rel` is the path relative to the sync root, `name` its last component.
     pub fn is_excluded(&self, root_rel: &str, name: &str) -> bool {
-        if root_rel == crate::PRIVATE_DIR || root_rel.starts_with(".reposync/") {
+        if crate::is_private(root_rel) {
             return true;
         }
         self.names.iter().any(|n| n == name) || (!self.patterns.is_empty() && self.globs.is_match(root_rel))
@@ -60,7 +60,10 @@ mod tests {
     fn defaults_and_globs() {
         let ex = Excludes::new(&["**/target".into(), "Scratch/*.tmp".into()], true).unwrap();
         assert!(ex.is_excluded("a/.DS_Store", ".DS_Store"));
+        assert!(ex.is_excluded(".macsync", ".macsync"));
+        assert!(ex.is_excluded(".macsync/trash/x", "x"));
         assert!(ex.is_excluded(".reposync", ".reposync"));
+        assert!(!ex.is_excluded(".macsyncx", ".macsyncx"));
         assert!(ex.is_excluded("proj/target", "target"));
         assert!(ex.is_excluded("Scratch/x.tmp", "x.tmp"));
         assert!(!ex.is_excluded("proj/node_modules/x", "x"));

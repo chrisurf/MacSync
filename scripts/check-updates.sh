@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reports available updates for everything RepoSync depends on:
+# Reports available updates for everything MacSync depends on:
 #   1. the pinned Rust toolchain (rust-toolchain.toml) vs. the latest stable
 #   2. crates: compatible updates (Cargo.lock) and new major versions
 #   3. known security advisories (RustSec, via cargo-deny if installed)

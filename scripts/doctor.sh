@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Checks everything needed to build and run RepoSync on this machine and
+# Checks everything needed to build and run MacSync on this machine and
 # explains how to fix what is missing. Read-only: changes nothing.
 #
 # Usage: scripts/doctor.sh  (or: make doctor)
 set -uo pipefail
 
 BINDIR="${BINDIR:-$HOME/.local/bin}"
-CONFIG="${CONFIG:-$HOME/.config/reposync/config.toml}"
+CONFIG="${CONFIG:-$HOME/.config/macsync/config.toml}"
 cd "$(dirname "$0")/.."
 
 ok=0 warn=0 bad=0
@@ -85,12 +85,12 @@ if git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
 fi
 
 section "Installation"
-if [ -x "$BINDIR/reposync" ]; then
-  v=$("$BINDIR/reposync" --version 2>/dev/null)
-  if printf '%s' "$v" | grep -q "$head"; then pass "$BINDIR/reposync is current: $v"; else
-    note "$BINDIR/reposync is not built from HEAD ($v)"; hint "make install"; fi
+if [ -x "$BINDIR/macsync" ]; then
+  v=$("$BINDIR/macsync" --version 2>/dev/null)
+  if printf '%s' "$v" | grep -q "$head"; then pass "$BINDIR/macsync is current: $v"; else
+    note "$BINDIR/macsync is not built from HEAD ($v)"; hint "make install"; fi
 else
-  note "reposync not installed in $BINDIR"; hint "make install"
+  note "macsync not installed in $BINDIR"; hint "make install"
 fi
 case ":$PATH:" in
   *":$BINDIR:"*) pass "$BINDIR is in PATH" ;;
@@ -106,10 +106,10 @@ if [ -f "$CONFIG" ]; then
   case "$root" in
     "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Downloads"*|"$HOME/Library/Mobile Documents"*)
       note "root is in a privacy-protected or iCloud folder"
-      hint "macOS will ask Terminal for access; for the first test prefer ~/RepoSyncTest" ;;
+      hint "macOS will ask Terminal for access; for the first test prefer ~/MacSync" ;;
   esac
-  if [ -x "$BINDIR/reposync" ]; then
-    peers=$("$BINDIR/reposync" --config "$CONFIG" peers 2>/dev/null)
+  if [ -x "$BINDIR/macsync" ]; then
+    peers=$("$BINDIR/macsync" --config "$CONFIG" peers 2>/dev/null)
     if [ -n "$peers" ] && [ "$peers" != "not paired" ]; then pass "paired: $peers"; else note "not paired yet"; hint "make pair-listen (one Mac) / make pair-connect HOST=… CODE=… (other Mac)"; fi
   fi
 else
@@ -124,8 +124,8 @@ if [ $IS_MAC = 1 ]; then
   done
   fw=$(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null)
   case "$fw" in
-    *enabled*|*"State = 1"*) note "macOS firewall is on: allow incoming connections for reposync when asked"
-       hint "or: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $BINDIR/reposync --unblockapp $BINDIR/reposync" ;;
+    *enabled*|*"State = 1"*) note "macOS firewall is on: allow incoming connections for macsync when asked"
+       hint "or: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $BINDIR/macsync --unblockapp $BINDIR/macsync" ;;
     *) pass "macOS firewall off (no prompt for incoming connections)" ;;
   esac
   if [ "${TERM_PROGRAM:-}" = "Apple_Terminal" ]; then

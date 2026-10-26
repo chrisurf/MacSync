@@ -1,10 +1,10 @@
-//! TOML configuration (`~/.config/reposync/config.toml`).
+//! TOML configuration (`~/.config/macsync/config.toml`).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use reposync_engine::{EngineConfig, Mode};
+use macsync_engine::{EngineConfig, Mode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -15,8 +15,8 @@ pub struct Config {
     /// The root directory whose children are synchronised.
     pub root: PathBuf,
     /// Database, identity and conflict store. Defaults to
-    /// `~/Library/Application Support/RepoSync` (macOS) or
-    /// `$XDG_DATA_HOME/reposync`.
+    /// `~/Library/Application Support/MacSync` (macOS) or
+    /// `$XDG_DATA_HOME/macsync`.
     pub state_dir: Option<PathBuf>,
     /// Address of the protocol server.
     pub listen: SocketAddr,
@@ -90,8 +90,8 @@ impl Default for Config {
             device_name: hostname(),
             root: home().join("Code"),
             state_dir: None,
-            listen: SocketAddr::from(([0, 0, 0, 0], reposync_net::DEFAULT_PORT)),
-            pair_port: reposync_net::DEFAULT_PORT + 1,
+            listen: SocketAddr::from(([0, 0, 0, 0], macsync_net::DEFAULT_PORT)),
+            pair_port: macsync_net::DEFAULT_PORT + 1,
             mode: "two-way".into(),
             peer: PeerConfig { address: None, discovery: true },
             sync: SyncConfig::default(),
@@ -129,27 +129,27 @@ pub fn expand(p: &Path) -> PathBuf {
 
 /// Default location of the configuration file.
 pub fn default_config_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("REPOSYNC_CONFIG") {
+    if let Some(p) = std::env::var_os("MACSYNC_CONFIG") {
         return PathBuf::from(p);
     }
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config"));
-    base.join("reposync").join("config.toml")
+    base.join("macsync").join("config.toml")
 }
 
 /// Default state directory for this platform.
 pub fn default_state_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/RepoSync")
+        home().join("Library/Application Support/MacSync")
     } else {
         let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"));
-        base.join("reposync")
+        base.join("macsync")
     }
 }
 
 impl Config {
     pub fn load(path: &Path) -> Result<Config> {
         let s = std::fs::read_to_string(path)
-            .with_context(|| format!("read config {} (run `reposync init` first)", path.display()))?;
+            .with_context(|| format!("read config {} (run `macsync init` first)", path.display()))?;
         let cfg: Config = toml::from_str(&s).with_context(|| format!("parse config {}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
@@ -160,14 +160,14 @@ impl Config {
             std::fs::create_dir_all(p)?;
         }
         let body = toml::to_string_pretty(self)?;
-        std::fs::write(path, format!("# RepoSync configuration\n# Docs: docs/operations.md\n\n{body}"))?;
+        std::fs::write(path, format!("# MacSync configuration\n# Docs: docs/operations.md\n\n{body}"))?;
         Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
         Mode::parse(&self.mode).with_context(|| format!("unknown mode {:?}", self.mode))?;
-        reposync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes).context("invalid exclude glob")?;
-        if !reposync_net::lan::is_local(&self.listen.ip()) && !self.listen.ip().is_unspecified() {
+        macsync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes).context("invalid exclude glob")?;
+        if !macsync_net::lan::is_local(&self.listen.ip()) && !self.listen.ip().is_unspecified() {
             anyhow::bail!("listen address {} is not a local address", self.listen);
         }
         if let Some(a) = &self.peer.address {
@@ -194,7 +194,7 @@ impl Config {
     pub fn engine_config(&self, device: &str) -> Result<EngineConfig> {
         let mut e = EngineConfig::new(self.root(), self.state_dir(), device);
         e.mode = self.mode();
-        e.excludes = reposync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes)?;
+        e.excludes = macsync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes)?;
         e.strip_quarantine = self.sync.strip_quarantine;
         e.fsck_after_apply = self.sync.fsck_after_apply;
         e.tombstone_ttl_days = self.sync.tombstone_ttl_days;

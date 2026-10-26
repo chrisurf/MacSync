@@ -1,4 +1,4 @@
-# RepoSync – Implementierungsplan MVP (v0.1)
+# MacSync – Implementierungsplan MVP (v0.1)
 
 Stand: 20.10.2026 · Grundlage: [`concept.md`](concept.md)
 
@@ -56,7 +56,7 @@ Alle bewussten Abweichungen vom Konzept sind als
 6. **Staging auf demselben Volume.** Atomares `rename()` funktioniert nur
    innerhalb eines Dateisystems. `~/Library/Application Support` liegt nicht
    zwingend auf dem Volume des Wurzelverzeichnisses. **Lösung:** Staging und
-   Papierkorb liegen unter `<root>/.reposync/` (vom Scan ausgeschlossen);
+   Papierkorb liegen unter `<root>/.macsync/` (vom Scan ausgeschlossen);
    Datenbank, Schlüssel und Konfliktspeicher im State-Verzeichnis.
 7. **Dateien direkt im Wurzelverzeichnis** sind im Konzept keiner Einheit
    zugeordnet. **Lösung:** eigene Einheit `.` (nicht rekursiv).
@@ -136,25 +136,25 @@ GC-Koordination per `gc.auto=0`.
 
 ```text
 crates/
-  core/      reposync-core      reines Datenmodell: Hash, Entry, VersionVector,
+  core/      macsync-core      reines Datenmodell: Hash, Entry, VersionVector,
                                 Merkle-Baum, Entscheidungslogik, Git-Pfadklassen,
                                 Protokoll-Nachrichten. Kein I/O → proptest.
-  fs/        reposync-fs        Scan, Hashing, xattrs, Flags, Ausschlüsse,
+  fs/        macsync-fs        Scan, Hashing, xattrs, Flags, Ausschlüsse,
                                 Einheiten-Erkennung, Staging, Papierkorb,
                                 atomare Dateioperationen, Case-Probe.
-  gitaware/  reposync-gitaware  Ruhe-Gate (Locks, Operationen, Prozesse),
+  gitaware/  macsync-gitaware  Ruhe-Gate (Locks, Operationen, Prozesse),
                                 semantischer Index-Hash, Reflog-Merge,
                                 update-index/fsck.
-  store/     reposync-store     SQLite (WAL): units, entries, tx, journal,
+  store/     macsync-store     SQLite (WAL): units, entries, tx, journal,
                                 conflicts, peers, kv.
-  engine/    reposync-engine    Scan→Index, Bedienung von Anfragen, Pull,
+  engine/    macsync-engine    Scan→Index, Bedienung von Anfragen, Pull,
                                 Planung, atomare Anwendung, Wiederherstellung,
                                 Konfliktauflösung. `PeerApi`-Trait.
-  net/       reposync-net       Noise-Transport, Framing, Kompression,
+  net/       macsync-net       Noise-Transport, Framing, Kompression,
                                 Pairing (SPAKE2), Client (`NetPeer`) und Server,
                                 LAN-Prüfung, mDNS.
-  daemon/    reposync-daemon    Konfiguration, Watcher, Scheduler, IPC-Server.
-  cli/       reposync-cli       Binary `reposync`.
+  daemon/    macsync-daemon    Konfiguration, Watcher, Scheduler, IPC-Server.
+  cli/       macsync-cli       Binary `macsync`.
 tests/e2e/   Skripte: zwei Daemons auf Loopback, Git-Torture-Test.
 ```
 

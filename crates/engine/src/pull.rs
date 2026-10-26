@@ -5,12 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use reposync_core::proto::{limits, UnitRoot};
-use reposync_core::{
+use macsync_core::proto::{limits, UnitRoot};
+use macsync_core::{
     decide, path as rpath, ConflictClass, Decision, Entry, GitClass, Hash, Kind, Policy, Tree, UnitKind,
 };
-use reposync_fs::{ops, scan};
-use reposync_store::Stored;
+use macsync_fs::{ops, scan};
+use macsync_store::Stored;
 use serde::Serialize;
 
 use crate::capture::ScanOptions;
@@ -96,6 +96,17 @@ fn retry<T>(msg: impl Into<String>) -> Result<T> {
 struct Need {
     size: u64,
     dests: Vec<PathBuf>,
+    /// Unit-relative path, for progress display.
+    label: String,
+}
+
+/// Clears the transfer progress when the fetch ends, also on errors.
+struct TransferGuard<'a>(&'a Engine);
+
+impl Drop for TransferGuard<'_> {
+    fn drop(&mut self) {
+        self.0.update_transfer(|t| *t = None);
+    }
 }
 
 impl Engine {
@@ -189,7 +200,7 @@ impl Engine {
             }
             return Ok(rep);
         }
-        let unit_dir = reposync_fs::unit_dir(&root, unit);
+        let unit_dir = macsync_fs::unit_dir(&root, unit);
         if kind == UnitKind::Git && unit_dir.exists() {
             let g = self.gate.check(&unit_dir);
             if !g.is_open() {
@@ -246,7 +257,7 @@ impl Engine {
         let nested: Vec<String> = {
             let mut n: BTreeSet<String> = self.nested_units_of(unit)?.into_iter().collect();
             n.extend(remote_names.iter().filter(|r| r.starts_with(&format!("{unit}/"))).cloned());
-            if unit == reposync_core::entry::ROOT_UNIT {
+            if unit == macsync_core::entry::ROOT_UNIT {
                 n.clear();
             }
             n.into_iter().filter_map(|u| u.strip_prefix(&format!("{unit}/")).map(str::to_string)).collect()
@@ -366,7 +377,7 @@ impl Engine {
                     let local_live = l.filter(|s| !s.entry.deleted);
                     let reason = match (l, local.get(&path).map(|s| s.entry.vv.compare(&r.vv))) {
                         (None, _) => "new on peer".to_string(),
-                        (Some(_), Some(reposync_core::VvOrdering::Dominated)) => {
+                        (Some(_), Some(macsync_core::VvOrdering::Dominated)) => {
                             format!(
                                 "peer newer ({} → {})",
                                 l.map(|s| s.entry.vv.display()).unwrap_or_default(),
@@ -428,7 +439,7 @@ impl Engine {
                             unit,
                             "warning",
                             &path,
-                            "hook changed by sync (never executed by RepoSync)",
+                            "hook changed by sync (never executed by MacSync)",
                             "",
                         );
                     }
@@ -528,18 +539,18 @@ impl Engine {
         rep: &mut PullReport,
     ) -> Result<()> {
         let mut needs: BTreeMap<Hash, Need> = BTreeMap::new();
-        let mut add_need = |hash: Hash, size: u64, dest: PathBuf| {
-            needs.entry(hash).or_insert(Need { size, dests: Vec::new() }).dests.push(dest);
+        let mut add_need = |hash: Hash, size: u64, dest: PathBuf, label: &str| {
+            needs.entry(hash).or_insert(Need { size, dests: Vec::new(), label: label.to_string() }).dests.push(dest);
         };
         let mut reflog_remote: Vec<(usize, PathBuf)> = Vec::new();
         for (i, op) in plan.ops.iter().enumerate() {
             match &op.source {
                 Some(Source::Blob { hash, size }) => {
-                    add_need(*hash, *size, staging.join(op.staged.as_ref().expect("staged name")));
+                    add_need(*hash, *size, staging.join(op.staged.as_ref().expect("staged name")), &op.path);
                 }
                 Some(Source::Reflog { remote, remote_size, .. }) => {
                     let p = staging.join(format!("reflog-remote-{i}"));
-                    add_need(*remote, *remote_size, p.clone());
+                    add_need(*remote, *remote_size, p.clone(), &op.path);
                     reflog_remote.push((i, p));
                 }
                 Some(Source::File { .. }) | None => {}
@@ -552,7 +563,7 @@ impl Engine {
                     continue;
                 }
                 if let Some(b) = r.blob {
-                    add_need(b, r.size, dir.join(if r.path.is_empty() { "_unit_root" } else { &r.path }));
+                    add_need(b, r.size, dir.join(if r.path.is_empty() { "_unit_root" } else { &r.path }), &r.path);
                 }
             }
         }
@@ -596,11 +607,11 @@ impl Engine {
             let Some(Source::Reflog { local_disk, local_blob, .. }) = op.source.clone() else {
                 continue;
             };
-            let local_abs = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &local_disk);
+            let local_abs = macsync_fs::abs_path(&self.cfg.root, &plan.unit, &local_disk);
             let Some(local_bytes) = ops::read_verified(&local_abs, &local_blob)? else {
                 return retry(format!("{} changed locally", op.path));
             };
-            let merged = reposync_gitaware::reflog::merge(&local_bytes, &std::fs::read(&remote_path)?);
+            let merged = macsync_gitaware::reflog::merge(&local_bytes, &std::fs::read(&remote_path)?);
             let h = Hash::of(&merged);
             ops::write_new(&staging.join(op.staged.as_ref().expect("staged")), &merged)?;
             op.entry.blob = Some(h);
@@ -610,7 +621,7 @@ impl Engine {
 
         // Pre-apply check: never overwrite a local change that was not captured.
         if plan.unit_kind == UnitKind::Git {
-            let g = self.gate.check(&reposync_fs::unit_dir(&self.cfg.root, &plan.unit));
+            let g = self.gate.check(&macsync_fs::unit_dir(&self.cfg.root, &plan.unit));
             if !g.is_open() {
                 return retry(g.describe());
             }
@@ -619,7 +630,7 @@ impl Engine {
             if op.kind == OpKind::DbOnly {
                 continue;
             }
-            let abs = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
+            let abs = macsync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
             let on_disk = scan::stat(&abs, op.path.clone(), op.disk.clone()).ok().flatten();
             match (local.get(&op.path).filter(|s| !s.entry.deleted), on_disk) {
                 (Some(s), Some(d)) => {
@@ -659,6 +670,27 @@ impl Engine {
     ) -> Result<()> {
         let mut remote_small: Vec<Hash> = Vec::new();
         let mut remote_large: Vec<Hash> = Vec::new();
+        let _guard = TransferGuard(self);
+        self.update_transfer(|t| {
+            *t = Some(crate::Transfer {
+                unit: rep.unit.clone(),
+                files_total: needs.len() as u64,
+                bytes_total: needs.values().map(|n| n.size).sum(),
+                started_ms: macsync_fs::time::now_ms(),
+                ..Default::default()
+            })
+        });
+        let progress = |files: u64, bytes: u64, current: &str| {
+            self.update_transfer(|t| {
+                if let Some(t) = t {
+                    t.files_done += files;
+                    t.bytes_done += bytes;
+                    if !current.is_empty() {
+                        t.current = current.to_string();
+                    }
+                }
+            })
+        };
         for (hash, need) in needs {
             for d in &need.dests {
                 if let Some(p) = d.parent().filter(|p| *p != staging) {
@@ -668,6 +700,7 @@ impl Engine {
             if self.dedup_local(hash, &need.dests[0])? {
                 rep.bytes_deduped += need.size;
                 copy_rest(&need.dests)?;
+                progress(1, need.size, &need.label);
             } else if need.size <= limits::SMALL_FILE {
                 remote_small.push(*hash);
             } else {
@@ -684,6 +717,7 @@ impl Engine {
                 j += 1;
             }
             let batch = &remote_small[i..j];
+            progress(0, 0, &needs[&batch[0]].label);
             let mut blobs = peer.blobs(batch)?;
             blobs.resize(batch.len(), None);
             let mut items: Vec<(&Need, Vec<u8>)> = Vec::with_capacity(batch.len());
@@ -696,11 +730,13 @@ impl Engine {
                 items.push((&needs[h], data));
             }
             write_parallel(&items)?;
+            progress(batch.len() as u64, items.iter().map(|(n, _)| n.size).sum(), "");
             i = j;
         }
         // Large files in ranges.
         for h in remote_large {
             let need = &needs[&h];
+            progress(0, 0, &need.label);
             let mut attempt = 0;
             loop {
                 attempt += 1;
@@ -711,6 +747,7 @@ impl Engine {
                 }
             }
             copy_rest(&need.dests)?;
+            progress(1, 0, "");
         }
         // One bundled flush for everything staged (instead of one per file).
         let all: Vec<PathBuf> = needs.values().flat_map(|n| n.dests.iter().cloned()).collect();
@@ -747,6 +784,11 @@ impl Engine {
             f.write_all(&chunk)?;
             off += chunk.len() as u64;
             rep.bytes_fetched += chunk.len() as u64;
+            self.update_transfer(|t| {
+                if let Some(t) = t {
+                    t.bytes_done += chunk.len() as u64;
+                }
+            });
         }
         Ok(Hash::from_blake3(hasher.finalize()) == *h)
     }
@@ -756,7 +798,7 @@ impl Engine {
     fn dedup_local(&self, hash: &Hash, dest: &Path) -> Result<bool> {
         let candidates = self.store().find_blob(hash)?;
         for (unit, _path, disk) in candidates {
-            let src = reposync_fs::abs_path(&self.cfg.root, &unit, &disk);
+            let src = macsync_fs::abs_path(&self.cfg.root, &unit, &disk);
             if ops::clone_or_copy(&src, dest).is_ok() && ops::hash_file(dest).ok() == Some(*hash) {
                 return Ok(true);
             }
@@ -798,8 +840,8 @@ impl Engine {
 
     fn post_apply(&self, plan: &Plan, rep: &mut PullReport) -> Result<()> {
         let unit = plan.unit.as_str();
-        let unit_dir = reposync_fs::unit_dir(&self.cfg.root, unit);
-        let is_git = plan.unit_kind == UnitKind::Git && reposync_gitaware::resolve_git_dir(&unit_dir).is_some();
+        let unit_dir = macsync_fs::unit_dir(&self.cfg.root, unit);
+        let is_git = plan.unit_kind == UnitKind::Git && macsync_gitaware::resolve_git_dir(&unit_dir).is_some();
         let touched_tree = plan.ops.iter().any(|o| o.kind != OpKind::DbOnly && !o.path.starts_with(".git/"));
         let touched_index = plan.ops.iter().any(|o| o.phase == Phase::Index);
         let touched_objects = plan.ops.iter().any(|o| {
@@ -809,14 +851,14 @@ impl Engine {
                     || o.path == ".git/packed-refs"
                     || o.path == ".git/HEAD")
         });
-        let git = is_git && reposync_gitaware::cmd::available();
+        let git = is_git && macsync_gitaware::cmd::available();
         if git && (touched_tree || touched_index) {
-            if let Err(e) = reposync_gitaware::cmd::refresh_index(&unit_dir) {
+            if let Err(e) = macsync_gitaware::cmd::refresh_index(&unit_dir) {
                 let _ = self.store().log(unit, "warning", ".git/index", "index refresh failed", &e.to_string());
             }
         }
         if git && touched_objects && self.cfg.fsck_after_apply {
-            if let Err(msg) = reposync_gitaware::cmd::fsck_connectivity(&unit_dir)? {
+            if let Err(msg) = macsync_gitaware::cmd::fsck_connectivity(&unit_dir)? {
                 let restored = self.restore_object_deletions(plan)?;
                 let _ = self.store().log(
                     unit,
@@ -961,7 +1003,7 @@ fn descend(
             let lc = local.children(&l.dir).unwrap_or(&[]);
             let mut names: BTreeMap<
                 &str,
-                (Option<&reposync_core::merkle::Child>, Option<&reposync_core::merkle::Child>),
+                (Option<&macsync_core::merkle::Child>, Option<&macsync_core::merkle::Child>),
             > = BTreeMap::new();
             for c in &rc {
                 names.entry(c.name.as_str()).or_default().1 = Some(c);

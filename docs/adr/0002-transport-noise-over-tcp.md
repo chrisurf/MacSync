@@ -21,4 +21,4 @@ werden in Noise-Frames ≤ 65 535 Byte zerlegt; logische Nachrichten werden ab
 - Keine Connection-Migration: Bei Schnittstellenwechsel wird neu verbunden;
   Transaktionen sind ohnehin idempotent und werden wiederholt.
 - Der `PeerApi`-Trait kapselt den Transport; ein Wechsel auf QUIC/iroh betrifft
-  nur `reposync-net`.
+  nur `macsync-net`.

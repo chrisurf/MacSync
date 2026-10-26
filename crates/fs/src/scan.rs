@@ -9,8 +9,8 @@ use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 
-use reposync_core::entry::ROOT_UNIT;
-use reposync_core::{gitpath, path as rpath, Kind, UnitKind};
+use macsync_core::entry::ROOT_UNIT;
+use macsync_core::{gitpath, path as rpath, Kind, UnitKind};
 
 use crate::{meta, root_rel, unit_dir, Excludes};
 
@@ -243,7 +243,7 @@ mod tests {
         fs::create_dir_all(r.join("notes")).unwrap();
         fs::write(r.join("notes/n.md"), "n").unwrap();
         fs::write(r.join("loose.txt"), "l").unwrap();
-        fs::create_dir_all(r.join(".reposync/staging")).unwrap();
+        fs::create_dir_all(r.join(".macsync/staging")).unwrap();
         d
     }
 

@@ -1,12 +1,12 @@
 [package]
-name = "reposync-fs"
-description = "File system layer of RepoSync: scanning, hashing, metadata, staging, trash"
+name = "macsync-fs"
+description = "File system layer of MacSync: scanning, hashing, metadata, staging, trash"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-reposync-core.workspace = true
+macsync-core.workspace = true
 blake3.workspace = true
 xattr.workspace = true
 filetime.workspace = true

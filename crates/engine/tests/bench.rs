@@ -1,6 +1,6 @@
 //! Performance benchmark (ignored by default):
 //!
-//! `cargo test --release -p reposync-engine --test bench -- --ignored --nocapture`
+//! `cargo test --release -p macsync-engine --test bench -- --ignored --nocapture`
 //!
 //! `BENCH_FILES` sets the number of files (default 100 000).
 
@@ -9,7 +9,7 @@ mod common;
 use std::time::Instant;
 
 use common::*;
-use reposync_engine::PullOptions;
+use macsync_engine::PullOptions;
 
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0

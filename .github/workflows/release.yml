@@ -2,7 +2,7 @@ name: Release
 
 # Runs on every push to main (= every merge). Creates a release only when the
 # version in Cargo.toml has no tag yet: bump the version in a PR to release.
-# Artefact: RepoSync-<version>-arm64.pkg (Apple Silicon), installs into /Applications.
+# Artefact: MacSync-<version>-arm64.pkg (Apple Silicon), installs into /Applications.
 #
 # Optional secrets for Developer ID signing and notarisation (without them the
 # app is ad-hoc signed):
@@ -85,11 +85,11 @@ jobs:
           echo "CODESIGN_IDENTITY=$CODESIGN_IDENTITY" >> "$GITHUB_ENV"
           echo "INSTALLER_IDENTITY=$INSTALLER_IDENTITY" >> "$GITHUB_ENV"
           if [ -n "$APPLE_ID" ]; then
-            xcrun notarytool store-credentials reposync --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
-            echo "NOTARY_PROFILE=reposync" >> "$GITHUB_ENV"
+            xcrun notarytool store-credentials macsync --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+            echo "NOTARY_PROFILE=macsync" >> "$GITHUB_ENV"
           fi
 
-      - name: Build RepoSync.app and installer
+      - name: Build MacSync.app and installer
         run: make pkg
 
       - name: Release notes from CHANGELOG.md
@@ -102,9 +102,9 @@ jobs:
 
           ## Installation (Apple Silicon)
 
-          1. \`RepoSync-$VERSION-arm64.pkg\` laden und doppelklicken – installiert RepoSync nach /Programme.
+          1. \`MacSync-$VERSION-arm64.pkg\` laden und doppelklicken – installiert MacSync nach /Programme.
           2. Ist die App nicht von Apple notarisiert, meldet macOS „nicht verifiziert“: Systemeinstellungen → Datenschutz & Sicherheit → **Trotzdem öffnen**.
-          3. RepoSync startet mit einem Symbol in der Menüleiste und führt durch die Einrichtung.
+          3. MacSync startet mit einem Symbol in der Menüleiste und führt durch die Einrichtung.
           EOF
           cat notes.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -112,5 +112,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v$VERSION" build/RepoSync-$VERSION-arm64.pkg build/RepoSync-$VERSION-arm64.pkg.sha256 \
-            --target "$GITHUB_SHA" --title "RepoSync $VERSION" --notes-file notes.md
+          gh release create "v$VERSION" build/MacSync-$VERSION-arm64.pkg build/MacSync-$VERSION-arm64.pkg.sha256 \
+            --target "$GITHUB_SHA" --title "MacSync $VERSION" --notes-file notes.md

@@ -6,7 +6,7 @@ use std::fs;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
 use common::*;
-use reposync_engine::{Choice, Mode, Outcome, PullOptions};
+use macsync_engine::{Choice, Mode, Outcome, PullOptions};
 
 #[test]
 fn initial_sync_copies_everything() {
@@ -66,7 +66,7 @@ fn changes_and_deletions_propagate_both_ways() {
     assert!(!p.rb().join("docs/b.txt").exists());
     assert!(!p.rb().join("docs/sub").exists());
     // Old versions are in the trash, not lost.
-    let trash = p.rb().join(".reposync/trash");
+    let trash = p.rb().join(".macsync/trash");
     let n = walkdir_count(&trash, "b.txt");
     assert!(n >= 1, "deleted file kept in trash");
     // A tombstone prevents resurrection: B still had b.txt in its index; after
@@ -178,7 +178,7 @@ fn prefer_local_resolves_automatically() {
     let p = Pair::new();
     write(&p.ra(), "w/f.txt", "base");
     p.sync();
-    p.a.store().set_prefer("w", reposync_core::Prefer::Local).unwrap();
+    p.a.store().set_prefer("w", macsync_core::Prefer::Local).unwrap();
     write(&p.ra(), "w/f.txt", "A wins");
     write(&p.rb(), "w/f.txt", "B loses");
     p.sync();
@@ -256,16 +256,16 @@ fn xattrs_are_synced_when_supported() {
     let p = Pair::new();
     write(&p.ra(), "x/tagged.txt", "t");
     let f = p.ra().join("x/tagged.txt");
-    if xattr::set(&f, "user.reposync.test", b"red").is_err() {
+    if xattr::set(&f, "user.macsync.test", b"red").is_err() {
         eprintln!("xattrs unsupported; skipping");
         return;
     }
     p.sync();
-    assert_eq!(xattr::get(p.rb().join("x/tagged.txt"), "user.reposync.test").unwrap().as_deref(), Some(&b"red"[..]));
+    assert_eq!(xattr::get(p.rb().join("x/tagged.txt"), "user.macsync.test").unwrap().as_deref(), Some(&b"red"[..]));
     // Metadata-only change propagates without content transfer.
-    xattr::set(&f, "user.reposync.test", b"blue").unwrap();
+    xattr::set(&f, "user.macsync.test", b"blue").unwrap();
     let r = p.sync();
-    assert_eq!(xattr::get(p.rb().join("x/tagged.txt"), "user.reposync.test").unwrap().as_deref(), Some(&b"blue"[..]));
+    assert_eq!(xattr::get(p.rb().join("x/tagged.txt"), "user.macsync.test").unwrap().as_deref(), Some(&b"blue"[..]));
     assert_eq!(r.iter().map(|r| r.bytes_fetched).sum::<u64>(), 0);
 }
 
@@ -331,9 +331,9 @@ fn paused_unit_is_not_synced() {
 #[test]
 fn excluded_paths_are_not_synced_and_not_deleted_remotely() {
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = reposync_engine::EngineConfig::new(dir.path().join("a"), dir.path().join("as"), "A");
-    cfg.excludes = reposync_fs::Excludes::new(&["**/target".to_string()], true).unwrap();
-    let a = reposync_engine::Engine::open(cfg).unwrap();
+    let mut cfg = macsync_engine::EngineConfig::new(dir.path().join("a"), dir.path().join("as"), "A");
+    cfg.excludes = macsync_fs::Excludes::new(&["**/target".to_string()], true).unwrap();
+    let a = macsync_engine::Engine::open(cfg).unwrap();
     let b = engine(dir.path(), "B", Mode::TwoWay);
     write(a.root(), "r/src/lib.rs", "x");
     write(a.root(), "r/target/debug/out", "big");

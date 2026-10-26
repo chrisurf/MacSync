@@ -7,8 +7,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use reposync_core::proto::{Request, Response};
-use reposync_core::PROTOCOL_VERSION;
+use macsync_core::proto::{Request, Response};
+use macsync_core::PROTOCOL_VERSION;
 
 use crate::client::HelloInfo;
 use crate::identity::Identity;
@@ -46,7 +46,7 @@ impl Server {
         let local = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
-        let thread = std::thread::Builder::new().name("reposync-server".into()).spawn(move || {
+        let thread = std::thread::Builder::new().name("macsync-server".into()).spawn(move || {
             for conn in listener.incoming() {
                 if stop2.load(Ordering::SeqCst) {
                     break;
@@ -54,7 +54,7 @@ impl Server {
                 let Ok(stream) = conn else { continue };
                 let (identity, hello, authorize, handler) =
                     (identity.clone(), hello.clone(), authorize.clone(), handler.clone());
-                let _ = std::thread::Builder::new().name("reposync-conn".into()).spawn(move || {
+                let _ = std::thread::Builder::new().name("macsync-conn".into()).spawn(move || {
                     if let Err(e) = serve_conn(stream, &identity, &hello, &authorize, &handler) {
                         tracing::debug!(error = %format!("{e:#}"), "connection closed");
                     }
@@ -114,17 +114,17 @@ fn serve_conn(
     }
     s.set_timeout(IDLE_TIMEOUT)?;
     // The first message must be Hello.
-    let first: Request = reposync_core::codec::decode(&s.recv()?)?;
+    let first: Request = macsync_core::codec::decode(&s.recv()?)?;
     let Request::Hello { device, name, protocol, arch, root, version } = first else { bail!("expected Hello") };
     if protocol != PROTOCOL_VERSION {
         let r = Response::Error(format!("protocol {protocol} not supported (expected {PROTOCOL_VERSION})"));
-        s.send(&reposync_core::codec::encode(&r)?)?;
+        s.send(&macsync_core::codec::encode(&r)?)?;
         bail!("protocol mismatch");
     }
     if device != crate::device_id(&pubkey) {
         bail!("device id does not match key");
     }
-    s.send(&reposync_core::codec::encode(&hello.response())?)?;
+    s.send(&macsync_core::codec::encode(&hello.response())?)?;
     let info =
         PeerInfo { device: device.clone(), pubkey, addr, hello: HelloInfo { device, name, arch, root, version } };
     loop {
@@ -132,8 +132,8 @@ fn serve_conn(
             Ok(m) => m,
             Err(_) => return Ok(()), // closed or idle
         };
-        let req: Request = reposync_core::codec::decode(&msg).context("decode request")?;
+        let req: Request = macsync_core::codec::decode(&msg).context("decode request")?;
         let resp = handler(&info, req);
-        s.send(&reposync_core::codec::encode(&resp)?)?;
+        s.send(&macsync_core::codec::encode(&resp)?)?;
     }
 }

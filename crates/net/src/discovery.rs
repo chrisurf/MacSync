@@ -1,8 +1,8 @@
 //! Bonjour/mDNS discovery. Best effort: when multicast is unavailable (guest
 //! Wi-Fi with client isolation) a manually configured address is used instead.
 //!
-//! * `_reposync._tcp.local.` – a running daemon, found by device id.
-//! * `_reposync-pair._tcp.local.` – a Mac waiting with a pairing code, so the
+//! * `_macsync._tcp.local.` – a running daemon, found by device id.
+//! * `_macsync-pair._tcp.local.` – a Mac waiting with a pairing code, so the
 //!   other Mac can pair without knowing its name.
 
 use std::net::SocketAddr;
@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
-pub const SERVICE: &str = "_reposync._tcp.local.";
-pub const PAIR_SERVICE: &str = "_reposync-pair._tcp.local.";
+pub const SERVICE: &str = "_macsync._tcp.local.";
+pub const PAIR_SERVICE: &str = "_macsync-pair._tcp.local.";
 
 pub struct Advertiser {
     daemon: ServiceDaemon,
@@ -30,7 +30,7 @@ impl Advertiser {
 
     fn register(ty: &str, device: &str, port: u16, props: &[(&str, &str)]) -> Result<Advertiser> {
         let daemon = ServiceDaemon::new()?;
-        let host = format!("reposync-{device}.local.");
+        let host = format!("macsync-{device}.local.");
         let info = ServiceInfo::new(ty, device, &host, "", port, props)?.enable_addr_auto();
         daemon.register(info)?;
         Ok(Advertiser { daemon })

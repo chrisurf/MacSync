@@ -810,6 +810,137 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "macsync-cli"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "if-addrs",
+ "macsync-core",
+ "macsync-daemon",
+ "macsync-engine",
+ "macsync-fs",
+ "macsync-net",
+ "macsync-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "macsync-core"
+version = "0.3.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "postcard",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "macsync-daemon"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "macsync-core",
+ "macsync-engine",
+ "macsync-fs",
+ "macsync-gitaware",
+ "macsync-net",
+ "macsync-store",
+ "notify",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "macsync-engine"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "getrandom 0.4.3",
+ "hex",
+ "macsync-core",
+ "macsync-fs",
+ "macsync-gitaware",
+ "macsync-store",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "xattr",
+]
+
+[[package]]
+name = "macsync-fs"
+version = "0.3.0"
+dependencies = [
+ "blake3",
+ "filetime",
+ "globset",
+ "libc",
+ "macsync-core",
+ "reflink-copy",
+ "tempfile",
+ "tracing",
+ "xattr",
+]
+
+[[package]]
+name = "macsync-gitaware"
+version = "0.3.0"
+dependencies = [
+ "blake3",
+ "macsync-core",
+ "sysinfo",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "macsync-net"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "getrandom 0.4.3",
+ "hex",
+ "macsync-core",
+ "macsync-engine",
+ "mdns-sd",
+ "serde",
+ "snow",
+ "spake2",
+ "tempfile",
+ "tracing",
+ "zstd",
+]
+
+[[package]]
+name = "macsync-store"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "macsync-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1116,137 +1247,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "reposync-cli"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "clap",
- "if-addrs",
- "reposync-core",
- "reposync-daemon",
- "reposync-engine",
- "reposync-fs",
- "reposync-net",
- "reposync-store",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "reposync-core"
-version = "0.2.0"
-dependencies = [
- "blake3",
- "hex",
- "postcard",
- "proptest",
- "serde",
- "serde_json",
- "thiserror",
- "unicode-normalization",
-]
-
-[[package]]
-name = "reposync-daemon"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "libc",
- "notify",
- "reposync-core",
- "reposync-engine",
- "reposync-fs",
- "reposync-gitaware",
- "reposync-net",
- "reposync-store",
- "serde",
- "serde_json",
- "tempfile",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "reposync-engine"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "blake3",
- "getrandom 0.4.3",
- "hex",
- "proptest",
- "reposync-core",
- "reposync-fs",
- "reposync-gitaware",
- "reposync-store",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "xattr",
-]
-
-[[package]]
-name = "reposync-fs"
-version = "0.2.0"
-dependencies = [
- "blake3",
- "filetime",
- "globset",
- "libc",
- "reflink-copy",
- "reposync-core",
- "tempfile",
- "tracing",
- "xattr",
-]
-
-[[package]]
-name = "reposync-gitaware"
-version = "0.2.0"
-dependencies = [
- "blake3",
- "reposync-core",
- "sysinfo",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "reposync-net"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "blake3",
- "getrandom 0.4.3",
- "hex",
- "mdns-sd",
- "reposync-core",
- "reposync-engine",
- "serde",
- "snow",
- "spake2",
- "tempfile",
- "tracing",
- "zstd",
-]
-
-[[package]]
-name = "reposync-store"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "reposync-core",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
-]
 
 [[package]]
 name = "ring"

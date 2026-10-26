@@ -1,5 +1,5 @@
 //! Git awareness: when may a repository be captured or written, how is the
-//! index compared, how are reflogs merged, and the few Git commands RepoSync
+//! index compared, how are reflogs merged, and the few Git commands MacSync
 //! runs itself (none of which ever create history).
 
 pub mod cmd;

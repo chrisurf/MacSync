@@ -1,9 +1,10 @@
-//! The RepoSync daemon: configuration, file system watcher, scheduler with
+//! The MacSync daemon: configuration, file system watcher, scheduler with
 //! quiescence detection, anti-entropy, peer management and the IPC socket
 //! used by the CLI (and later the menu bar app).
 
 pub mod config;
 pub mod ipc;
+pub mod migrate;
 pub mod runtime;
 pub mod service;
 

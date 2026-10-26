@@ -7,9 +7,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use reposync_core::{Kind, UnitKind};
-use reposync_fs::{meta, ops, scan};
-use reposync_store::{StatCache, Stored};
+use macsync_core::{Kind, UnitKind};
+use macsync_fs::{meta, ops, scan};
+use macsync_store::{StatCache, Stored};
 
 use crate::plan::{Op, OpKind, Phase, Plan};
 use crate::pull::RetryLater;
@@ -20,11 +20,11 @@ impl Engine {
     /// operation; if this function is interrupted, [`Engine::recover`] finishes
     /// the transaction.
     pub(crate) fn execute(&self, plan: &mut Plan, staging: &Path) -> Result<()> {
-        let unit_dir = reposync_fs::unit_dir(&self.cfg.root, &plan.unit);
+        let unit_dir = macsync_fs::unit_dir(&self.cfg.root, &plan.unit);
         if plan.has_disk_ops() {
             self.take_index_lock(plan, &unit_dir)?;
         }
-        self.store().tx_put(&plan.tx, &plan.unit, "applying", &reposync_core::codec::encode(&*plan)?)?;
+        self.store().tx_put(&plan.tx, &plan.unit, "applying", &macsync_core::codec::encode(&*plan)?)?;
         let result = self.run_ops(plan, staging, &unit_dir);
         result?;
         self.commit(plan, "applied")?;
@@ -35,7 +35,7 @@ impl Engine {
         if plan.unit_kind != UnitKind::Git || plan.lock.is_some() {
             return Ok(());
         }
-        let Some(git_dir) = reposync_gitaware::resolve_git_dir(unit_dir) else {
+        let Some(git_dir) = macsync_gitaware::resolve_git_dir(unit_dir) else {
             return Ok(());
         };
         let lock = git_dir.join("index.lock");
@@ -56,9 +56,9 @@ impl Engine {
         for i in 0..plan.ops.len() {
             if plan.ops[i].phase > Phase::Dirs && plan.lock.is_none() && plan.unit_kind == UnitKind::Git {
                 // A new repository: `.git` exists only after the directory phase.
-                if reposync_gitaware::resolve_git_dir(unit_dir).is_some() {
+                if macsync_gitaware::resolve_git_dir(unit_dir).is_some() {
                     self.take_index_lock(plan, unit_dir)?;
-                    self.store().tx_put(&plan.tx, &plan.unit, "applying", &reposync_core::codec::encode(&*plan)?)?;
+                    self.store().tx_put(&plan.tx, &plan.unit, "applying", &macsync_core::codec::encode(&*plan)?)?;
                 }
             }
             if plan.ops[i].kind != OpKind::DbOnly {
@@ -79,8 +79,8 @@ impl Engine {
     }
 
     fn apply_op(&self, unit: &str, op: &Op, i: usize, staging: &Path, trash: &Path, lock: Option<&str>) -> Result<()> {
-        let target = reposync_fs::abs_path(&self.cfg.root, unit, &op.disk);
-        let trash_rel = reposync_fs::root_rel(unit, &op.disk);
+        let target = macsync_fs::abs_path(&self.cfg.root, unit, &op.disk);
+        let trash_rel = macsync_fs::root_rel(unit, &op.disk);
         let e = &op.entry;
         match op.kind {
             OpKind::DbOnly => {}
@@ -104,7 +104,7 @@ impl Engine {
                 }
                 if let Some(leader) = &e.link {
                     // Re-create the hard link group when the leader has the same content.
-                    let leader_abs = reposync_fs::abs_path(&self.cfg.root, unit, leader);
+                    let leader_abs = macsync_fs::abs_path(&self.cfg.root, unit, leader);
                     if ops::hash_file(&leader_abs).ok() == e.blob {
                         let tmp = staging.join(format!("link-{i}"));
                         let _ = fs::remove_file(&tmp);
@@ -175,7 +175,7 @@ impl Engine {
         Ok(())
     }
 
-    fn set_meta(&self, path: &Path, e: &reposync_core::Entry) -> Result<()> {
+    fn set_meta(&self, path: &Path, e: &macsync_core::Entry) -> Result<()> {
         meta::set_mode(path, e.kind, e.mode)?;
         meta::write_xattrs(path, &e.xattrs, self.cfg.strip_quarantine)?;
         Ok(())
@@ -222,11 +222,11 @@ impl Engine {
     /// Write the database rows of an applied plan (one SQLite transaction) and
     /// remove the journal entry.
     fn commit(&self, plan: &Plan, how: &str) -> Result<()> {
-        let now = reposync_fs::time::now_ms();
+        let now = macsync_fs::time::now_ms();
         let unit = plan.unit.as_str();
         let mut rows: Vec<(Option<Stored>, &Op)> = Vec::with_capacity(plan.ops.len());
         for op in &plan.ops {
-            let target = reposync_fs::abs_path(&self.cfg.root, unit, &op.disk);
+            let target = macsync_fs::abs_path(&self.cfg.root, unit, &op.disk);
             let row = match op.kind {
                 OpKind::Delete => {
                     if fs::symlink_metadata(&target).is_ok() {
@@ -317,10 +317,10 @@ impl Engine {
                 self.store().tx_remove(&tx.id)?;
                 continue;
             }
-            let mut plan: Plan = reposync_core::codec::decode(&tx.plan).context("decode journaled plan")?;
+            let mut plan: Plan = macsync_core::codec::decode(&tx.plan).context("decode journaled plan")?;
             let lock = self.unit_lock(&plan.unit);
             let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
-            let unit_dir = reposync_fs::unit_dir(&self.cfg.root, &plan.unit);
+            let unit_dir = macsync_fs::unit_dir(&self.cfg.root, &plan.unit);
             tracing::warn!(tx = %tx.id, unit = %plan.unit, "completing interrupted transaction");
             // Our own lock may still exist; it is reused (nobody else can hold it).
             if let Some(l) = &plan.lock {
@@ -331,8 +331,8 @@ impl Engine {
             self.run_ops(&mut plan, &staging, &unit_dir)?;
             self.commit(&plan, "interrupted transaction completed")?;
             let _ = ops::remove_any(&staging);
-            if unit_dir.exists() && plan.unit_kind == UnitKind::Git && reposync_gitaware::cmd::available() {
-                let _ = reposync_gitaware::cmd::refresh_index(&unit_dir);
+            if unit_dir.exists() && plan.unit_kind == UnitKind::Git && macsync_gitaware::cmd::available() {
+                let _ = macsync_gitaware::cmd::refresh_index(&unit_dir);
             }
             self.scan_unit_locked(&plan.unit, &crate::capture::ScanOptions::default())?;
             done += 1;
@@ -354,8 +354,8 @@ impl Engine {
         let trash = self.trash_root().join(&plan.tx);
         let mut n = 0;
         for op in plan.ops.iter().filter(|o| o.phase == Phase::ObjectDeletes) {
-            let from: PathBuf = trash.join(reposync_fs::root_rel(&plan.unit, &op.disk));
-            let to = reposync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
+            let from: PathBuf = trash.join(macsync_fs::root_rel(&plan.unit, &op.disk));
+            let to = macsync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk);
             if fs::symlink_metadata(&from).is_ok() && fs::symlink_metadata(&to).is_err() {
                 if let Some(p) = to.parent() {
                     fs::create_dir_all(p)?;

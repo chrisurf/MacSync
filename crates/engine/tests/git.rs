@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 
 use common::*;
-use reposync_engine::{Choice, Outcome, PullOptions};
+use macsync_engine::{Choice, Outcome, PullOptions};
 
 macro_rules! require_git {
     () => {
@@ -39,7 +39,7 @@ fn repository_is_mirrored_with_uncommitted_work_and_no_history_changes() {
     assert_eq!(git(&a, &["log", "--format=%H %s"]), git(&b, &["log", "--format=%H %s"]));
     assert_eq!(read(&b, "build/out.bin"), "ignored artefact");
     assert_eq!(git(&b, &["diff", "--cached", "--name-only"]).trim(), "staged.txt");
-    // H2: RepoSync never creates commits, refs, branches, stashes.
+    // H2: MacSync never creates commits, refs, branches, stashes.
     assert_eq!(refs(&a), refs_before);
     assert_eq!(refs(&b), refs_before);
     p.assert_identical();
@@ -225,7 +225,7 @@ fn crash_during_apply_is_completed_on_restart() {
 
     // "Restart": a new engine on the same state recovers the transaction.
     let cfg = p.b.config().clone();
-    let b2 = reposync_engine::Engine::open(cfg).unwrap();
+    let b2 = macsync_engine::Engine::open(cfg).unwrap();
     assert!(b2.store().tx_pending().unwrap().is_empty());
     assert!(!b.join(".git/index.lock").exists());
     assert_fsck(&b);
@@ -263,7 +263,7 @@ fn folder_becomes_repository_keeping_versions() {
     git(&a, &["add", "."]);
     git(&a, &["commit", "-qm", "now a repo"]);
     p.sync();
-    assert_eq!(p.b.store().unit("lib").unwrap().unwrap().kind, reposync_core::UnitKind::Git);
+    assert_eq!(p.b.store().unit("lib").unwrap().unwrap().kind, macsync_core::UnitKind::Git);
     assert_eq!(p.a.store().entry("lib", "x.txt").unwrap().unwrap().entry.vv, vv_before);
     assert_fsck(&p.rb().join("lib"));
     p.assert_identical();

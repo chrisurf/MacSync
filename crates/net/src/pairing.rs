@@ -88,10 +88,10 @@ fn spake(s: &mut TcpStream, code: &str, first: bool) -> Result<[u8; 32]> {
 }
 
 fn encode(identity: &Identity, info: &HelloInfo, port: u16) -> Result<Vec<u8>> {
-    Ok(reposync_core::codec::encode(&Payload {
+    Ok(macsync_core::codec::encode(&Payload {
         pubkey: identity.public.clone(),
         info: info.clone(),
-        protocol: reposync_core::PROTOCOL_VERSION,
+        protocol: macsync_core::PROTOCOL_VERSION,
         port,
     })?)
 }
@@ -105,12 +105,12 @@ fn decode_verified(key: &[u8; 32], role: &[u8], msg: &[u8]) -> Result<Payload> {
     if mac(key, role, payload) != blake3::Hash::from(tag) {
         bail!("wrong pairing code");
     }
-    let p: Payload = reposync_core::codec::decode(payload)?;
+    let p: Payload = macsync_core::codec::decode(payload)?;
     if p.pubkey.len() != 32 || p.info.device != crate::device_id(&p.pubkey) {
         bail!("inconsistent pairing payload");
     }
-    if p.protocol != reposync_core::PROTOCOL_VERSION {
-        bail!("peer speaks protocol {}, expected {}", p.protocol, reposync_core::PROTOCOL_VERSION);
+    if p.protocol != macsync_core::PROTOCOL_VERSION {
+        bail!("peer speaks protocol {}, expected {}", p.protocol, macsync_core::PROTOCOL_VERSION);
     }
     Ok(p)
 }

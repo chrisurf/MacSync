@@ -3,7 +3,7 @@ import Foundation
 import ServiceManagement
 import UserNotifications
 
-/// Status as reported by `reposync status --json` / the daemon socket.
+/// Status as reported by `macsync status --json` / the daemon socket.
 struct Status: Decodable {
     struct Peer: Decodable {
         var address: String?
@@ -31,8 +31,23 @@ struct Status: Decodable {
     var peerLastContact: String?
     var peerError: String?
     var peerVersion: String?
+    struct Transfer: Decodable {
+        var unit: String
+        var filesTotal: Int64
+        var filesDone: Int64
+        var bytesTotal: Int64
+        var bytesDone: Int64
+        var startedMs: Int64
+        var current: String
+    }
+
     var units: [Unit]
     var version: String?
+    /// Content transfer in progress (this Mac receives).
+    var transfer: Transfer?
+    /// Bytes served to the other Mac so far, and when the last ones went out.
+    var servedBytes: Int64?
+    var servedMs: Int64?
 
     var conflicts: Int { units.reduce(0) { $0 + $1.conflicts } }
     var lastSync: Date? {
@@ -43,6 +58,52 @@ struct Status: Decodable {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    }
+}
+
+/// What is moving right now, for the progress display.
+struct Activity: Equatable {
+    enum Direction { case receiving, sending }
+    var direction: Direction
+    var unit: String = ""
+    var current: String = ""
+    var filesDone: Int64 = 0
+    var filesTotal: Int64 = 0
+    var bytesDone: Int64 = 0
+    var bytesTotal: Int64 = 0
+    /// Bytes per second (smoothed).
+    var rate: Double = 0
+
+    var fraction: Double? {
+        bytesTotal > 0 ? min(1, Double(bytesDone) / Double(bytesTotal)) : (filesTotal > 0 ? Double(filesDone) / Double(filesTotal) : nil)
+    }
+
+    var remaining: TimeInterval? {
+        guard direction == .receiving, rate > 0, bytesTotal > bytesDone else { return nil }
+        return Double(bytesTotal - bytesDone) / rate
+    }
+
+    static func bytes(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
+
+    static func duration(_ t: TimeInterval) -> String {
+        if t < 60 { return "unter 1 Min." }
+        let f = DateComponentsFormatter()
+        f.allowedUnits = t < 3600 ? [.minute] : [.hour, .minute]
+        f.unitsStyle = .abbreviated
+        return f.string(from: t) ?? ""
+    }
+
+    /// One line for the menu.
+    func summary(peer: String) -> String {
+        switch direction {
+        case .sending:
+            return "Sende an \(peer)" + (rate > 0 ? " · \(Activity.bytes(Int64(rate)))/s" : "")
+        case .receiving:
+            var s = "Empfange"
+            if let f = fraction { s += " \(Int(f * 100)) %" }
+            if let r = remaining { s += " · noch ca. \(Activity.duration(r))" }
+            return s
+        }
     }
 }
 
@@ -61,18 +122,6 @@ enum SyncState: Equatable {
         case .inSync: return "Synchron"
         }
     }
-
-    var symbol: String {
-        switch self {
-        case .notConfigured: return "arrow.triangle.2.circlepath.circle"
-        case .starting, .syncing: return "arrow.triangle.2.circlepath"
-        case .stopped: return "xmark.circle"
-        case .paused: return "pause.circle"
-        case .conflict: return "exclamationmark.triangle"
-        case .offline: return "wifi.exclamationmark"
-        case .inSync: return "checkmark.circle"
-        }
-    }
 }
 
 @MainActor
@@ -81,6 +130,12 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var status: Status?
     @Published private(set) var state: SyncState = .starting
+    @Published private(set) var activity: Activity?
+    /// Frame of the turning menu bar arrows while syncing.
+    @Published private(set) var spinFrame = 0
+    private var spinTimer: Timer?
+    private var lastSample: (bytes: Int64, served: Int64, at: Date)?
+    private var rate: Double = 0
     @Published var lastError: String?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -92,12 +147,27 @@ final class AppModel: ObservableObject {
     var config: ConfigFile? { ConfigFile.load() }
 
     func launch() {
+        CLI.migrate()
         if isConfigured {
             daemon.start()
+            // Already set up (CLI or RepoSync 0.2.0): start at login like
+            // the setup assistant would – once; the user can turn it off.
+            // Not for test/demo setups with their own configuration.
+            let standard = ProcessInfo.processInfo.environment["MACSYNC_CONFIG"] == nil
+            if standard, !UserDefaults.standard.bool(forKey: "offeredLaunchAtLogin") {
+                UserDefaults.standard.set(true, forKey: "offeredLaunchAtLogin")
+                setLaunchAtLogin(true)
+            }
         } else {
             SetupWindow.shared.show()
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+        // `open -a MacSync --args --manager [Ordner]` opens the sync manager directly.
+        let args = CommandLine.arguments
+        if isConfigured, let i = args.firstIndex(of: "--manager") {
+            let path = args.indices.contains(i + 1) && !args[i + 1].hasPrefix("-") ? args[i + 1] : nil
+            ManagerWindow.shared.show(path: path)
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             Task { @MainActor in await AppModel.shared.refresh() }
         }
         Task { await refresh() }
@@ -125,8 +195,56 @@ final class AppModel: ObservableObject {
             s = try? Self.decoder.decode(Status.self, from: Data(out.utf8))
         }
         status = s
+        activity = fromDaemon != nil ? measure(s) : nil
         state = Self.state(s, daemonRunning: fromDaemon != nil, starting: running, exit: daemon.lastExit)
+        if state == .inSync || state == .offline, activity != nil { state = .syncing }
+        updateSpin()
         notifyConflicts(s?.conflicts ?? 0)
+    }
+
+    /// Current transfer with a smoothed rate from consecutive samples.
+    private func measure(_ s: Status?) -> Activity? {
+        let now = Date()
+        let served = s?.servedBytes ?? 0
+        let received = s?.transfer?.bytesDone ?? 0
+        defer { lastSample = (received, served, now) }
+        let dt = lastSample.map { now.timeIntervalSince($0.at) } ?? 0
+        if let t = s?.transfer {
+            var a = Activity(direction: .receiving, unit: t.unit, current: t.current, filesDone: t.filesDone,
+                             filesTotal: t.filesTotal, bytesDone: t.bytesDone, bytesTotal: t.bytesTotal)
+            if let last = lastSample, dt > 0, received >= last.bytes {
+                rate = rate == 0 ? Double(received - last.bytes) / dt : 0.7 * rate + 0.3 * Double(received - last.bytes) / dt
+            } else {
+                let elapsed = now.timeIntervalSince1970 - Double(t.startedMs) / 1000
+                rate = elapsed > 0 ? Double(t.bytesDone) / elapsed : 0
+            }
+            a.rate = rate
+            return a
+        }
+        // Sending: the other Mac fetched data from us within the last 3 s.
+        if let ms = s?.servedMs, ms > 0, now.timeIntervalSince1970 - Double(ms) / 1000 < 3 {
+            var a = Activity(direction: .sending)
+            if let last = lastSample, dt > 0, served >= last.served {
+                rate = 0.5 * rate + 0.5 * Double(served - last.served) / dt
+            }
+            a.rate = rate
+            return a
+        }
+        rate = 0
+        return nil
+    }
+
+    private func updateSpin() {
+        let spinning = state == .syncing
+        if spinning, spinTimer == nil {
+            spinTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                Task { @MainActor in AppModel.shared.spinFrame = (AppModel.shared.spinFrame + 1) % MenuIcon.frames }
+            }
+        } else if !spinning, let t = spinTimer {
+            t.invalidate()
+            spinTimer = nil
+            spinFrame = 0
+        }
     }
 
     private static let decoder: JSONDecoder = {
@@ -223,11 +341,11 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.expand(root)))
     }
 
-    /// Symlink ~/.local/bin/reposync → the binary inside the app.
+    /// Symlink ~/.local/bin/macsync → the binary inside the app.
     func installCommandLineTool() -> String {
-        guard let bin = Paths.binary else { return "reposync nicht gefunden" }
+        guard let bin = Paths.binary else { return "macsync nicht gefunden" }
         let dir = Paths.home.appendingPathComponent(".local/bin")
-        let link = dir.appendingPathComponent("reposync")
+        let link = dir.appendingPathComponent("macsync")
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             if (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil
@@ -235,7 +353,7 @@ final class AppModel: ObservableObject {
                 try FileManager.default.removeItem(at: link)
             }
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: bin)
-            return "Installiert: ~/.local/bin/reposync"
+            return "Installiert: ~/.local/bin/macsync"
         } catch {
             return "Fehler: \(error.localizedDescription)"
         }
@@ -247,7 +365,7 @@ final class AppModel: ObservableObject {
         defer { lastConflicts = n }
         guard n > lastConflicts, UserDefaults.standard.object(forKey: "notifyConflicts") as? Bool ?? true else { return }
         let content = UNMutableNotificationContent()
-        content.title = "RepoSync: Konflikt"
+        content.title = "MacSync: Konflikt"
         content.body = n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "conflicts", content: content, trigger: nil))
     }

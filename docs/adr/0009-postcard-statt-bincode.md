@@ -10,7 +10,7 @@ eine unbetreute Bibliothek im Kern der Datenhaltung widerspricht dem Ziel,
 auf neue Versionen und Sicherheitsmeldungen reagieren zu können.
 
 ## Entscheidung
-Alle Kodierung läuft über `reposync_core::codec::{encode, decode}`, das
+Alle Kodierung läuft über `macsync_core::codec::{encode, decode}`, das
 intern `postcard` 1.x (serde-kompatibel, aktiv gewartet) verwendet. Ein
 späterer Formatwechsel betrifft damit genau eine Datei.
 

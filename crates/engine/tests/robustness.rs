@@ -8,9 +8,9 @@ use std::fs;
 
 use anyhow::Result;
 use common::*;
-use reposync_core::proto::{DirListing, UnitRoot};
-use reposync_core::{Entry, Hash};
-use reposync_engine::{Engine, Outcome, PeerApi, PullOptions};
+use macsync_core::proto::{DirListing, UnitRoot};
+use macsync_core::{Entry, Hash};
+use macsync_engine::{Engine, Outcome, PeerApi, PullOptions};
 
 /// Crash after k file operations for every k; after "restart" the repository
 /// must be complete, valid and identical to the source.
@@ -126,7 +126,7 @@ fn network_failure_mid_transfer_leaves_old_state() {
         assert!(matches!(d.outcome, Outcome::Failed(_)), "{:?}", d.outcome);
         assert_eq!(snapshot(&p.rb()), before, "partial state visible after failure at call {ok}");
         assert!(p.b.store().tx_pending().unwrap().is_empty());
-        assert!(fs::read_dir(p.rb().join(".reposync/staging")).unwrap().next().is_none(), "staging cleaned");
+        assert!(fs::read_dir(p.rb().join(".macsync/staging")).unwrap().next().is_none(), "staging cleaned");
     }
     // The connection is back: everything arrives.
     p.sync();
@@ -195,7 +195,7 @@ fn database_loss_never_overwrites_local_data() {
     let cfg = p.b.config().clone();
     let Pair { a, b, dir } = p;
     drop(b);
-    for f in ["reposync.db", "reposync.db-wal", "reposync.db-shm"] {
+    for f in ["macsync.db", "macsync.db-wal", "macsync.db-shm"] {
         let _ = fs::remove_file(cfg.state_dir.join(f));
     }
     let b = Engine::open(cfg).unwrap();
