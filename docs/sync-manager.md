@@ -93,6 +93,12 @@ geöffnete Verzeichnis verglichen.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+- **Verzeichnisbaum links** (wie im Finder): Ordner aufklappen, anklicken →
+  rechts der Inhalt. Ein-/ausblenden mit dem Seitenleisten-Knopf oder ⌃⌘S,
+  Breite per Trennlinie verstellbar (die Einstellung bleibt erhalten).
+  Ordner mit offenen Änderungen tragen einen Punkt (blau = Änderungen,
+  orange = Löschung, rot = Konflikt). Der Baum lädt jeden Ordner erst beim
+  Aufklappen – auch große Verzeichnisse bleiben schnell.
 - Doppelklick: Ordner öffnen bzw. Datei öffnen; Pfadleiste oben zum Zurückspringen.
 - Filter **Nicht synchron** zeigt nur, was noch offen ist.
 - Kontextmenü / Fußleiste pro Auswahl:

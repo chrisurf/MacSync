@@ -18,7 +18,9 @@
   Verzeichnisansicht mit dem Zustand jeder Datei auf beiden Macs (synchron,
   wird gesendet/geholt, wird gelöscht, Konflikt), Filter „Nicht synchron“,
   Suche; Aktionen Jetzt synchronisieren, Pausieren (Hauptordner), Konflikt
-  lösen, Im Finder zeigen, In den Papierkorb (docs/sync-manager.md)
+  lösen, Im Finder zeigen, In den Papierkorb; links ein ein-/ausblendbarer,
+  in der Breite verstellbarer Verzeichnisbaum mit Markierung geänderter
+  Ordner (docs/sync-manager.md)
 - **Fortschritt**: Prozent, Dateien, Bytes, aktuelle Datei, Geschwindigkeit
   und Restzeit im Menü und im Manager; der sendende Mac zeigt „Sende an …“
 - Das Menüleisten-Symbol dreht sich während der Synchronisation

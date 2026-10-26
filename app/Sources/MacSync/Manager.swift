@@ -30,7 +30,7 @@ struct SyncItem: Decodable, Identifiable, Hashable {
     }
 }
 
-private struct BrowseResult: Decodable {
+struct BrowseResult: Decodable {
     var online: Bool
     var peer: String?
     var items: [SyncItem]
@@ -50,6 +50,9 @@ final class ManagerModel: ObservableObject {
     @Published var filter: Filter = .all
     @Published var search = ""
     @Published var selection = Set<SyncItem.ID>()
+    /// Folder tree on the left (root = the sync root).
+    let tree = TreeNode(title: "", unit: nil, dir: "", isUnit: false)
+    @Published var treeSelection: String? = TreeNode.id(unit: nil, dir: "")
 
     private var timer: Timer?
 
@@ -81,7 +84,21 @@ final class ManagerModel: ObservableObject {
         return out
     }
 
+    /// Expands the tree down to the current directory (loading as needed).
+    func revealInTree() async {
+        var node = tree
+        for c in crumbs.dropFirst() {
+            if node.children == nil { await node.load() }
+            node.expanded = true
+            guard let next = node.children?.first(where: { $0.id == TreeNode.id(unit: c.unit, dir: c.dir) }) else { return }
+            node = next
+        }
+    }
+
     func start() {
+        tree.title = URL(fileURLWithPath: Paths.expand(root)).lastPathComponent
+        tree.expanded = true
+        Task { await tree.load() }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
             Task { @MainActor in ManagerWindow.shared.model?.refresh() }
@@ -93,27 +110,35 @@ final class ManagerModel: ObservableObject {
         timer = nil
     }
 
+    /// One directory from the daemon; `nil` if the daemon does not run.
+    static func fetch(unit: String?, dir: String) async throws -> BrowseResult? {
+        var req: [String: Any] = ["cmd": "browse", "dir": dir]
+        req["unit"] = unit ?? NSNull()
+        guard let obj = try await Task.detached(operation: { try IPC.call(req, timeout: 30) }).value else { return nil }
+        let data = try JSONSerialization.data(withJSONObject: obj)
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        return try d.decode(BrowseResult.self, from: data)
+    }
+
     func refresh() {
         guard !loading else { return }
         loading = true
-        var req: [String: Any] = ["cmd": "browse", "dir": dir]
-        req["unit"] = unit ?? NSNull()
+        let (u, d) = (unit, dir)
         Task {
             defer { loading = false }
             do {
-                guard let obj = try await Task.detached(operation: { try IPC.call(req, timeout: 30) }).value else {
+                guard let r = try await Self.fetch(unit: u, dir: d) else {
                     error = "Die Synchronisation läuft nicht – „Synchronisation starten“ im Menü."
                     return
                 }
-                let data = try JSONSerialization.data(withJSONObject: obj)
-                let d = JSONDecoder()
-                d.keyDecodingStrategy = .convertFromSnakeCase
-                let r = try d.decode(BrowseResult.self, from: data)
+                guard u == unit, d == dir else { return } // navigated meanwhile
                 items = r.items
                 online = r.online
                 peerName = r.peer ?? "anderer Mac"
                 error = nil
                 selection = selection.intersection(Set(items.map(\.id)))
+                tree.node(TreeNode.id(unit: u, dir: d))?.setChildren(from: r.items)
             } catch {
                 self.error = error.localizedDescription
             }
@@ -123,6 +148,8 @@ final class ManagerModel: ObservableObject {
     func go(unit: String?, dir: String) {
         self.unit = unit
         self.dir = dir
+        treeSelection = TreeNode.id(unit: unit, dir: dir)
+        Task { await revealInTree() }
         selection = []
         items = []
         refresh()
@@ -201,43 +228,168 @@ final class ManagerModel: ObservableObject {
     }
 }
 
+// MARK: - folder tree
+
+/// A folder in the tree on the left; children are loaded when expanded.
+@MainActor
+final class TreeNode: ObservableObject, Identifiable {
+    let id: String
+    @Published var title: String
+    let unit: String?
+    let dir: String
+    let isUnit: Bool
+    @Published var state = "synced"
+    @Published var paused = false
+    /// `nil` = not loaded yet.
+    @Published private(set) var children: [TreeNode]?
+    @Published var expanded = false {
+        didSet { if expanded && children == nil { Task { await load() } } }
+    }
+
+    static func id(unit: String?, dir: String) -> String { "\(unit ?? "")|\(dir)" }
+
+    init(title: String, unit: String?, dir: String, isUnit: Bool) {
+        self.id = Self.id(unit: unit, dir: dir)
+        self.title = title
+        self.unit = unit
+        self.dir = dir
+        self.isUnit = isUnit
+    }
+
+    func load() async {
+        guard let r = try? await ManagerModel.fetch(unit: unit, dir: dir) else { return }
+        setChildren(from: r.items)
+    }
+
+    /// Updates the sub-folders from a listing, keeping loaded sub-trees.
+    func setChildren(from items: [SyncItem]) {
+        let old = Dictionary(uniqueKeysWithValues: (children ?? []).map { ($0.id, $0) })
+        children = items.filter(\.isDir).map { item in
+            let (u, d) = item.isUnit ? (item.unit, "") : (item.unit, item.path)
+            let n = old[Self.id(unit: u, dir: d)] ?? TreeNode(title: item.name, unit: u, dir: d, isUnit: item.isUnit)
+            n.state = item.state
+            n.paused = item.paused
+            return n
+        }
+    }
+
+    func node(_ id: String) -> TreeNode? {
+        if self.id == id { return self }
+        for c in children ?? [] { if let n = c.node(id) { return n } }
+        return nil
+    }
+}
+
+private struct FolderTree: View {
+    @ObservedObject var model: ManagerModel
+
+    var body: some View {
+        List(selection: Binding(
+            get: { model.treeSelection },
+            set: { id in
+                guard let id, id != model.treeSelection, let n = model.tree.node(id) else { return }
+                model.go(unit: n.unit, dir: n.dir)
+            })) {
+            TreeRow(node: model.tree)
+        }
+        .listStyle(.sidebar)
+    }
+}
+
+private struct TreeRow: View {
+    @ObservedObject var node: TreeNode
+
+    var body: some View {
+        if node.children?.isEmpty == true {
+            label
+        } else {
+            DisclosureGroup(isExpanded: $node.expanded) {
+                ForEach(node.children ?? []) { TreeRow(node: $0) }
+            } label: {
+                label
+            }
+        }
+    }
+
+    private var label: some View {
+        HStack(spacing: 6) {
+            Image(systemName: node.unit == nil && node.dir.isEmpty ? "externaldrive.fill" : (node.isUnit ? "folder.fill" : "folder"))
+                .foregroundStyle(Color.accentColor)
+            Text(node.title).lineLimit(1)
+            Spacer(minLength: 4)
+            if node.paused {
+                Image(systemName: "pause.circle.fill").foregroundStyle(.orange).font(.caption)
+            } else if node.state != "synced" {
+                Circle().fill(dot).frame(width: 7, height: 7).help(node.state)
+            }
+        }
+        .tag(node.id)
+    }
+
+    private var dot: Color {
+        switch node.state {
+        case "conflict": return .red
+        case "delete-on-peer", "delete-here": return .orange
+        case "unknown": return .gray
+        default: return .blue
+        }
+    }
+}
+
 // MARK: - view
 
 struct ManagerView: View {
     @ObservedObject var model: ManagerModel
     @ObservedObject var app = AppModel.shared
+    @AppStorage("managerShowTree") private var showTree = true
 
     var body: some View {
         VStack(spacing: 0) {
             ProgressHeader(app: app, peer: model.peerName)
                 .padding(12)
             Divider()
-            HStack(spacing: 8) {
-                Button { model.up() } label: { Image(systemName: "chevron.left") }
-                    .disabled(model.crumbs.count < 2)
-                ForEach(Array(model.crumbs.enumerated()), id: \.offset) { i, c in
-                    if i > 0 { Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
-                    Button(c.title) { model.go(unit: c.unit, dir: c.dir) }
-                        .buttonStyle(.plain)
-                        .fontWeight(i == model.crumbs.count - 1 ? .semibold : .regular)
+            HSplitView {
+                if showTree {
+                    FolderTree(model: model)
+                        .frame(minWidth: 160, idealWidth: 230, maxWidth: 460)
                 }
-                Spacer()
-                Picker("", selection: $model.filter) {
-                    ForEach(ManagerModel.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                VStack(spacing: 0) {
+                    toolbar
+                    table
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 200)
-                TextField("Suchen", text: $model.search)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
+                .frame(minWidth: 560)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            table
             Divider()
             footer.padding(10)
         }
         .frame(minWidth: 820, minHeight: 480)
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 8) {
+            Button { withAnimation { showTree.toggle() } } label: { Image(systemName: "sidebar.left") }
+                .help(showTree ? "Verzeichnisbaum ausblenden" : "Verzeichnisbaum einblenden")
+                .keyboardShortcut("s", modifiers: [.command, .control])
+            Button { model.up() } label: { Image(systemName: "chevron.left") }
+                .disabled(model.crumbs.count < 2)
+            ForEach(Array(model.crumbs.enumerated()), id: \.offset) { i, c in
+                if i > 0 { Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
+                Button(c.title) { model.go(unit: c.unit, dir: c.dir) }
+                    .buttonStyle(.plain)
+                    .fontWeight(i == model.crumbs.count - 1 ? .semibold : .regular)
+            }
+            Spacer()
+            Picker("", selection: $model.filter) {
+                ForEach(ManagerModel.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 200)
+            TextField("Suchen", text: $model.search)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 160)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private var table: some View {
