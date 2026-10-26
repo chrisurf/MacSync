@@ -23,7 +23,21 @@ werden nie still aufgelöst.
 | [docs/validation-report.md](docs/validation-report.md) | Testergebnisse und Messwerte |
 | [docs/adr/](docs/adr/) | Architekturentscheidungen |
 
-## Schnellstart (zwei Macs)
+## Schnellstart mit der App (empfohlen)
+
+1. Auf beiden Macs `RepoSync-<version>-arm64.pkg` aus den
+   [Releases](https://github.com/chrisurf/MacSync/releases) installieren
+   (oder selbst bauen: `make install-app`).
+2. Ist die App nicht notarisiert: Systemeinstellungen → Datenschutz &
+   Sicherheit → **Trotzdem öffnen**.
+3. RepoSync startet in der Menüleiste und führt durch die Einrichtung:
+   Verzeichnis wählen → auf einem Mac „Dieser Mac wartet“, auf dem anderen
+   den Mac auswählen und den Code eingeben → fertig.
+
+Bestehende Konfiguration und Kopplung aus dem Terminal-Betrieb werden
+übernommen.
+
+## Schnellstart im Terminal (zwei Macs)
 
 ```sh
 xcode-select --install                                         # einmalig
@@ -49,10 +63,11 @@ Alle Befehle: `make help`.
 
 ## Status (MVP v0.1)
 
+Ab 0.2.0 mit Menüleisten-App und Installer für Apple Silicon.
 Funktionsfähig: Zweiweg-, Spiegel-Sender- und Spiegel-Empfänger-Modus,
 Pairing mit 6-stelligem Code (SPAKE2), Noise-verschlüsselter Transport nur im
 LAN, Watcher mit Ruhe-Gate, Anti-Entropie, Konfliktspeicher, Crash-Recovery,
-CLI. Nicht im MVP: Menüleisten-App, Übergabe-Modus, Delta-Transfer grosser
+CLI, Menüleisten-App. Noch nicht enthalten: Übergabe-Modus, Delta-Transfer grosser
 Dateien (siehe [Roadmap](docs/implementation-plan.md#22-nicht-enthalten-roadmap-v02)).
 
 ## Entwicklung

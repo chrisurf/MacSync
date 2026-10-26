@@ -1,6 +1,6 @@
 # ADR-0010: Menüleisten-App startet den Daemon als Kindprozess
 
-- Status: vorgeschlagen · Datum: 2026-10-26
+- Status: angenommen · Datum: 2026-10-26
 
 ## Kontext
 v0.2.0 bringt eine SwiftUI-Menüleisten-App. Der Daemon lief bisher im

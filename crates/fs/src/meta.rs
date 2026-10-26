@@ -10,6 +10,8 @@ use reposync_core::Kind;
 
 /// macOS quarantine attribute (configurable stripping).
 pub const QUARANTINE: &str = "com.apple.quarantine";
+/// macOS provenance attribute (host-local, never synchronised).
+pub const PROVENANCE: &str = "com.apple.provenance";
 
 /// Read all extended attributes of `path` (no-follow), sorted by name.
 /// Attributes that cannot be read are skipped.
@@ -20,8 +22,14 @@ pub fn read_xattrs(path: &Path) -> Vec<(String, Vec<u8>)> {
     let mut out: Vec<(String, Vec<u8>)> = names
         .filter_map(|n| {
             let name = n.to_str()?.to_string();
-            // Linux security/system namespaces are host-local.
-            if name.starts_with("security.") || name.starts_with("system.") || name.starts_with("trusted.") {
+            // Host-local: Linux security/system namespaces, and macOS
+            // provenance tracking (set by the kernel per writing app; it can
+            // be neither copied meaningfully nor removed).
+            if name.starts_with("security.")
+                || name.starts_with("system.")
+                || name.starts_with("trusted.")
+                || name == PROVENANCE
+            {
                 return None;
             }
             let v = xattr::get(path, &n).ok()??;

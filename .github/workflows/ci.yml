@@ -48,3 +48,20 @@ jobs:
         with:
           name: e2e-${{ matrix.os }}
           path: target/e2e-summary-*.json
+
+  app:
+    # Builds the installer in every PR so it can be tested before the merge
+    # (Actions → this run → Artifacts).
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: make pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RepoSync-pkg
+          path: build/RepoSync-*.pkg*

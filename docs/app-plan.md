@@ -1,6 +1,6 @@
 # Plan v0.2.0: RepoSync als Mac-App mit Menüleiste und Release-Pipeline
 
-Branch `feature/0.2.0`. Merge nach `main` erzeugt automatisch das Release
+Status: umgesetzt (M1–M5). Branch `feature/0.2.0`. Merge nach `main` erzeugt automatisch das Release
 `v0.2.0` mit einem `.pkg`-Installer für Apple Silicon (M1–M4).
 
 ## 1. Ziel in einem Satz
