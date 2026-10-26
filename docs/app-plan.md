@@ -97,7 +97,8 @@ anderer Mac nicht erreichbar · Konflikt.
 ```
 RepoSync.app/Contents/
   MacOS/RepoSync          SwiftUI-App (Menüleiste, Einstellungen, Assistent)
-  MacOS/reposync          Rust-Binary (Daemon + CLI), unverändert nutzbar
+  Helpers/reposync        Rust-Binary (Daemon + CLI), unverändert nutzbar
+                          (nicht in MacOS/: APFS unterscheidet RepoSync/reposync nicht)
   Info.plist              LSUIElement, NSLocalNetworkUsageDescription,
                           NSBonjourServices (_reposync._tcp, _reposync-pair._tcp)
 ```

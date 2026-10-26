@@ -313,7 +313,14 @@ impl Daemon {
             libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
             libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
         }
+        // Started by the menu bar app: stop when the app is gone (crash,
+        // force quit), so no orphaned daemon keeps running.
+        let parent: Option<libc::pid_t> = std::env::var("REPOSYNC_PARENT_PID").ok().and_then(|p| p.parse().ok());
         while !SIGNALLED.load(Ordering::SeqCst) {
+            if parent.is_some_and(|p| unsafe { libc::getppid() } != p) {
+                tracing::info!("parent process ended");
+                break;
+            }
             std::thread::sleep(Duration::from_millis(200));
         }
         tracing::info!("shutting down");
