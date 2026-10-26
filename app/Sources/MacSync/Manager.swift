@@ -336,22 +336,53 @@ private struct TreeRow: View {
     }
 }
 
+/// Draggable vertical divider that sets the width of the view on its left.
+private struct SplitDivider: View {
+    @Binding var width: Double
+    let range: ClosedRange<Double>
+    @State private var start: Double?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: 1)
+            .padding(.horizontal, 3) // wider grab area
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { g in
+                        let base = start ?? width
+                        start = base
+                        width = min(range.upperBound, max(range.lowerBound, base + g.translation.width))
+                    }
+                    .onEnded { _ in start = nil }
+            )
+            .padding(.horizontal, -3)
+    }
+}
+
 // MARK: - view
 
 struct ManagerView: View {
     @ObservedObject var model: ManagerModel
     @ObservedObject var app = AppModel.shared
     @AppStorage("managerShowTree") private var showTree = true
+    /// About a fifth of the default window, like the Finder sidebar.
+    @AppStorage("managerTreeWidth") private var treeWidth = 210.0
 
     var body: some View {
         VStack(spacing: 0) {
             ProgressHeader(app: app, peer: model.peerName)
                 .padding(12)
             Divider()
-            HSplitView {
+            HStack(spacing: 0) {
                 if showTree {
                     FolderTree(model: model)
-                        .frame(minWidth: 160, idealWidth: 230, maxWidth: 460)
+                        .frame(width: treeWidth)
+                    SplitDivider(width: $treeWidth, range: 150...460)
                 }
                 VStack(spacing: 0) {
                     toolbar
@@ -377,6 +408,8 @@ struct ManagerView: View {
                 Button(c.title) { model.go(unit: c.unit, dir: c.dir) }
                     .buttonStyle(.plain)
                     .fontWeight(i == model.crumbs.count - 1 ? .semibold : .regular)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             Spacer()
             Picker("", selection: $model.filter) {
