@@ -58,6 +58,14 @@ reposync --version    # z. B. reposync 0.1.0 (a1b2c3d4e5, 2026-10-20)
 Die Version enthält den Git-Commit. Beide Macs zeigen sich gegenseitig im
 `make status` an, ob sie denselben Build fahren.
 
+## Am einfachsten: die App
+
+Ab 0.2.0 gibt es `RepoSync.app` mit Symbol in der Menüleiste: Installer aus
+den Releases (oder `make install-app`) auf beiden Macs installieren, starten,
+dem Einrichtungsassistenten folgen. Die App startet die Synchronisation
+selbst; macOS fragt einmal nach dem Zugriff aufs lokale Netzwerk →
+**Erlauben**. Alles Weitere in diesem Dokument betrifft den Terminal-Betrieb.
+
 ## Kurzweg: `reposync-connect`
 
 `make install` installiert neben `reposync` das Skript `reposync-connect`.

@@ -62,6 +62,18 @@ install: build ## Build and install reposync to $(BINDIR)
 	@echo "installed $$($(BINDIR)/reposync --version) → $(BINDIR)/reposync"
 	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "note: add $(BINDIR) to PATH: echo 'export PATH=\"$(BINDIR):\$$PATH\"' >> ~/.zshrc";; esac
 
+.PHONY: app
+app: ## Build the menu bar app build/RepoSync.app (Apple Silicon)
+	scripts/build-app.sh
+
+.PHONY: pkg
+pkg: app ## Build the installer build/RepoSync-<version>-arm64.pkg
+	scripts/build-pkg.sh
+
+.PHONY: install-app
+install-app: pkg ## Build and install RepoSync.app into /Applications (asks for your password)
+	sudo installer -pkg build/RepoSync-$$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)-arm64.pkg -target /
+
 .PHONY: uninstall
 uninstall: ## Remove the installed binary (configuration and data stay)
 	rm -f $(BINDIR)/reposync $(BINDIR)/reposync-connect
@@ -82,6 +94,7 @@ update: ## Pull the latest version (fast-forward only), rebuild and reinstall
 .PHONY: clean
 clean: ## Remove build artefacts
 	$(CARGO) clean
+	rm -rf build app/.build
 
 ##@ Quality
 

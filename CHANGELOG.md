@@ -1,8 +1,19 @@
 # Changelog
 
-## Unveröffentlicht
+## 0.2.0 – Mac-App (2026-10-26)
 
 ### Hinzugefügt
+- **RepoSync.app**: Menüleisten-App für Apple Silicon (macOS 14+) – Zustand,
+  Verzeichnis und gekoppelter Mac auf einen Blick; Jetzt synchronisieren,
+  Pausieren; Einstellungen (Bei Anmeldung starten, Mitteilungen bei
+  Konflikten, Verzeichnis, Richtung, Gerätename, Kopplung, CLI installieren);
+  Einrichtungsassistent ohne Terminal (ADR-0010)
+- Installer `RepoSync-<version>-arm64.pkg`; `make app`, `make pkg`,
+  `make install-app`
+- Release-Pipeline: Merge auf `main` mit neuer Version erzeugt ein
+  GitHub-Release mit dem Installer; jeder PR baut ihn als Artefakt
+- `reposync discover`, `reposync pair … --json`; der wartende Mac meldet sich
+  per Bonjour an, der andere findet ihn ohne Rechnernamen
 - `reposync-connect` (`scripts/connect.sh`, `make connect`): verbindet zwei
   Macs in einem Schritt – Konfiguration, Bonjour-Suche, Pairing, Start;
   erkennt selbst, welcher Mac wartet und welcher sich verbindet
@@ -22,6 +33,12 @@
 - Doku: Getting Started auf zwei Macs, Wartung
 
 ### Geändert
+- Hostnamen werden bevorzugt per IPv4 aufgelöst (vorher scheiterte
+  `pair connect` an IPv6-Link-Local-Adressen)
+- Peer-Adresse ohne Host (`:47123`) wird abgewiesen
+- Standard-Gerätename auf macOS ist der Computername
+- Das macOS-Attribut `com.apple.provenance` wird nicht mehr synchronisiert
+  (rechnerlokal; liess Dateien sonst dauerhaft als geändert erscheinen)
 - `bincode` (nicht mehr gewartet, RUSTSEC-2025-0141) durch `postcard`
   ersetzt (ADR-0009); Binärformat inkompatibel zu früheren Dev-Builds
 - CI nutzt die Make-Targets

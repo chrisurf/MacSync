@@ -2,6 +2,18 @@
 
 Alle `make`-Befehle im Repository-Ordner. Übersicht aller Targets: `make help`.
 
+## Mit der App (empfohlen)
+
+```sh
+make install-app       # baut RepoSync.app + Installer, installiert nach /Programme
+make app               # nur bauen: build/RepoSync.app
+make pkg               # nur bauen: build/RepoSync-<version>-arm64.pkg
+```
+
+Oder den Installer aus den GitHub-Releases nehmen. Danach alles über das
+Symbol in der Menüleiste: Einrichtung, Zustand, Einstellungen, Beenden.
+Die folgenden Abschnitte betreffen den Betrieb im Terminal.
+
 ## Einmalig (beide Macs)
 
 ```sh

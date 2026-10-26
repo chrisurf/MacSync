@@ -64,6 +64,9 @@ else
   fail "rustup/cargo missing"
   hint "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # then open a new Terminal"
 fi
+if [ $IS_MAC = 1 ]; then
+  if command -v swift >/dev/null; then pass "swift $(swift --version 2>/dev/null | sed -n 's/.*Swift version \([0-9.]*\).*/\1/p' | head -1) (for make app)"; else note "swift missing (only needed for make app)"; hint "xcode-select --install"; fi
+fi
 if command -v python3 >/dev/null; then pass "python3 (only needed for make e2e)"; else note "python3 missing (only needed for make e2e)"; fi
 
 section "Repository"

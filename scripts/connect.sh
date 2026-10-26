@@ -21,7 +21,6 @@ RUN=ask
 YES=0
 FORCE=0
 STOP=0
-SERVICE=_reposync-pair._tcp
 
 usage() {
   cat <<EOF
@@ -129,7 +128,6 @@ rs() { "$RS_BIN" --config "$CONFIG" "$@"; }
 # --- stop ------------------------------------------------------------------
 if [ $STOP = 1 ]; then
   stopped=0
-  pkill -f "$SERVICE" 2>/dev/null && stopped=1
   if pkill -INT -f "reposync .*daemon" 2>/dev/null; then
     stopped=1; sleep 1
     pkill -f "reposync .*daemon" 2>/dev/null
@@ -219,37 +217,18 @@ if [ "$write_config" = 1 ]; then
 fi
 
 # --- 2. pairing ------------------------------------------------------------
-# Bonjour search for a Mac that is waiting with a pairing code.
-# Prints "host port name" lines.
+# Bonjour search for a Mac that is waiting with a pairing code
+# (reposync announces itself while waiting). Prints "host port name" lines.
 browse() {
-  local tmp pid inst
-  tmp=$(mktemp -d)
-  dns-sd -B "$SERVICE" local. >"$tmp/b" 2>/dev/null & pid=$!
-  sleep "$WAIT_S"; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-  awk '$2 == "Add" { $1=$2=$3=$4=$5=$6=""; sub(/^ +/, ""); print }' "$tmp/b" | sort -u >"$tmp/names"
-  while IFS= read -r inst; do
-    [ -n "$inst" ] || continue
-    dns-sd -L "$inst" "$SERVICE" local. >"$tmp/l" 2>/dev/null & pid=$!
-    sleep 2; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-    sed -n 's/.* can be reached at \([^ ]*\)\.:\([0-9]*\) .*/\1 \2/p' "$tmp/l" | head -1 | while read -r h p; do
-      [ "$h" = "$SELF_HOST.local" ] || printf '%s %s %s\n' "$h" "$p" "$inst"
-    done
-  done <"$tmp/names"
-  rm -rf "$tmp"
+  rs discover --timeout-s "$WAIT_S" 2>/dev/null |
+    awk -F'\t' '{ a = $1; p = a; sub(/:[0-9]+$/, "", a); sub(/^.*:/, "", p); gsub(/[][]/, "", a); print a, p, $3 }'
 }
 
 do_listen() {
-  local adv=""
-  if [ $IS_MAC = 1 ]; then
-    dns-sd -R "$NAME" "$SERVICE" local. "$PAIR_PORT" >/dev/null 2>&1 & adv=$!
-    trap '[ -n "$adv" ] && kill $adv 2>/dev/null' EXIT INT TERM
-  fi
   echo
   info "this Mac waits. Now run '$PROG' on the OTHER Mac and enter this code there:"
   rs pair listen --timeout-s "$TIMEOUT_S" | sed '/on the other Mac run/d'
   local rc=$?
-  [ -n "$adv" ] && kill "$adv" 2>/dev/null
-  trap - EXIT INT TERM
   case $rc in 130|143) info "stopped"; exit 0 ;; esac
   return $rc
 }
@@ -282,12 +261,8 @@ if [ "$paired" = 0 ]; then
   if [ "$ROLE" = auto ] && [ -n "$PEER" ]; then ROLE=connect; fi
   target_host=$PEER_HOST target_port=$((PEER_PORT + 1))
   if [ "$ROLE" != listen ] && [ -z "$PEER" ]; then
-    if [ $IS_MAC = 1 ]; then
-      info "searching for the other Mac via Bonjour ($WAIT_S s) …"
-      found=$(browse)
-    else
-      found=""
-    fi
+    info "searching for the other Mac via Bonjour ($WAIT_S s) …"
+    found=$(browse)
     n=$(printf '%s' "$found" | grep -c . || true)
     if [ "$n" = 1 ]; then
       target_host=$(echo "$found" | awk '{print $1}'); target_port=$(echo "$found" | awk '{print $2}')

@@ -103,14 +103,20 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Device name: the macOS computer name ("MacBook Pro"), else the host name.
 fn hostname() -> String {
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().trim_end_matches(".local").to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "mac".into())
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().trim_end_matches(".local").to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let computer = if cfg!(target_os = "macos") { run("scutil", &["--get", "ComputerName"]) } else { None };
+    computer.or_else(|| run("hostname", &[])).unwrap_or_else(|| "mac".into())
 }
 
 /// Expand a leading `~/`.

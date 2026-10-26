@@ -61,6 +61,14 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Find Macs that wait for pairing (Bonjour).
+    Discover {
+        #[arg(long, default_value_t = 4)]
+        timeout_s: u64,
+        /// One JSON array instead of text lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// Pair with the other Mac (one-time, 6-digit code).
     Pair {
         #[command(subcommand)]
@@ -157,12 +165,17 @@ enum PairCmd {
     Listen {
         #[arg(long, default_value_t = 300)]
         timeout_s: u64,
+        /// JSON lines: {"event":"code",…} then {"event":"paired",…}.
+        #[arg(long)]
+        json: bool,
     },
     /// Pair with a listening Mac.
     Connect {
         /// host or host:port of the listening Mac.
         addr: String,
         code: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -220,9 +233,12 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Init { root, name, listen, peer, mode, state_dir, force } = &cli.cmd {
         return init(&path, root, name, *listen, peer, mode, state_dir, *force);
     }
+    if let Cmd::Discover { timeout_s, json } = cli.cmd {
+        return discover(&path, timeout_s, json);
+    }
     let cfg = Config::load(&path)?;
     match cli.cmd {
-        Cmd::Init { .. } => unreachable!(),
+        Cmd::Init { .. } | Cmd::Discover { .. } => unreachable!(),
         Cmd::Pair { cmd } => pair(&cfg, cmd),
         Cmd::Peers => {
             let peers = open_store(&cfg)?.peers()?;
@@ -439,12 +455,29 @@ fn local_ips() -> Vec<String> {
     ips
 }
 
-fn store_peer(cfg: &Config, r: &pairing::PairResult) -> Result<()> {
+/// Macs waiting for pairing. Works without configuration (no own id to skip).
+fn discover(config_path: &Path, timeout_s: u64, json: bool) -> Result<()> {
+    let own = Config::load(config_path).ok().and_then(|c| Identity::load_or_create(&c.state_dir()).ok());
+    let own = own.map(|id| id.device_id());
+    let found = reposync_net::discovery::browse_pairing(own.as_deref(), Duration::from_secs(timeout_s))?;
+    if json {
+        println!("{}", serde_json::to_string(&found)?);
+    } else {
+        for c in found {
+            println!("{}\t{}\t{}", c.addr, c.device, c.name);
+        }
+    }
+    Ok(())
+}
+
+/// Store the paired peer; returns a JSON description incl. warnings.
+fn store_peer(cfg: &Config, r: &pairing::PairResult) -> Result<Value> {
     let store = open_store(cfg)?;
+    let mut warnings = Vec::new();
     for p in store.peers()? {
         if p.device != r.info.device {
             store.remove_peer(&p.device)?;
-            println!("replacing previous peer {} ({})", p.name, p.device);
+            warnings.push(format!("replacing previous peer {} ({})", p.name, p.device));
         }
     }
     let addr = SocketAddr::new(r.addr.ip(), r.port);
@@ -455,22 +488,43 @@ fn store_peer(cfg: &Config, r: &pairing::PairResult) -> Result<()> {
         addr: addr.to_string(),
         paired_ms: reposync_fs::time::now_ms(),
     })?;
-    println!("paired with {} ({}) at {addr}", r.info.name, r.info.device);
     if r.info.arch != std::env::consts::ARCH {
-        println!(
-            "warning: the other Mac is {} and this one {}: native modules in node_modules (.node, esbuild, sharp) may not work on both",
+        warnings.push(format!(
+            "the other Mac is {} and this one {}: native modules in node_modules (.node, esbuild, sharp) may not work on both",
             r.info.arch,
             std::env::consts::ARCH
-        );
+        ));
     }
     if r.info.root != cfg.root().to_string_lossy() {
-        println!(
-            "warning: root path differs ({} vs {}); absolute paths in virtualenvs and caches will point to the wrong place",
+        warnings.push(format!(
+            "root path differs ({} vs {}); absolute paths in virtualenvs and caches will point to the wrong place",
             r.info.root,
             cfg.root().display()
-        );
+        ));
     }
-    Ok(())
+    Ok(json!({
+        "event": "paired",
+        "device": r.info.device,
+        "name": r.info.name,
+        "addr": addr.to_string(),
+        "warnings": warnings,
+    }))
+}
+
+fn print_paired(v: &Value, json: bool) {
+    if json {
+        println!("{v}");
+        return;
+    }
+    for w in v["warnings"].as_array().into_iter().flatten() {
+        println!("warning: {}", w.as_str().unwrap_or_default());
+    }
+    println!(
+        "paired with {} ({}) at {}",
+        v["name"].as_str().unwrap_or("?"),
+        v["device"].as_str().unwrap_or("?"),
+        v["addr"].as_str().unwrap_or("?")
+    );
 }
 
 fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
@@ -478,23 +532,36 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
     let hello = HelloInfo::local(&id, &cfg.device_name, &cfg.root().to_string_lossy());
     let port = cfg.listen.port();
     match cmd {
-        PairCmd::Listen { timeout_s } => {
+        PairCmd::Listen { timeout_s, json } => {
             let listener = TcpListener::bind(SocketAddr::new(cfg.listen.ip(), cfg.pair_port))
                 .with_context(|| format!("bind pairing port {}", cfg.pair_port))?;
             let code = pairing::generate_code();
-            println!("pairing code: {} {}", &code[..3], &code[3..]);
+            // Lets the other Mac find this one without knowing its name.
+            let _advert =
+                reposync_net::discovery::Advertiser::start_pairing(&id.device_id(), &cfg.device_name, cfg.pair_port)
+                    .map_err(|e| tracing::warn!("Bonjour announcement failed: {e:#}"))
+                    .ok();
             let ips = local_ips();
-            if ips.is_empty() {
-                println!("on the other Mac run: reposync pair connect <this-mac>.local {code}");
+            if json {
+                println!(
+                    "{}",
+                    json!({"event": "code", "code": code, "ips": ips, "port": cfg.pair_port, "timeout_s": timeout_s})
+                );
+            } else {
+                println!("pairing code: {} {}", &code[..3], &code[3..]);
+                if ips.is_empty() {
+                    println!("on the other Mac run: reposync pair connect <this-mac>.local {code}");
+                }
+                for ip in ips {
+                    println!("on the other Mac run: reposync pair connect {ip}:{} {code}", cfg.pair_port);
+                }
+                println!("waiting up to {timeout_s} s …");
             }
-            for ip in ips {
-                println!("on the other Mac run: reposync pair connect {ip}:{} {code}", cfg.pair_port);
-            }
-            println!("waiting up to {timeout_s} s …");
             let r = pairing::listen(&listener, &code, &id, &hello, port, Duration::from_secs(timeout_s))?;
-            store_peer(cfg, &r)
+            print_paired(&store_peer(cfg, &r)?, json);
+            Ok(())
         }
-        PairCmd::Connect { addr, code } => {
+        PairCmd::Connect { addr, code, json } => {
             let code: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
             let with_port = if addr.contains(':') && !addr.starts_with('[') || addr.contains("]:") {
                 addr.clone()
@@ -503,7 +570,8 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             };
             let sa = reposync_net::lan::resolve(&with_port)?;
             let r = pairing::connect(sa, &code, &id, &hello, port)?;
-            store_peer(cfg, &r)
+            print_paired(&store_peer(cfg, &r)?, json);
+            Ok(())
         }
     }
 }

@@ -2,3 +2,5 @@
 *.swp
 .DS_Store
 /.reposync
+/build
+/app/.build
