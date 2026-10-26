@@ -16,11 +16,10 @@ enum Paths {
 
     static var socket: URL { stateDir.appendingPathComponent("daemon.sock") }
 
-    static var logFile: URL { home.appendingPathComponent("Library/Logs/RepoSync/daemon.log") }
+    static var logFile: URL { home.appendingPathComponent("Library/Logs/MacSync/daemon.log") }
 
-    /// `reposync` inside the app bundle (Contents/Helpers – Contents/MacOS
-    /// already holds `RepoSync`, and APFS is case-insensitive); falls back to
-    /// ~/.local/bin for development.
+    /// `reposync` inside the app bundle (Contents/Helpers, next to the app
+    /// executable in Contents/MacOS); falls back to ~/.local/bin for development.
     static var binary: URL? {
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/reposync")
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }

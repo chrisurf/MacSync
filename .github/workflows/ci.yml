@@ -63,5 +63,5 @@ jobs:
       - run: make pkg
       - uses: actions/upload-artifact@v7
         with:
-          name: RepoSync-pkg
-          path: build/RepoSync-*.pkg*
+          name: MacSync-pkg
+          path: build/MacSync-*.pkg*

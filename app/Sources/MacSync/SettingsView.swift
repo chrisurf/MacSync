@@ -31,7 +31,13 @@ private struct GeneralTab: View {
                     if let m = cliMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
                 }
             }
-            LabeledContent("Version", value: model.status?.version ?? Bundle.main.shortVersion)
+            LabeledContent("Version", value: Bundle.main.shortVersion)
+            LabeledContent("Entwickelt von") {
+                VStack(alignment: .trailing) {
+                    Text(About.company)
+                    Link("alpineperspective.com", destination: About.website)
+                }
+            }
             if let e = model.lastError {
                 Text(e).foregroundStyle(.red).font(.caption)
             }

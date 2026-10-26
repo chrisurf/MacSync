@@ -163,6 +163,7 @@ final class SetupModel: ObservableObject {
     }
 
     func finish(launchAtLogin: Bool) {
+        UserDefaults.standard.set(true, forKey: "offeredLaunchAtLogin")
         AppModel.shared.setLaunchAtLogin(launchAtLogin)
         AppModel.shared.restartDaemon()
         SetupWindow.shared.close()
@@ -184,7 +185,7 @@ struct SetupView: View {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 28))
                 VStack(alignment: .leading) {
-                    Text("RepoSync einrichten").font(.title2.bold())
+                    Text("MacSync einrichten").font(.title2.bold())
                     Text(subtitle).foregroundStyle(.secondary)
                 }
             }
@@ -238,7 +239,7 @@ struct SetupView: View {
         switch setup.pairing {
         case .waiting(let code):
             VStack(spacing: 12) {
-                Text("Öffne RepoSync auf dem anderen Mac und gib dort diesen Code ein:")
+                Text("Öffne MacSync auf dem anderen Mac und gib dort diesen Code ein:")
                 Text(code.count == 6 ? "\(code.prefix(3)) \(code.suffix(3))" : code)
                     .font(.system(size: 44, weight: .semibold, design: .monospaced))
                     .textSelection(.enabled)
@@ -273,7 +274,7 @@ struct SetupView: View {
                 if let p = setup.pairedWith {
                     Label("Bereits gekoppelt mit \(p)", systemImage: "checkmark.circle").foregroundStyle(.green)
                 }
-                Text("Starte RepoSync auch auf dem anderen Mac. Ein Mac wartet und zeigt einen Code, der andere verbindet sich.")
+                Text("Starte MacSync auch auf dem anderen Mac. Ein Mac wartet und zeigt einen Code, der andere verbindet sich.")
                 GroupBox("Wartende Macs im Netzwerk") {
                     if setup.candidates.isEmpty {
                         HStack { ProgressView().controlSize(.small); Text("Suche …").foregroundStyle(.secondary) }
@@ -305,9 +306,9 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(setup.pairedWith.map { "Gekoppelt mit \($0)" } ?? "Eingerichtet", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green).font(.title3)
-            Text("RepoSync synchronisiert \(Paths.display(setup.root.path)) im Hintergrund. Das Symbol in der Menüleiste zeigt den Zustand.")
+            Text("MacSync synchronisiert \(Paths.display(setup.root.path)) im Hintergrund. Das Symbol in der Menüleiste zeigt den Zustand.")
             Toggle("Bei Anmeldung automatisch starten", isOn: $launchAtLogin)
-            Text("macOS fragt beim ersten Verbinden, ob RepoSync auf das lokale Netzwerk zugreifen darf – bitte „Erlauben“.")
+            Text("macOS fragt beim ersten Verbinden, ob MacSync auf das lokale Netzwerk zugreifen darf – bitte „Erlauben“.")
                 .font(.callout).foregroundStyle(.secondary)
             HStack {
                 Spacer()
@@ -333,7 +334,7 @@ final class SetupWindow: NSObject, NSWindowDelegate {
         }
         let m = SetupModel(step: step)
         let w = NSWindow(contentViewController: NSHostingController(rootView: SetupView(setup: m)))
-        w.title = "RepoSync"
+        w.title = "MacSync"
         w.styleMask = [.titled, .closable]
         w.isReleasedWhenClosed = false
         w.delegate = self

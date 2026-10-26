@@ -25,12 +25,12 @@ werden nie still aufgelöst.
 
 ## Schnellstart mit der App (empfohlen)
 
-1. Auf beiden Macs `RepoSync-<version>-arm64.pkg` aus den
+1. Auf beiden Macs `MacSync-<version>-arm64.pkg` aus den
    [Releases](https://github.com/chrisurf/MacSync/releases) installieren
    (oder selbst bauen: `make install-app`).
 2. Ist die App nicht notarisiert: Systemeinstellungen → Datenschutz &
    Sicherheit → **Trotzdem öffnen**.
-3. RepoSync startet in der Menüleiste und führt durch die Einrichtung:
+3. MacSync startet in der Menüleiste und führt durch die Einrichtung:
    Verzeichnis wählen → auf einem Mac „Dieser Mac wartet“, auf dem anderen
    den Mac auswählen und den Code eingeben → fertig.
 

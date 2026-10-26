@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1 – MacSync (2026-10-26)
+
+### Geändert
+- Die App heisst **MacSync** (`MacSync.app`, Installer
+  `MacSync-<version>-arm64.pkg`, Bundle-ID `com.alpineperspective.macsync`).
+  Der Installer entfernt `RepoSync.app` aus 0.2.0; Konfiguration, Kopplung und
+  das CLI `reposync` bleiben unverändert
+- Menüleisten-Symbol: Synchronisationspfeile plus farbiger Zustandspunkt –
+  grün ✓ synchron, blau … überträgt, orange ❙❙ pausiert, orange ! anderer Mac
+  nicht erreichbar, rot ! Konflikt, rot ✕ gestoppt
+- Bereits eingerichtete Macs starten MacSync beim ersten Start künftig bei der
+  Anmeldung (abschaltbar in den Einstellungen)
+
+### Hinzugefügt
+- App-Icon (`app/Resources/AppIcon.icns`, erzeugt von `app/Icon/make-icon.swift`)
+- Entwickler-Angabe: Alpine Perspective GmbH, alpineperspective.com – im
+  Fenster „Über MacSync“, in den Einstellungen und im Copyright der App
+
 ## 0.2.0 – Mac-App (2026-10-26)
 
 ### Hinzugefügt

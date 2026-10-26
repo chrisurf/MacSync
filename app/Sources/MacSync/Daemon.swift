@@ -1,6 +1,6 @@
 import Foundation
 
-/// Runs `reposync daemon` as a child process. As a child of RepoSync.app it
+/// Runs `reposync daemon` as a child process. As a child of MacSync.app it
 /// inherits the app's Local Network permission (ADR-0010).
 @MainActor
 final class DaemonProcess {

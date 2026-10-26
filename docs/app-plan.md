@@ -13,7 +13,7 @@ kein Terminal mehr nötig.
 
 | # | Anforderung | Umsetzung |
 | --- | --- | --- |
-| A1 | Normale App in `/Programme`, per Doppelklick startbar | `RepoSync.app`, installiert per `.pkg` |
+| A1 | Normale App in `/Programme`, per Doppelklick startbar | `MacSync.app`, installiert per `.pkg` |
 | A2 | Symbol in der Menüleiste | SwiftUI `MenuBarExtra`, kein Dock-Symbol (`LSUIElement`) |
 | A3 | Einstellungen über die Oberfläche | Einstellungsfenster (Allgemein, Synchronisation, Gerät) |
 | A4 | Start bei Anmeldung an/aus | Schalter, `SMAppService.mainApp` (Anmeldeobjekte) |
@@ -52,8 +52,9 @@ kein Terminal mehr nötig.
    Die Pipeline enthält die Schritte für Developer-ID-Signatur und
    Notarisierung bereits; sie werden aktiv, sobald die Secrets gesetzt sind.
 8. **Namen vereinheitlichen (offen):** Repository heisst `MacSync`, Produkt
-   und Binary `RepoSync`. Vorschlag: App heisst **RepoSync**, Bundle-ID
-   `com.chrisurf.reposync`; Repository-Name bleibt.
+   und Binary `RepoSync`. Entschieden (0.2.1): die App heisst **MacSync**
+   (Bundle-ID `com.alpineperspective.macsync`, Entwickler Alpine Perspective
+   GmbH); CLI `reposync` und Konfiguration bleiben.
 
 ## 4. Bedienkonzept
 
@@ -95,8 +96,8 @@ anderer Mac nicht erreichbar · Konflikt.
 ## 5. Architektur
 
 ```
-RepoSync.app/Contents/
-  MacOS/RepoSync          SwiftUI-App (Menüleiste, Einstellungen, Assistent)
+MacSync.app/Contents/
+  MacOS/MacSync           SwiftUI-App (Menüleiste, Einstellungen, Assistent)
   Helpers/reposync        Rust-Binary (Daemon + CLI), unverändert nutzbar
                           (nicht in MacOS/: APFS unterscheidet RepoSync/reposync nicht)
   Info.plist              LSUIElement, NSLocalNetworkUsageDescription,
@@ -137,7 +138,7 @@ RepoSync.app/Contents/
 2. `macos-15` (arm64): `make lint test`.
 3. `cargo build --release --target aarch64-apple-darwin`, `scripts/build-app.sh`.
 4. Signieren: Developer-ID, falls Secrets vorhanden; sonst ad-hoc (`codesign -s -`).
-5. `pkgbuild` + `productbuild` → `RepoSync-<version>-arm64.pkg`
+5. `pkgbuild` + `productbuild` → `MacSync-<version>-arm64.pkg`
    (installiert nach `/Applications`). Notarisierung nur mit Secrets.
 6. Tag `v<version>`, GitHub-Release mit `.pkg`, SHA-256 und dem
    CHANGELOG-Abschnitt als Text.

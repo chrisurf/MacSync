@@ -61,18 +61,6 @@ enum SyncState: Equatable {
         case .inSync: return "Synchron"
         }
     }
-
-    var symbol: String {
-        switch self {
-        case .notConfigured: return "arrow.triangle.2.circlepath.circle"
-        case .starting, .syncing: return "arrow.triangle.2.circlepath"
-        case .stopped: return "xmark.circle"
-        case .paused: return "pause.circle"
-        case .conflict: return "exclamationmark.triangle"
-        case .offline: return "wifi.exclamationmark"
-        case .inSync: return "checkmark.circle"
-        }
-    }
 }
 
 @MainActor
@@ -94,6 +82,12 @@ final class AppModel: ObservableObject {
     func launch() {
         if isConfigured {
             daemon.start()
+            // Already set up (CLI or RepoSync 0.2.0): start at login like
+            // the setup assistant would – once; the user can turn it off.
+            if !UserDefaults.standard.bool(forKey: "offeredLaunchAtLogin") {
+                UserDefaults.standard.set(true, forKey: "offeredLaunchAtLogin")
+                setLaunchAtLogin(true)
+            }
         } else {
             SetupWindow.shared.show()
         }
@@ -247,7 +241,7 @@ final class AppModel: ObservableObject {
         defer { lastConflicts = n }
         guard n > lastConflicts, UserDefaults.standard.object(forKey: "notifyConflicts") as? Bool ?? true else { return }
         let content = UNMutableNotificationContent()
-        content.title = "RepoSync: Konflikt"
+        content.title = "MacSync: Konflikt"
         content.body = n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "conflicts", content: content, trigger: nil))
     }

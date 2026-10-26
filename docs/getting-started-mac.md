@@ -60,7 +60,7 @@ Die Version enthält den Git-Commit. Beide Macs zeigen sich gegenseitig im
 
 ## Am einfachsten: die App
 
-Ab 0.2.0 gibt es `RepoSync.app` mit Symbol in der Menüleiste: Installer aus
+Ab 0.2.0 gibt es die App `MacSync.app` (bis 0.2.0: RepoSync.app) mit Symbol in der Menüleiste: Installer aus
 den Releases (oder `make install-app`) auf beiden Macs installieren, starten,
 dem Einrichtungsassistenten folgen. Die App startet die Synchronisation
 selbst; macOS fragt einmal nach dem Zugriff aufs lokale Netzwerk →

@@ -18,7 +18,7 @@ JSON-Unix-Socket; Einrichtung und Pairing laufen über CLI-Befehle mit
 `--json`-Ausgabe. Die Logik bleibt im Rust-Kern.
 
 ## Konsequenzen
-- Die Netzwerkfreigabe gilt für `RepoSync.app`; ein Dialog, eine Freigabe.
+- Die Netzwerkfreigabe gilt für die App (`MacSync.app`); ein Dialog, eine Freigabe.
 - Ohne laufende App keine Synchronisation – gewollt, der Zustand ist sichtbar.
 - Ad-hoc-Signatur: nach Updates kann macOS die Freigabe erneut abfragen.
   Mit Developer-ID entfällt das; die Pipeline ist darauf vorbereitet.
