@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 – MacSync (2026-10-26)
+## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 
 ### Geändert
 - Die App heisst **MacSync** (`MacSync.app`, Installer

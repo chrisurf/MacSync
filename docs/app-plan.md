@@ -52,7 +52,7 @@ kein Terminal mehr nötig.
    Die Pipeline enthält die Schritte für Developer-ID-Signatur und
    Notarisierung bereits; sie werden aktiv, sobald die Secrets gesetzt sind.
 8. **Namen vereinheitlichen (offen):** Repository heisst `MacSync`, Produkt
-   und Binary `RepoSync`. Entschieden (0.2.1): die App heisst **MacSync**
+   und Binary `RepoSync`. Entschieden (0.3.0): die App heisst **MacSync**
    (Bundle-ID `com.alpineperspective.macsync`, Entwickler Alpine Perspective
    GmbH); CLI `reposync` und Konfiguration bleiben.
 

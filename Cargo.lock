@@ -1119,7 +1119,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reposync-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "hex",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-daemon"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-engine"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-fs"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "filetime",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-gitaware"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "reposync-core",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-net"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "reposync-store"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "reposync-core",

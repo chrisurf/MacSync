@@ -1,6 +1,6 @@
 # Synchronisations-Manager, Fortschritt und Status-Symbol
 
-Stand: umgesetzt im Branch `feature/0.2.1`.
+Stand: umgesetzt in Version 0.3.0.
 
 ## 1. Anforderungen
 
