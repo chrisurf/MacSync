@@ -30,9 +30,9 @@ struct Cli {
     /// Configuration file (default: ~/.config/macsync/config.toml or $MACSYNC_CONFIG).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
-    /// More log output.
-    #[arg(short, long, global = true)]
-    verbose: bool,
+    /// More output: log messages; for `dupes` sub-folders (-v) and files (-vv).
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -169,12 +169,18 @@ enum Cmd {
         #[arg(long)]
         to: Option<PathBuf>,
     },
-    /// Find same-named folders and files and show which copy is current
-    /// (read-only; needs no configuration).
+    /// Find same-named folders and files and show which copy is current, or
+    /// compare an older copy with a newer one (read-only; needs no
+    /// configuration).
     Dupes {
-        /// One folder (duplicates inside it) or two folders (compare them).
+        /// One folder (duplicates inside it) or two folders: the older copy
+        /// first, the newer second (what of the older can go?).
         #[arg(required = true, num_args = 1..=2)]
         paths: Vec<PathBuf>,
+        /// Two folders: find same-named folders and files across and inside
+        /// both instead of comparing the older with the newer.
+        #[arg(long)]
+        within: bool,
         /// Skip names matching this glob (repeatable), e.g. `--exclude '*.tmp'`.
         #[arg(long)]
         exclude: Vec<String>,
@@ -233,7 +239,8 @@ fn main() {
     let cli = Cli::parse();
     macsync_net::set_build_version(VERSION);
     let default = match (&cli.cmd, cli.verbose) {
-        (_, true) => "debug",
+        (Cmd::Dupes { .. }, _) => "warn",
+        (_, 1..) => "debug",
         (Cmd::Daemon, _) => "info",
         _ => "warn",
     };
@@ -246,7 +253,17 @@ fn main() {
     }
 }
 
-fn dupes(paths: &[PathBuf], exclude: Vec<String>, no_defaults: bool, all: bool, json: bool) -> Result<()> {
+struct DupesOpts {
+    within: bool,
+    exclude: Vec<String>,
+    no_defaults: bool,
+    all: bool,
+    json: bool,
+    verbose: u8,
+}
+
+fn dupes(paths: &[PathBuf], o: DupesOpts) -> Result<()> {
+    let DupesOpts { within, exclude, no_defaults, all, json, verbose } = o;
     use std::io::IsTerminal;
     let mut opts = macsync_dupes::Options { progress: !json && std::io::stderr().is_terminal(), ..Default::default() };
     if no_defaults {
@@ -254,6 +271,17 @@ fn dupes(paths: &[PathBuf], exclude: Vec<String>, no_defaults: bool, all: bool, 
         opts.skip_caches = false;
     }
     opts.exclude.extend(exclude);
+    if let [old, new] = paths {
+        if !within {
+            let c = macsync_dupes::compare(old, new, &opts)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&c)?);
+            } else {
+                output::compare(&c, verbose, all);
+            }
+            return Ok(());
+        }
+    }
     let r = macsync_dupes::scan(paths, &opts)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&r)?);
@@ -304,8 +332,9 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Discover { timeout_s, json } = cli.cmd {
         return discover(&path, timeout_s, json);
     }
-    if let Cmd::Dupes { paths, exclude, no_default_excludes, all, json } = cli.cmd {
-        return dupes(&paths, exclude, no_default_excludes, all, json);
+    if let Cmd::Dupes { paths, within, exclude, no_default_excludes, all, json } = cli.cmd {
+        let o = DupesOpts { within, exclude, no_defaults: no_default_excludes, all, json, verbose: cli.verbose };
+        return dupes(&paths, o);
     }
     let cfg = Config::load(&path)?;
     match cli.cmd {

@@ -363,6 +363,234 @@ pub fn dupes(r: &macsync_dupes::Report, all: bool) {
     println!("Nothing was changed. Check before deleting – and prefer the Trash.");
 }
 
+/// `macsync dupes ALT NEU`: what of the older copy can go.
+pub fn compare(c: &macsync_dupes::Comparison, verbose: u8, all: bool) {
+    use macsync_dupes::{FolderStatus as S, OrderStatus};
+    let t = macsync_fs::time::local;
+    println!(
+        "ALT  {}  ({} files, {}, last change {})",
+        c.old.display(),
+        c.old_files,
+        bytes(c.old_bytes),
+        t(c.order.old_last_ms)
+    );
+    println!(
+        "NEU  {}  ({} files, {}, last change {})",
+        c.new.display(),
+        c.new_files,
+        bytes(c.new_bytes),
+        t(c.order.new_last_ms)
+    );
+    let o = &c.order;
+    let changed = o.newer_in_new + o.newer_in_old;
+    match o.status {
+        OrderStatus::Confirmed => {
+            println!("✅ Order confirmed: NEU is newer ({} of {changed} changed files are newer there)", o.newer_in_new)
+        }
+        OrderStatus::Contradicted => {
+            println!("⚠️  Order doubtful: {} of {changed} changed files are newer in ALT.", o.newer_in_old);
+            println!("    Is ALT the current copy? The report still treats the first folder as ALT.");
+        }
+        OrderStatus::Unknown if changed == 0 => println!("ℹ️  Order not checkable: no file differs between the two"),
+        OrderStatus::Unknown => {
+            println!("⚠️  Order unclear: {} changed files are newer in NEU, {} in ALT", o.newer_in_new, o.newer_in_old)
+        }
+    }
+    if c.dataless > 0 {
+        println!("☁️  {} iCloud files not downloaded: compared by size and date only", c.dataless);
+    }
+    if !c.skipped.is_empty() {
+        println!("❌ {} paths not readable{}", c.skipped.len(), if verbose == 0 { " (-v lists them)" } else { ":" });
+        if verbose > 0 {
+            for s in c.skipped.iter().take(if all { usize::MAX } else { 10 }) {
+                println!("     {}  ({})", s.path.display(), s.reason);
+            }
+        }
+    }
+    println!();
+
+    let root = &c.folders[0];
+    let tops: Vec<usize> = root.children.iter().copied().filter(|&i| c.folders[i].in_old).collect();
+    let ok = tops.iter().filter(|&&i| c.folders[i].status.deletable()).count();
+    match root.status {
+        S::Identical => println!("✅ ALT is identical to NEU – it can go completely ({})", bytes(root.old_bytes)),
+        S::Deletable => {
+            println!("🚮 ALT can go completely – NEU contains all of it, partly newer ({})", bytes(root.old_bytes))
+        }
+        _ => {
+            println!("⚠️  ALT cannot go completely – {ok} of {} folders can ({})", tops.len(), bytes(c.deletable_bytes))
+        }
+    }
+    println!();
+    let mut rows = root.children.clone();
+    rows.sort_by_key(|&i| (rank(c.folders[i].status), c.folders[i].name.to_lowercase()));
+    let width = rows.iter().map(|&i| c.folders[i].name.chars().count()).max().unwrap_or(0).min(32);
+    for &i in &rows {
+        row(c, i, 0, width);
+        if verbose > 0 && matches!(c.folders[i].status, S::Check | S::Unreadable) {
+            drill(c, i, 1, verbose, all);
+        } else if verbose > 1 && c.folders[i].status == S::OnlyOld {
+            files(c, i, 1, all);
+        }
+    }
+    if root.own.old_files() + root.own.only_new > 0 {
+        println!("📄 {:<width$}  {}", "(files directly in ALT)", counts(&root.own));
+        if verbose > 1 {
+            files(c, 0, 1, all);
+        }
+    }
+
+    println!();
+    if !root.status.deletable() && c.deletable_bytes > 0 {
+        println!("Can go from ALT without losing anything: {}", bytes(c.deletable_bytes));
+    }
+    let check: Vec<&str> = rows
+        .iter()
+        .filter(|&&i| matches!(c.folders[i].status, S::Check | S::OnlyOld | S::Unreadable))
+        .map(|&i| c.folders[i].name.as_str())
+        .collect();
+    if !check.is_empty() {
+        println!("Check first: {}", check.join(", "));
+        if verbose == 0 {
+            println!("Details: -v (sub-folders), -vv (files)");
+        }
+    }
+    println!(
+        "\nFiles: ✅ identical · 🔼 newer in NEU · 🔀 moved in NEU · ❗ newer in ALT · ❓ different, same date · \
+         🟥 only in ALT · ➕ only in NEU · ❌ not readable\n\
+         Folders: ✅ identical · 🚮 can go · 🟧 check · 🟥 only in ALT · ➕ only in NEU · ❌ not readable"
+    );
+    println!("Nothing was changed. Check before deleting – and prefer the Trash.");
+}
+
+fn rank(s: macsync_dupes::FolderStatus) -> u8 {
+    use macsync_dupes::FolderStatus as S;
+    match s {
+        S::Unreadable => 0,
+        S::Check => 1,
+        S::OnlyOld => 2,
+        S::Deletable => 3,
+        S::Identical => 4,
+        S::OnlyNew => 5,
+    }
+}
+
+/// One line per folder: symbol, name, file states, size in ALT.
+fn row(c: &macsync_dupes::Comparison, i: usize, depth: usize, width: usize) {
+    use macsync_dupes::FolderStatus as S;
+    let f = &c.folders[i];
+    let n = &f.total;
+    let (sym, what, size) = match f.status {
+        S::Identical => ("✅", format!("identical · {} files", n.same), f.old_bytes),
+        S::Deletable => ("🚮", format!("all in NEU · {}", counts(n)), f.old_bytes),
+        S::Check => ("🟧", counts(n), f.old_bytes),
+        S::OnlyOld => ("🟥", format!("only in ALT · {} files", n.old_files()), f.old_bytes),
+        S::OnlyNew => ("➕", format!("only in NEU · {} files", n.only_new), f.new_bytes),
+        S::Unreadable => ("❌", format!("not fully readable · {}", counts(n)), f.old_bytes),
+    };
+    let indent = "   ".repeat(depth);
+    println!("{indent}{sym} {:<width$}  {what}  ({})", f.name, bytes(size));
+}
+
+/// Below a folder that cannot go: the sub-folders that cannot go either, the
+/// rest in one line each.
+fn drill(c: &macsync_dupes::Comparison, i: usize, depth: usize, verbose: u8, all: bool) {
+    use macsync_dupes::FolderStatus as S;
+    let f = &c.folders[i];
+    let indent = "   ".repeat(depth);
+    let mut bad: Vec<usize> = f
+        .children
+        .iter()
+        .copied()
+        .filter(|&k| matches!(c.folders[k].status, S::Check | S::OnlyOld | S::Unreadable))
+        .collect();
+    bad.sort_by_key(|&k| (rank(c.folders[k].status), c.folders[k].name.to_lowercase()));
+    let width = bad.iter().map(|&k| c.folders[k].name.chars().count()).max().unwrap_or(0).min(32);
+    for &k in &bad {
+        row(c, k, depth, width);
+        match c.folders[k].status {
+            S::OnlyOld if verbose > 1 => files(c, k, depth + 1, all),
+            S::OnlyOld => {}
+            _ => drill(c, k, depth + 1, verbose, all),
+        }
+    }
+    let ok: Vec<usize> = f.children.iter().copied().filter(|&k| c.folders[k].status.deletable()).collect();
+    if !ok.is_empty() {
+        let b: u64 = ok.iter().map(|&k| c.folders[k].old_bytes).sum();
+        println!("{indent}🚮 {} can go ({})", plural(ok.len() as u64, "more sub-folder"), bytes(b));
+    }
+    let new = f.children.iter().filter(|&&k| c.folders[k].status == S::OnlyNew).count();
+    if new > 0 {
+        println!("{indent}➕ {} only in NEU", plural(new as u64, "sub-folder"));
+    }
+    let own = &f.own;
+    if own.risky() > 0 {
+        if verbose > 1 {
+            files(c, i, depth, all);
+        } else {
+            let risky = macsync_dupes::Counts { same: 0, updated: 0, moved: 0, only_new: 0, ..*own };
+            println!("{indent}📄 {} directly here: {}", plural(own.risky(), "file"), counts(&risky));
+        }
+    }
+}
+
+/// The files of ALT below folder `i` that would be lost.
+fn files(c: &macsync_dupes::Comparison, i: usize, depth: usize, all: bool) {
+    use macsync_dupes::State;
+    let t = macsync_fs::time::local;
+    let indent = "   ".repeat(depth);
+    let base = &c.folders[i].path;
+    // An only-in-ALT folder lists everything below it, others their own files.
+    let mut list = Vec::new();
+    let mut stack = vec![i];
+    while let Some(d) = stack.pop() {
+        list.extend(c.folders[d].entries.iter().map(|&e| &c.entries[e]).filter(|e| e.state.risky()));
+        if c.folders[d].status == macsync_dupes::FolderStatus::OnlyOld {
+            stack.extend(&c.folders[d].children);
+        }
+    }
+    list.sort_by(|a, b| a.path.cmp(&b.path));
+    let max = if all { usize::MAX } else { 10 };
+    for e in list.iter().take(max) {
+        let rel = e.path.strip_prefix(base.as_str()).map_or(e.path.as_str(), |r| r.trim_start_matches('/'));
+        let (sym, what) = match e.state {
+            State::OldNewer => {
+                ("❗", format!("ALT {} · NEU {}", t(e.mtime_old.unwrap_or(0)), t(e.mtime_new.unwrap_or(0))))
+            }
+            State::Unclear => ("❓", format!("different content, same date {}", t(e.mtime_old.unwrap_or(0)))),
+            State::Unreadable => ("❌", "not readable in NEU".to_string()),
+            _ => ("🟥", format!("{}, {}", bytes(e.size), t(e.mtime_old.unwrap_or(0)))),
+        };
+        println!("{indent}{sym} {rel}  ({what})");
+    }
+    if list.len() > max {
+        println!("{indent}… {} more (--all)", list.len() - max);
+    }
+}
+
+fn plural(n: u64, what: &str) -> String {
+    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
+}
+
+fn counts(n: &macsync_dupes::Counts) -> String {
+    let parts = [
+        ("✅", n.same),
+        ("🔼", n.updated),
+        ("🔀", n.moved),
+        ("❗", n.old_newer),
+        ("❓", n.unclear),
+        ("🟥", n.only_old),
+        ("➕", n.only_new),
+        ("❌", n.unreadable),
+    ];
+    let v: Vec<String> = parts.iter().filter(|(_, k)| *k > 0).map(|(s, k)| format!("{s} {k}")).collect();
+    if v.is_empty() {
+        "empty".into()
+    } else {
+        v.join("  ")
+    }
+}
+
 fn bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;

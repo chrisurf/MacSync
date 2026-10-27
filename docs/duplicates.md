@@ -7,11 +7,47 @@ gekoppelter Mac ist nicht nötig.
 
 ```sh
 macsync dupes ~/Dokumente                  # Duplikate innerhalb eines Ordners
-macsync dupes ~/Dokumente /Volumes/Backup  # zwei Ordner vergleichen
+macsync dupes /Volumes/Backup ~/Dokumente  # ALT gegen NEU: was aus ALT kann weg?
 macsync dupes ~/Dokumente --all            # alle Treffer statt der grössten
 macsync dupes ~/Dokumente --json           # maschinenlesbar (für die App)
-make dupes DIR=~/Dokumente [DIR2=…] [ARGS=--all]
+make dupes DIR=~/Dokumente [DIR2=…] [ARGS=-v|-vv|--all]
 ```
+
+## Ältere mit neuerer Kopie vergleichen
+
+```sh
+macsync dupes ALT NEU        # pro Hauptordner eine Zeile
+macsync dupes ALT NEU -v     # dazu die Unterordner, die nicht weg können
+macsync dupes ALT NEU -vv    # dazu die einzelnen Dateien
+```
+
+Mit zwei Ordnern beantwortet `dupes` eine Frage: **Was aus ALT kann weg?**
+Der erste Ordner gilt als die ältere Kopie, der zweite als die neuere.
+Dateien werden über ihren relativen Pfad gepaart (Gross-/Kleinschreibung
+zählt nicht), Inhalte per Hash verglichen, wo die Grösse gleich ist.
+
+| Datei | Bedeutung | geht beim Löschen von ALT verloren? |
+| --- | --- | --- |
+| ✅ | identisch in NEU | nein |
+| 🔼 | in NEU neuer | nein – die Version in ALT ist veraltet |
+| 🔀 | in NEU an anderer Stelle (gleicher Inhalt) | nein |
+| ❗ | in ALT neuer | **ja** |
+| ❓ | anderer Inhalt, gleiches Datum | unklar – prüfen |
+| 🟥 | nur in ALT | **ja** – oder in NEU bewusst gelöscht |
+| ➕ | nur in NEU | – (neu hinzugekommen) |
+| ❌ | nicht lesbar | unklar – nie löschbar |
+
+Ein Ordner ist **🚮 kann weg**, wenn darunter nichts verloren ginge (✅
+identisch, wenn zusätzlich nichts neuer oder neu ist), sonst **🟧 prüfen**;
+🟥 und ➕ stehen für Ordner, die es nur auf einer Seite gibt.
+
+**Reihenfolge prüfen:** Unter den Dateien, die sich unterscheiden, wird
+gezählt, auf welcher Seite sie neuer sind. Sind die meisten in ALT neuer,
+gibt es eine Warnung – der Bericht bleibt aber bei den angegebenen Rollen.
+
+Ein **unlesbarer Startordner** bricht den Vergleich ab (macOS: dem Terminal
+Festplattenvollzugriff geben). Die frühere Suche nach gleichnamigen Ordnern
+über beide Ordner hinweg gibt es weiter mit `--within`.
 
 ## Der typische Fall
 

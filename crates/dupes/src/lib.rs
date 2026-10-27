@@ -15,6 +15,7 @@
 //! means a later modification time; equal times with different contents are
 //! reported as unclear. Nothing is ever changed on disk.
 
+mod compare;
 mod groups;
 mod hash;
 mod pairs;
@@ -24,8 +25,10 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use globset::{Glob, GlobSetBuilder};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
+
+pub use compare::{compare, Comparison, Counts, Entry, Folder, FolderStatus, Order, OrderStatus, State};
 
 /// Names never looked at: Mac metadata, Git internals, dependencies, build and
 /// cache folders, MacSync's private folder. Folders containing a
@@ -222,12 +225,7 @@ pub fn scan(roots: &[PathBuf], opts: &Options) -> io::Result<Report> {
     }
     let abs = roots.iter().map(|r| walk::canonical(r)).collect::<io::Result<Vec<_>>>()?;
     walk::check_roots(&abs)?;
-    let mut b = GlobSetBuilder::new();
-    for p in &opts.exclude {
-        b.add(Glob::new(p).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?);
-    }
-    let exclude = b.build().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-    let tree = walk::walk(&abs, &exclude, opts.skip_caches, opts.progress)?;
+    let tree = walk::walk(&abs, &exclude_set(opts)?, opts.skip_caches, opts.progress)?;
     let todo = hash::candidates(&tree);
     let (hashes, hashed_bytes) = hash::hash_all(&tree, &todo, opts.progress);
     let labels = labels(&abs);
@@ -263,6 +261,14 @@ pub fn scan(roots: &[PathBuf], opts: &Options) -> io::Result<Report> {
         pairs,
         groups,
     })
+}
+
+pub(crate) fn exclude_set(opts: &Options) -> io::Result<GlobSet> {
+    let mut b = GlobSetBuilder::new();
+    for p in &opts.exclude {
+        b.add(Glob::new(p).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?);
+    }
+    b.build().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
 }
 
 pub(crate) struct Ctx<'a> {

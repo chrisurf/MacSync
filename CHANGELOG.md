@@ -9,6 +9,13 @@
   Kopier-Zeitpunkt und Änderungen danach. Nur lesend; Inhalte per Hash, nur
   wo Name und Grösse passen; iCloud-Platzhalter werden nicht geladen.
   Ausgabe als Text oder `--json`. Siehe [docs/duplicates.md](docs/duplicates.md)
+- `macsync dupes ALT NEU`: zwei Ordner werden als ältere und neuere Kopie
+  verglichen (über den relativen Pfad) – pro Hauptordner eine Zeile: ✅
+  identisch, 🚮 kann weg, 🟧 prüfen, 🟥 nur in ALT, ➕ nur in NEU. `-v` geht
+  in die Unterordner, die nicht weg können, `-vv` nennt die Dateien.
+  Verschobene Dateien werden per Hash erkannt. Die Reihenfolge wird an den
+  geänderten Dateien geprüft; passt sie nicht, gibt es eine Warnung.
+  Die bisherige Duplikatsuche über zwei Ordner: `--within`
 - **Konfliktansicht** (Menü → Konflikte …, ⌘K; im Manager über die rote
   Konflikt-Schaltfläche oder „Konflikt ansehen …“; Klick auf die Mitteilung;
   `open -a MacSync --args --conflicts`): alle offenen Konflikte über alle
@@ -22,6 +29,10 @@
   `conflicts` und `resolve-many`
 
 ### Behoben
+- Ein unlesbarer Startordner (z. B. Google Drive ohne Festplattenvollzugriff)
+  galt als leer – und der andere Ordner damit als „enthält alles“. Jetzt
+  bricht `dupes` mit Fehlermeldung und Hinweis auf die Berechtigung ab;
+  unlesbare Unterordner gelten nie als löschbar
 - **Umbenennen nur der Gross-/Kleinschreibung** (`agent` → `Agent`) auf
   APFS: kam beim anderen Mac als `case-collision`-Konflikt plus Löschen in
   den Papierkorb an und wurde erst in einer weiteren Runde neu übertragen.

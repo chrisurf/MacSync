@@ -113,6 +113,9 @@ pub(crate) fn walk(roots: &[PathBuf], exclude: &GlobSet, skip_caches: bool, prog
             let dir = t.nodes[d].abs.clone();
             let entries = match fs::read_dir(&dir) {
                 Ok(e) => e,
+                // An unreadable root would look empty: everything in the
+                // other folder "new", this one "can go".
+                Err(e) if d == idx => return Err(unreadable_root(&dir, e)),
                 Err(e) => {
                     t.skipped.push(Skipped { path: dir, reason: e.to_string() });
                     continue;
@@ -187,6 +190,15 @@ fn push(
         ino: md.ino(),
     });
     t.nodes.len() - 1
+}
+
+fn unreadable_root(dir: &Path, e: io::Error) -> io::Error {
+    let hint = if e.kind() == io::ErrorKind::PermissionDenied {
+        " – on macOS give your terminal Full Disk Access (System Settings → Privacy & Security), then restart it"
+    } else {
+        ""
+    };
+    io::Error::new(e.kind(), format!("{}: cannot read the folder: {e}{hint}", dir.display()))
 }
 
 /// Reject roots that contain each other: every file would be its own duplicate.

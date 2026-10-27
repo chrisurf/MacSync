@@ -202,8 +202,8 @@ log: ## Show the journal of the last hour
 	$(RS) log --since 1h
 
 .PHONY: dupes
-dupes: build ## Find same-named folders/files, show the current copy (read-only): DIR=… [DIR2=…] [ARGS=--all]
-	@if [ -z "$(DIR)" ]; then echo "usage: make dupes DIR=~/Dokumente [DIR2=~/Backup] [ARGS=--all]"; exit 1; fi
+dupes: build ## Duplicates in DIR, or what of the older DIR can go given the newer DIR2 (read-only) [ARGS=-v|-vv|--all]
+	@if [ -z "$(DIR)" ]; then echo "usage: make dupes DIR=~/Dokumente | make dupes DIR=<older> DIR2=<newer> [ARGS=-v]"; exit 1; fi
 	$(BIN) dupes "$(DIR)" $(if $(DIR2),"$(DIR2)") $(ARGS)
 
 .PHONY: service-install
