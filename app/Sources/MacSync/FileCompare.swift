@@ -230,8 +230,11 @@ enum DiffEngine {
         var d = found
         while d > 0 {
             let k = x - y
-            let pv = { (kk: Int) in trace[(d - 1) * (d - 1) + kk + d - 1] }
-            let prevK = (k == -d || (k != d && pv(k - 1) < pv(k + 1))) ? k + 1 : k - 1
+            // Row d-1 of the trace starts at (d-1)²; diagonal kk sits at kk+d-1.
+            let row: Int = (d - 1) * (d - 1) + d - 1
+            let pv = { (kk: Int) -> Int in trace[row + kk] }
+            let down: Bool = k == -d || (k != d && pv(k - 1) < pv(k + 1))
+            let prevK: Int = down ? k + 1 : k - 1
             let prevX = pv(prevK), prevY = prevX - prevK
             let midX = prevK == k + 1 ? prevX : prevX + 1
             if x > midX { out.append(Match(a: aLo + midX, b: bLo + midX - k, count: x - midX)) }
