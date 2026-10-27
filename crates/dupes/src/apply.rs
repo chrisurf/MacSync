@@ -9,12 +9,14 @@
 //! Progress is reported while copying; a cancel stops within 1 MB and
 //! removes the unfinished copy.
 
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use macsync_core::{path as rpath, Hash, Kind};
@@ -284,6 +286,8 @@ struct Ctx<'a> {
     bytes: u64,
     done: u64,
     last: Option<Instant>,
+    /// Placeholders already downloaded (and counted) by `prefetch`.
+    fetched: HashSet<PathBuf>,
     on: &'a mut dyn FnMut(Event),
 }
 
@@ -381,6 +385,7 @@ pub fn apply_with(
                 bytes: start.actions[index].bytes,
                 done: 0,
                 last: None,
+                fetched: HashSet::new(),
                 on: &mut on,
             };
             run(&roots, a, &to, trash, &mut ctx)
@@ -529,6 +534,9 @@ fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash, ctx: &mut Ctx)
                 return Err(Stop::Skip("already exists in NEU".into()));
             }
             fs::create_dir_all(&parent)?;
+            if md.is_dir() {
+                prefetch(&src, ctx)?;
+            }
             let tmp = temp_path(&parent, &dst);
             let staged = if md.is_dir() { copy_dir(&src, &tmp, ctx) } else { copy_file(&src, &tmp, ctx) };
             ran.bytes = settle(staged, &tmp, &dst)?;
@@ -582,6 +590,9 @@ fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash, ctx: &mut Ctx)
         Op::TrashOld => {
             if new_md.is_none() {
                 return Err(Stop::Skip("not in NEU".into()));
+            }
+            if md.is_dir() {
+                prefetch(&src, ctx)?;
             }
             same_in_new(&src, &dst, ctx)?;
             ran.trashed = Some(trash.put(&src).map_err(|e| Stop::Fail(format!("not moved to the Trash: {e}")))?);
@@ -643,8 +654,83 @@ fn rebuildable(p: &Path) -> bool {
         || (fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()) && p.join("CACHEDIR.TAG").is_file())
 }
 
+/// Readers downloading placeholders at once: the cloud answers each file
+/// only after 1–2 s, whatever its size, so one at a time is far too slow.
+const PREFETCH: usize = 16;
+
+/// Download the cloud placeholders below `src` with `PREFETCH` readers, so
+/// that the copy or check afterwards reads local files. Counts their bytes as
+/// progress; the first failure stops it as `CloudUnavailable`.
+fn prefetch(src: &Path, ctx: &mut Ctx) -> io::Result<()> {
+    let mut files = Vec::new();
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(md) = fs::symlink_metadata(&p) else { continue };
+        if md.is_dir() {
+            stack
+                .extend(fs::read_dir(&p).into_iter().flatten().flatten().map(|e| e.path()).filter(|c| !rebuildable(c)));
+        } else if md.is_file() && is_cloud(&md) {
+            files.push(p);
+        }
+    }
+    if files.len() < 2 {
+        return Ok(());
+    }
+    let (next, finished, bytes) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicU64::new(0));
+    let failed: Mutex<Option<io::Error>> = Mutex::new(None);
+    let workers = PREFETCH.min(files.len());
+    let (cancel, root) = (ctx.cancel, ctx.old_root);
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                while !cancel.load(Ordering::Relaxed) && failed.lock().expect("no panic").is_none() {
+                    let Some(p) = files.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                    if let Err(e) = read_through(p, &bytes, cancel) {
+                        let rel = p.strip_prefix(root).unwrap_or(p);
+                        failed.lock().expect("no panic").get_or_insert(cloud_error(rel, e));
+                    }
+                }
+                finished.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+        let mut seen = 0;
+        while finished.load(Ordering::Relaxed) < workers {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = bytes.load(Ordering::Relaxed);
+            let at = next.load(Ordering::Relaxed).min(files.len() - 1);
+            ctx.advance(&files[at], now - seen);
+            seen = now;
+        }
+        ctx.advance(&files[files.len() - 1], bytes.load(Ordering::Relaxed) - seen);
+    });
+    if let Some(e) = failed.into_inner().expect("no panic") {
+        return Err(e);
+    }
+    ctx.check()?;
+    ctx.fetched.extend(files);
+    Ok(())
+}
+
+/// Read a file to the end (which makes the cloud deliver it), adding to `bytes`.
+fn read_through(p: &Path, bytes: &AtomicU64, cancel: &AtomicBool) -> io::Result<()> {
+    let mut f = File::open(p)?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::other(Cancelled));
+        }
+        match f.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => drop(bytes.fetch_add(n as u64, Ordering::Relaxed)),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// BLAKE3 of a file in 1 MB chunks, with progress and cancel in between.
 fn hash_with(path: &Path, ctx: &mut Ctx) -> io::Result<Hash> {
+    let count = !ctx.fetched.contains(path);
     let mut f = File::open(path)?;
     let mut h = blake3::Hasher::new();
     let mut buf = vec![0u8; 1 << 20];
@@ -658,7 +744,7 @@ fn hash_with(path: &Path, ctx: &mut Ctx) -> io::Result<Hash> {
             Err(e) => return Err(e),
         };
         h.update(&buf[..n]);
-        ctx.advance(path, n as u64);
+        ctx.advance(path, if count { n as u64 } else { 0 });
     }
     Ok(Hash::from_blake3(h.finalize()))
 }
@@ -740,6 +826,7 @@ fn copy_file(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<u64> {
 /// Copy the content in 1 MB chunks (progress and cancel in between, also
 /// within large files) and return the BLAKE3 hash of what was read.
 fn stream(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<Hash> {
+    let count = !ctx.fetched.contains(src);
     let mut from = File::open(src)?;
     let mut to = OpenOptions::new().write(true).create_new(true).open(dst)?;
     let mut h = blake3::Hasher::new();
@@ -755,7 +842,7 @@ fn stream(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<Hash> {
         };
         h.update(&buf[..n]);
         to.write_all(&buf[..n])?;
-        ctx.advance(src, n as u64);
+        ctx.advance(src, if count { n as u64 } else { 0 });
     }
     Ok(Hash::from_blake3(h.finalize()))
 }

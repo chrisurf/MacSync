@@ -40,6 +40,10 @@
   ob die Cloud liefert; liefert sie nicht, nennt der Fehler die Datei
   (`code: cloud_unavailable`) und weitere Cloud-Aktionen werden nicht
   versucht. Die App führt dann nicht aus und erklärt, was zu tun ist
+- Ordner aus der Cloud werden vor dem Kopieren mit 16 parallelen Lesern
+  geladen: Google Drive braucht pro Datei 1–2 s unabhängig von der Größe,
+  nacheinander dauerte ein Repo mit 2 000 Dateien eine Stunde, jetzt gut
+  zwei Minuten
 - **Dateivergleich**: Textdateien zeilenweise wie in VS Code (nebeneinander
   oder untereinander, Änderungen innerhalb der Zeile, nächste/vorige
   Änderung), Bilder und PDFs nebeneinander
