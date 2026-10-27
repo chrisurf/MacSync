@@ -6,15 +6,18 @@
 //! temporary file next to the target, confirmed by BLAKE3 and renamed without
 //! replacing; replaced NEU files and moved ALT sources go to the macOS Trash.
 //! Every action first checks that its files are still as at the comparison.
+//! Progress is reported while copying; a cancel stops within 1 MB and
+//! removes the unfinished copy.
 
-use std::fs::{self, File};
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
-use macsync_core::{path as rpath, Kind};
+use macsync_core::{path as rpath, Hash, Kind};
 use macsync_fs::{meta, ops, time};
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +57,9 @@ pub enum Op {
     Replace,
     /// Copy next to the NEU file as `name (ALT YYYY-MM-DD).ext`.
     KeepBoth,
+    /// Put the ALT file or folder into the Trash, only if NEU holds an
+    /// identical copy of every file in it (BLAKE3).
+    TrashOld,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -61,7 +67,7 @@ pub enum Op {
 pub enum ItemKind {
     #[default]
     File,
-    /// A whole folder (`copy` and `move` only).
+    /// A whole folder (`copy`, `move` and `trash_old` only).
     Dir,
 }
 
@@ -78,6 +84,8 @@ pub enum Done {
     /// Not carried out because something changed since the comparison.
     Skipped,
     Failed,
+    /// Stopped by a cancel before it was finished (or started).
+    Cancelled,
 }
 
 /// Result of one action, reported as soon as it is finished.
@@ -103,6 +111,43 @@ pub struct Summary {
     pub skipped: u64,
     pub failed: u64,
     pub bytes: u64,
+    pub cancelled: bool,
+}
+
+/// Sizes of all actions, reported before the first one starts.
+#[derive(Debug, Serialize)]
+pub struct Start {
+    pub start: bool,
+    pub bytes_total: u64,
+    pub actions: Vec<Size>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Size {
+    pub index: usize,
+    /// Bytes to copy (a folder: all files in it).
+    pub bytes: u64,
+    pub files: u64,
+}
+
+/// Bytes copied so far within action `index`.
+#[derive(Debug, Serialize)]
+pub struct Progress {
+    pub progress: bool,
+    pub index: usize,
+    pub bytes_done: u64,
+    pub bytes: u64,
+    /// The file being copied, relative to ALT.
+    pub file: String,
+}
+
+/// What `apply_with` reports, in this order: `Start`, then per action any
+/// number of `Progress` and one `Outcome`.
+#[derive(Debug)]
+pub enum Event<'a> {
+    Start(&'a Start),
+    Progress(&'a Progress),
+    Outcome(&'a Outcome),
 }
 
 /// Where moved and replaced files go.
@@ -156,11 +201,67 @@ fn home_trash() -> PathBuf {
 enum Stop {
     Skip(String),
     Fail(String),
+    Cancel,
 }
 
 impl From<io::Error> for Stop {
     fn from(e: io::Error) -> Stop {
-        Stop::Fail(e.to_string())
+        if e.get_ref().is_some_and(|r| r.is::<Cancelled>()) {
+            Stop::Cancel
+        } else {
+            Stop::Fail(e.to_string())
+        }
+    }
+}
+
+/// Error payload of a copy stopped by a cancel.
+#[derive(Debug)]
+struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// Cancel flag and progress reporting while one action copies.
+struct Ctx<'a> {
+    cancel: &'a AtomicBool,
+    old_root: &'a Path,
+    index: usize,
+    bytes: u64,
+    done: u64,
+    last: Option<Instant>,
+    on: &'a mut dyn FnMut(Event),
+}
+
+impl Ctx<'_> {
+    fn check(&self) -> io::Result<()> {
+        if self.cancel.load(Ordering::Relaxed) {
+            Err(io::Error::other(Cancelled))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// `n` more bytes of `file` copied; reports at most five times a second.
+    fn advance(&mut self, file: &Path, n: u64) {
+        self.done += n;
+        if self.last.is_some_and(|t| t.elapsed() < Duration::from_millis(200)) {
+            return;
+        }
+        self.last = Some(Instant::now());
+        let rel = file.strip_prefix(self.old_root).unwrap_or(file);
+        let p = Progress {
+            progress: true,
+            index: self.index,
+            bytes_done: self.done,
+            bytes: self.bytes,
+            file: rel.to_string_lossy().into_owned(),
+        };
+        (self.on)(Event::Progress(&p));
     }
 }
 
@@ -175,8 +276,28 @@ struct Ran {
 /// Carry out `plan`, action by action; `on` gets each result as soon as it is
 /// finished. Fails only if the folders themselves are unusable.
 pub fn apply(old: &Path, new: &Path, plan: &Plan, trash: &Trash, mut on: impl FnMut(&Outcome)) -> io::Result<Summary> {
+    apply_with(old, new, plan, trash, &AtomicBool::new(false), |e| {
+        if let Event::Outcome(o) = e {
+            on(o)
+        }
+    })
+}
+
+/// Like `apply`, with sizes and progress reported and stopped as soon as
+/// `cancel` is set: the running action and all after it end as `Cancelled`.
+pub fn apply_with(
+    old: &Path,
+    new: &Path,
+    plan: &Plan,
+    trash: &Trash,
+    cancel: &AtomicBool,
+    mut on: impl FnMut(Event),
+) -> io::Result<Summary> {
     let roots = [walk::canonical(old)?, walk::canonical(new)?];
     walk::check_roots(&roots)?;
+    let sizes: Vec<Size> = plan.actions.iter().enumerate().map(|(index, a)| size_of(&roots[0], index, a)).collect();
+    let start = Start { start: true, bytes_total: sizes.iter().map(|s| s.bytes).sum(), actions: sizes };
+    on(Event::Start(&start));
     let mut sum = Summary { summary: true, ..Default::default() };
     for (index, a) in plan.actions.iter().enumerate() {
         let to = a.to.clone().unwrap_or_else(|| a.path.clone());
@@ -189,7 +310,21 @@ pub fn apply(old: &Path, new: &Path, plan: &Plan, trash: &Trash, mut on: impl Fn
             trashed: None,
             bytes: 0,
         };
-        match run(&roots, a, &to, trash) {
+        let res = if cancel.load(Ordering::Relaxed) {
+            Err(Stop::Cancel)
+        } else {
+            let mut ctx = Ctx {
+                cancel,
+                old_root: &roots[0],
+                index,
+                bytes: start.actions[index].bytes,
+                done: 0,
+                last: None,
+                on: &mut on,
+            };
+            run(&roots, a, &to, trash, &mut ctx)
+        };
+        match res {
             Ok(r) => {
                 o.to = r.to;
                 o.bytes = r.bytes;
@@ -207,21 +342,44 @@ pub fn apply(old: &Path, new: &Path, plan: &Plan, trash: &Trash, mut on: impl Fn
                 o.error = Some(m);
                 sum.failed += 1;
             }
+            Err(Stop::Cancel) => {
+                o.result = Done::Cancelled;
+                sum.cancelled = true;
+            }
         }
-        on(&o);
+        on(Event::Outcome(&o));
     }
     Ok(sum)
 }
 
-fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash) -> Result<Ran, Stop> {
+/// Bytes and files an action will copy, by `stat` only (0 if unreadable).
+fn size_of(old_root: &Path, index: usize, a: &Action) -> Size {
+    let mut s = Size { index, bytes: 0, files: 0 };
+    if rpath::validate(&a.path).is_err() {
+        return s;
+    }
+    let mut stack = vec![old_root.join(&a.path)];
+    while let Some(p) = stack.pop() {
+        let Ok(md) = fs::symlink_metadata(&p) else { continue };
+        if md.is_file() {
+            s.bytes += md.len();
+            s.files += 1;
+        } else if md.is_dir() {
+            stack.extend(fs::read_dir(&p).into_iter().flatten().flatten().map(|e| e.path()));
+        }
+    }
+    s
+}
+
+fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash, ctx: &mut Ctx) -> Result<Ran, Stop> {
     for p in [a.path.as_str(), to] {
         rpath::validate(p).map_err(Stop::Fail)?;
         if p.is_empty() {
             return Err(Stop::Fail("empty path".into()));
         }
     }
-    if a.kind == ItemKind::Dir && !matches!(a.op, Op::Copy | Op::Move) {
-        return Err(Stop::Fail("folders can only be copied or moved".into()));
+    if a.kind == ItemKind::Dir && !matches!(a.op, Op::Copy | Op::Move | Op::TrashOld) {
+        return Err(Stop::Fail("folders can only be copied, moved or put into the Trash".into()));
     }
     let src = inside(&roots[0], &a.path)?;
     let dst = inside(&roots[1], to)?;
@@ -256,7 +414,7 @@ fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash) -> Result<Ran,
             }
             fs::create_dir_all(&parent)?;
             let tmp = temp_path(&parent, &dst);
-            let staged = if md.is_dir() { copy_dir(&src, &tmp) } else { copy_file(&src, &tmp) };
+            let staged = if md.is_dir() { copy_dir(&src, &tmp, ctx) } else { copy_file(&src, &tmp, ctx) };
             ran.bytes = settle(staged, &tmp, &dst)?;
             if a.op == Op::Move {
                 let t =
@@ -269,7 +427,7 @@ fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash) -> Result<Ran,
                 return Err(Stop::Skip("not a file in NEU any more".into()));
             }
             let tmp = temp_path(&parent, &dst);
-            ran.bytes = copy_file(&src, &tmp).inspect_err(|_| drop(fs::remove_file(&tmp)))?;
+            ran.bytes = copy_file(&src, &tmp, ctx).inspect_err(|_| drop(fs::remove_file(&tmp)))?;
             let t = trash.put(&dst).inspect_err(|_| drop(fs::remove_file(&tmp)))?;
             if let Err(e) = ops::rename_noreplace(&tmp, &dst) {
                 let _ = fs::remove_file(&tmp);
@@ -281,7 +439,7 @@ fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash) -> Result<Ran,
         Op::KeepBoth => {
             fs::create_dir_all(&parent)?;
             let tmp = temp_path(&parent, &dst);
-            ran.bytes = copy_file(&src, &tmp).inspect_err(|_| drop(fs::remove_file(&tmp)))?;
+            ran.bytes = copy_file(&src, &tmp, ctx).inspect_err(|_| drop(fs::remove_file(&tmp)))?;
             let date = &time::local(mtime_ms(&md))[..10];
             let name = dst.file_name().expect("validated").to_string_lossy().into_owned();
             let (stem, ext) = match name.rsplit_once('.') {
@@ -305,8 +463,64 @@ fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash) -> Result<Ran,
             }
             let _ = ops::fsync_dir(&parent);
         }
+        Op::TrashOld => {
+            if new_md.is_none() {
+                return Err(Stop::Skip("not in NEU".into()));
+            }
+            same_in_new(&src, &dst, ctx)?;
+            ran.trashed = Some(trash.put(&src).map_err(|e| Stop::Fail(format!("not moved to the Trash: {e}")))?);
+        }
     }
     Ok(ran)
+}
+
+/// Every file below `src` (or `src` itself) has an identical copy at the
+/// same place below `dst`; extra files in NEU do not matter.
+fn same_in_new(src: &Path, dst: &Path, ctx: &mut Ctx) -> Result<(), Stop> {
+    let md = fs::symlink_metadata(src)?;
+    let root = ctx.old_root;
+    let rel = || src.strip_prefix(root).unwrap_or(src).display().to_string();
+    let Ok(new_md) = fs::symlink_metadata(dst) else {
+        return Err(Stop::Skip(format!("{} is missing in NEU", rel())));
+    };
+    if md.file_type().is_symlink() {
+        if !new_md.file_type().is_symlink() || fs::read_link(src)? != fs::read_link(dst)? {
+            return Err(Stop::Skip(format!("{} differs in NEU", rel())));
+        }
+    } else if md.is_dir() {
+        if !new_md.is_dir() {
+            return Err(Stop::Skip(format!("{} is not a folder in NEU", rel())));
+        }
+        for e in fs::read_dir(src)? {
+            let e = e?;
+            same_in_new(&e.path(), &dst.join(e.file_name()), ctx)?;
+        }
+    } else if md.is_file()
+        && (!new_md.is_file() || new_md.len() != md.len() || hash_with(src, ctx)? != ops::hash_file(dst)?)
+    {
+        return Err(Stop::Skip(format!("{} differs in NEU", rel())));
+    }
+    Ok(())
+}
+
+/// BLAKE3 of a file in 1 MB chunks, with progress and cancel in between.
+fn hash_with(path: &Path, ctx: &mut Ctx) -> io::Result<Hash> {
+    let mut f = File::open(path)?;
+    let mut h = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    ctx.advance(path, 0);
+    loop {
+        ctx.check()?;
+        let n = match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        h.update(&buf[..n]);
+        ctx.advance(path, n as u64);
+    }
+    Ok(Hash::from_blake3(h.finalize()))
 }
 
 /// `rel` below `root`, refusing anything that leads outside it (symlinked
@@ -369,10 +583,10 @@ fn temp_path(dir: &Path, dst: &Path) -> PathBuf {
 
 /// Copy one file to the new path `dst` with date, permissions and extended
 /// attributes, confirmed by BLAKE3 and flushed. Returns its size.
-fn copy_file(src: &Path, dst: &Path) -> io::Result<u64> {
+fn copy_file(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<u64> {
+    ctx.check()?;
     let md = fs::symlink_metadata(src)?;
-    let want = ops::hash_file(src)?;
-    ops::clone_or_copy(src, dst)?;
+    let want = stream(src, dst, ctx)?;
     meta::unlock_for_write(dst);
     copy_meta(src, dst, &md, Kind::File)?;
     if ops::hash_file(dst)? != want {
@@ -382,9 +596,32 @@ fn copy_file(src: &Path, dst: &Path) -> io::Result<u64> {
     Ok(md.len())
 }
 
+/// Copy the content in 1 MB chunks (progress and cancel in between, also
+/// within large files) and return the BLAKE3 hash of what was read.
+fn stream(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<Hash> {
+    let mut from = File::open(src)?;
+    let mut to = OpenOptions::new().write(true).create_new(true).open(dst)?;
+    let mut h = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    ctx.advance(src, 0);
+    loop {
+        ctx.check()?;
+        let n = match from.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        h.update(&buf[..n]);
+        to.write_all(&buf[..n])?;
+        ctx.advance(src, n as u64);
+    }
+    Ok(Hash::from_blake3(h.finalize()))
+}
+
 /// Copy a folder tree to the new path `dst`, every file confirmed. Symbolic
 /// links are copied as links; sockets and the like are left out.
-fn copy_dir(src: &Path, dst: &Path) -> io::Result<u64> {
+fn copy_dir(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<u64> {
     let md = fs::symlink_metadata(src)?;
     fs::create_dir(dst)?;
     let mut bytes = 0;
@@ -394,9 +631,9 @@ fn copy_dir(src: &Path, dst: &Path) -> io::Result<u64> {
         if ft.is_symlink() {
             std::os::unix::fs::symlink(fs::read_link(&s)?, &d)?;
         } else if ft.is_dir() {
-            bytes += copy_dir(&s, &d)?;
+            bytes += copy_dir(&s, &d, ctx)?;
         } else if ft.is_file() {
-            bytes += copy_file(&s, &d)?;
+            bytes += copy_file(&s, &d, ctx)?;
         }
     }
     // Last, so that writing the contents does not change the date again.

@@ -96,3 +96,38 @@ von NEU) oder Fehler beim Schreiben. `expect_*` gilt nur für `kind: "file"`.
 
 `result`: `done` | `skipped` | `failed`. Exit-Code 0, wenn nichts `failed`
 ist, sonst 1. Ohne `--json` dieselben Ergebnisse als lesbarer Text.
+
+#### Fortschritt und Abbrechen
+
+Vor der ersten Aktion kommt eine Zeile mit der Größe jeder Aktion (Ordner:
+alle Dateien darin, nur per `stat`, nichts wird gelesen), während des
+Kopierens höchstens fünfmal pro Sekunde eine Fortschrittszeile:
+
+```json
+{"start":true,"bytes_total":75120000000,"actions":[{"index":0,"bytes":12700000,"files":181}]}
+{"progress":true,"index":0,"bytes_done":884000,"bytes":12700000,"file":"claude-code/.devcontainer/Dockerfile"}
+```
+
+`bytes_done` zählt innerhalb der Aktion `index`, `file` ist der Pfad in ALT,
+der gerade kopiert wird. Große Dateien melden auch zwischendurch Fortschritt.
+
+SIGTERM oder SIGINT bricht ab: die laufende Aktion hält nach spätestens 1 MB
+an, ihre temporäre Kopie wird entfernt, NEU bleibt wie vorher. Sie und alle
+folgenden Aktionen kommen mit `"result":"cancelled"`, die Zusammenfassung mit
+`"cancelled":true`. Fertige Aktionen bleiben bestehen. Exit-Code wie oben
+(Abbrechen allein ist kein Fehler).
+
+#### ALT löschen: `trash_old`
+
+```json
+{ "op": "trash_old", "kind": "dir", "path": "photo-organizer-cli", "to": "photo-organizer-cli" }
+```
+
+Legt eine ALT-Datei oder einen ALT-Ordner in den macOS-Papierkorb, aber nur,
+wenn NEU unter `to` (fehlt = `path`) von **jeder** Datei darin eine
+identische Kopie hat: gleiche Größe und gleicher BLAKE3-Inhalt, Symlinks mit
+gleichem Ziel. Zusätzliche Dateien in NEU stören nicht. Sonst `skipped` mit
+der ersten abweichenden Datei (`"x/a.txt differs in NEU"`, `"… is missing in
+NEU"`, `"not in NEU"`). Fortschritt zählt die geprüften Bytes; liegt ALT in
+Google Drive, werden die Dateien dafür gelesen (heruntergeladen). NEU wird nie
+verändert, `trashed` nennt den Ort im Papierkorb.

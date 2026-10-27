@@ -30,7 +30,9 @@ use std::time::Instant;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 
-pub use apply::{apply, Action, Done, Expect, ItemKind, Op, Outcome, Plan, Summary, Trash};
+pub use apply::{
+    apply, apply_with, Action, Done, Event, Expect, ItemKind, Op, Outcome, Plan, Progress, Size, Start, Summary, Trash,
+};
 pub use compare::{compare, Comparison, Counts, Entry, Folder, FolderStatus, Order, OrderStatus, State};
 
 /// Names never looked at: Mac metadata, Git internals, dependencies, build and

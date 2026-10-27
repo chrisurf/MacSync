@@ -285,7 +285,9 @@ enum ReconcileTree {
 // MARK: - plan
 
 enum PlanOp: String, Sendable {
-    case copy, move, replace, keepBoth = "keep_both"
+    case copy, move, replace, keepBoth = "keep_both", trashOld = "trash_old"
+
+    static let all: [PlanOp] = [.copy, .move, .replace, .keepBoth, .trashOld]
 
     /// Button / menu title.
     var title: String {
@@ -294,6 +296,7 @@ enum PlanOp: String, Sendable {
         case .move: return "Nach NEU verschieben"
         case .replace: return "ALT übernehmen"
         case .keepBoth: return "Beide behalten"
+        case .trashOld: return "In ALT löschen (Papierkorb)"
         }
     }
 
@@ -304,6 +307,28 @@ enum PlanOp: String, Sendable {
         case .move: return "verschieben"
         case .replace: return "ersetzen"
         case .keepBoth: return "beide"
+        case .trashOld: return "löschen"
+        }
+    }
+
+    /// Marker in the row once done.
+    var done: String {
+        switch self {
+        case .copy: return "kopiert"
+        case .move: return "verschoben"
+        case .replace: return "ersetzt"
+        case .keepBoth: return "beide behalten"
+        case .trashOld: return "im Papierkorb"
+        }
+    }
+
+    /// What lands in the Trash (confirmation).
+    var trashes: String? {
+        switch self {
+        case .copy, .keepBoth: return nil
+        case .move: return "die ALT-Quelle, nach bestätigter Kopie"
+        case .replace: return "die bisherige NEU-Fassung"
+        case .trashOld: return "ALT – nur wenn NEU von jeder Datei eine identische Kopie hat (BLAKE3)"
         }
     }
 }
@@ -314,6 +339,18 @@ struct PlanItem: Sendable {
     /// Target relative to NEU.
     let to: String
     let bytes: Int64
+    /// Files in it (1 for a file).
+    var files = 1
+}
+
+/// One line of the plan overview.
+struct PlanRow: Identifiable {
+    let id: Int
+    let path: String
+    let item: PlanItem
+
+    /// From 1 GB on a plan item deserves a second look.
+    var large: Bool { item.bytes >= ReconcileModel.largeBytes }
 }
 
 struct LineInfo: Sendable {
@@ -328,7 +365,8 @@ struct ApplyResult: Identifiable, Sendable {
     let id: Int
     let path: String
     let to: String
-    /// `done`, `skipped` or `failed`.
+    var op: PlanOp?
+    /// `done`, `skipped`, `failed` or `cancelled`.
     let result: String
     let error: String?
 }
@@ -339,7 +377,15 @@ struct ApplyReport: Identifiable {
     var done = 0
     var skipped = 0
     var failed = 0
+    /// Actions not run because the run was cancelled.
+    var cancelled = 0
     var bytes: Int64 = 0
+    /// Stopped with „Abbrechen“.
+    var wasCancelled = false
+    /// macsync confirmed the stop (summary line): no partial copy is left.
+    var cleanStop = false
+    /// Finished copies whose ALT side is still there: candidates for `trash_old`.
+    var offers: [TrashOffer] = []
     /// The run itself failed (no summary line).
     var error: String?
 }
@@ -349,10 +395,143 @@ private final class ReportBox {
     var report = ApplyReport(results: [])
 }
 
-struct ApplyProgress {
-    var total: Int
+/// A copy that is now in ALT and NEU; ALT may go after a checksum check.
+struct TrashOffer: Identifiable, Sendable {
+    let id: Int
+    let path: String
+    let to: String
+    let dir: Bool
+    let bytes: Int64
+}
+
+/// One action of a run, as written to the plan file.
+struct RunAction {
+    let op: PlanOp
+    let dir: Bool
+    let path: String
+    let to: String
+    let bytes: Int64
+    var expectOld: [String: Int64]?
+    var expectNew: [String: Int64]?
+
+    var json: [String: Any] {
+        var a: [String: Any] = ["op": op.rawValue, "kind": dir ? "dir" : "file", "path": path, "to": to]
+        if let expectOld { a["expect_old"] = expectOld }
+        if let expectNew { a["expect_new"] = expectNew }
+        return a
+    }
+}
+
+/// Where one plan action stands during and after a run.
+enum RunState: Equatable {
+    case waiting, running, done, skipped, failed, cancelled
+
+    init(result: String) {
+        switch result {
+        case "done": self = .done
+        case "skipped": self = .skipped
+        case "cancelled": self = .cancelled
+        default: self = .failed
+        }
+    }
+
+    var finished: Bool { self != .waiting && self != .running }
+}
+
+/// A plan being executed (`--apply`), kept until the next comparison.
+struct ApplyRun {
+    /// Per action index (order of the plan file): path in ALT, operation, target.
+    let paths: [String]
+    let dirs: [Bool]
+    let ops: [PlanOp]
+    let tos: [String]
+    /// From the `start` line, until then the comparison's sizes.
+    var bytes: [Int64]
+    var states: [RunState]
+    var errors: [String?]
+    /// A `start` line came: progress by bytes, else by actions (older macsync).
+    var byBytes = false
+    var current: Int?
+    /// Bytes of the running action so far, and the file it is at.
+    var currentDone: Int64 = 0
+    var file = ""
     var finished = 0
-    var current = ""
+    /// Size of all finished actions, and of those done (actually copied).
+    var finishedBytes: Int64 = 0
+    var doneBytes: Int64 = 0
+    /// Copied bytes over the last seconds, for the rate.
+    var samples: [(Date, Int64)] = []
+    /// Last line from macsync: without one for a while rate and ETA are stale.
+    var lastData = Date()
+    var running = true
+    var cancelling = false
+    let started = Date()
+
+    init(_ actions: [RunAction]) {
+        paths = actions.map(\.path)
+        dirs = actions.map(\.dir)
+        ops = actions.map(\.op)
+        tos = actions.map(\.to)
+        bytes = actions.map(\.bytes)
+        states = Array(repeating: .waiting, count: actions.count)
+        errors = Array(repeating: nil, count: actions.count)
+        current = actions.isEmpty ? nil : 0
+        if !actions.isEmpty { states[0] = .running }
+    }
+
+    var total: Int { paths.count }
+    var bytesTotal: Int64 { bytes.reduce(0, +) }
+    var processed: Int64 { finishedBytes + currentDone }
+
+    var fraction: Double {
+        if byBytes {
+            let t = bytesTotal
+            return t > 0 ? min(1, Double(processed) / Double(t)) : Double(finished) / Double(max(total, 1))
+        }
+        return Double(finished) / Double(max(total, 1))
+    }
+
+    /// Of the action at `index` (running: its bytes so far).
+    func fraction(_ index: Int) -> Double? {
+        guard byBytes, index == current, bytes[index] > 0 else { return nil }
+        return min(1, Double(currentDone) / Double(bytes[index]))
+    }
+
+    /// Bytes per second over the last ~10 s; nil until there are 2 s of data.
+    var rate: Double? {
+        guard let a = samples.first, let b = samples.last else { return nil }
+        let dt = b.0.timeIntervalSince(a.0)
+        guard dt >= 2 else { return nil }
+        return Double(b.1 - a.1) / dt
+    }
+
+    var remaining: TimeInterval? {
+        guard byBytes, let r = rate, r > 0 else { return nil }
+        return Double(max(bytesTotal - processed, 0)) / r
+    }
+
+    mutating func sample() {
+        let now = Date()
+        lastData = now
+        samples.append((now, doneBytes + currentDone))
+        while samples.count > 2 && samples[1].0 < now.addingTimeInterval(-10) { samples.removeFirst() }
+    }
+
+    mutating func finish(_ index: Int, _ state: RunState, error: String?) {
+        guard states.indices.contains(index), !states[index].finished else { return }
+        states[index] = state
+        errors[index] = error
+        finished += 1
+        finishedBytes += bytes[index]
+        if state == .done { doneBytes += bytes[index] }
+        if index == current {
+            currentDone = 0
+            file = ""
+            current = index + 1 < total ? index + 1 : nil
+            if let c = current, states[c] == .waiting, !cancelling { states[c] = .running }
+        }
+        sample()
+    }
 }
 
 private final class LineCollector: @unchecked Sendable {
@@ -387,6 +566,10 @@ final class ReconcileModel: ObservableObject {
     @Published private(set) var nodes: [RNode] = []
     @Published private(set) var rows: [RNode] = []
     @Published private(set) var expanded = Set<Int>()
+    /// Open folders while a chip or search is active; all matches start open.
+    @Published private(set) var filterExpanded = Set<Int>()
+    /// Chip, search and mode the filter folders were last opened for.
+    private var filterKey: String?
     @Published var mode: Mode = .open { didSet { rebuild() } }
     @Published var chip: FileState? { didSet { rebuild() } }
     @Published var search = "" { didSet { rebuild() } }
@@ -396,18 +579,28 @@ final class ReconcileModel: ObservableObject {
     @Published var orderDismissed = false
     @Published var error: String?
     @Published var needsFullDiskAccess = false
-    @Published private(set) var applying: ApplyProgress?
+    /// The plan being executed, or the last one until the next comparison.
+    @Published private(set) var run: ApplyRun?
+    /// Node id → action index of `run`.
+    private var runIndex: [Int: Int] = [:]
+    @Published var confirming = false
+    @Published var showingPlan = false
     @Published var report: ApplyReport?
     @Published private(set) var recent: [[String]] = UserDefaults.standard.array(forKey: "reconcileRecent") as? [[String]] ?? []
 
-    /// Called once a comparison has been loaded (screenshots).
+    /// Called once a comparison has been loaded / a run has ended (screenshots).
     var onLoaded: (() -> Void)?
+    var onReport: ((ApplyReport) -> Void)?
     private var process: Process?
-    private var cancelled = false
+    private var applyProcess: Process?
+    /// Counts comparisons: a result of an outdated one is dropped.
+    private var generation = 0
+
+    var applying: Bool { run?.running == true }
 
     var canCompare: Bool {
         guard let o = oldPath, let n = newPath else { return false }
-        return o != n && !comparing && applying == nil
+        return o != n && !comparing && !applying
     }
 
     var root: DupesComparison.Folder? { comparison?.folders.first }
@@ -429,25 +622,26 @@ final class ReconcileModel: ObservableObject {
     }
 
     func cancel() {
-        cancelled = true
+        generation += 1
         process?.terminate()
         process = nil
         comparing = false
     }
 
     private func run(_ o: String, _ n: String, files: Bool) {
-        cancelled = false
+        generation += 1
+        let gen = generation
         let out = LineCollector()
         var args = ["dupes", o, n, "--json"]
         if files { args.append("--files") }
         process = CLI.stream(args, line: { out.add($0) }) { [weak self] status, err in
             let text = out.text
-            Task { @MainActor in self?.finished(o, n, files: files, status: status, err: err, text: text) }
+            Task { @MainActor in self?.finished(o, n, files: files, gen: gen, status: status, err: err, text: text) }
         }
     }
 
-    private func finished(_ o: String, _ n: String, files: Bool, status: Int32, err: String, text: String) {
-        guard !cancelled else { return }
+    private func finished(_ o: String, _ n: String, files: Bool, gen: Int, status: Int32, err: String, text: String) {
+        guard gen == generation else { return }
         process = nil
         // Exit code 2 = usage error: a macsync without `--files`.
         if status == 2 && files {
@@ -467,6 +661,7 @@ final class ReconcileModel: ObservableObject {
                 ReconcileTree.statMissingSizes(&c)
                 return (c, ReconcileTree.build(c, complete: files))
             }.value
+            guard gen == generation else { return }
             comparing = false
             guard let built else {
                 fail("Unerwartete Ausgabe von macsync dupes")
@@ -489,6 +684,9 @@ final class ReconcileModel: ObservableObject {
         self.complete = complete
         nodes = tree
         plan = [:]
+        // A run still going (ALT deleted while comparing) keeps its rows.
+        if !applying { run = nil }
+        reindexRun()
         selection = []
         orderDismissed = false
         if let keepOpen {
@@ -535,6 +733,15 @@ final class ReconcileModel: ObservableObject {
     func rebuild() {
         guard !nodes.isEmpty else { rows = []; return }
         let include = filterSet()
+        if let include {
+            // A new filter opens all folders with matches; toggling keeps working.
+            let key = "\(String(describing: chip))|\(search.trimmingCharacters(in: .whitespaces))|\(mode)"
+            if key != filterKey { filterExpanded = include }
+            filterKey = key
+        } else {
+            filterKey = nil
+        }
+        let open = include != nil ? filterExpanded : expanded
         var out: [RNode] = []
         func visit(_ id: Int) {
             for c in nodes[id].children {
@@ -545,7 +752,7 @@ final class ReconcileModel: ObservableObject {
                     continue
                 }
                 out.append(n)
-                if n.isDir && (include != nil || expanded.contains(c)) { visit(c) }
+                if n.isDir && open.contains(c) { visit(c) }
             }
         }
         visit(0)
@@ -569,16 +776,24 @@ final class ReconcileModel: ObservableObject {
 
     var filtering: Bool { chip != nil || !search.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    func isExpanded(_ n: RNode) -> Bool { filtering || expanded.contains(n.id) }
+    func isExpanded(_ n: RNode) -> Bool { (filtering ? filterExpanded : expanded).contains(n.id) }
 
     func toggle(_ n: RNode) {
-        guard n.isDir, !filtering else { return }
-        if expanded.contains(n.id) { expanded.remove(n.id) } else { expanded.insert(n.id) }
+        guard n.isDir else { return }
+        if filtering {
+            if filterExpanded.remove(n.id) == nil { filterExpanded.insert(n.id) }
+        } else if expanded.remove(n.id) == nil {
+            expanded.insert(n.id)
+        }
         rebuild()
     }
 
     func expandAll(_ open: Bool) {
-        expanded = open ? Set(nodes.filter { $0.isDir && $0.id != 0 }.map(\.id)) : []
+        if filtering {
+            filterExpanded = open ? filterSet() ?? [] : []
+        } else {
+            expanded = open ? Set(nodes.filter { $0.isDir && $0.id != 0 }.map(\.id)) : []
+        }
         rebuild()
     }
 
@@ -654,21 +869,31 @@ final class ReconcileModel: ObservableObject {
 
     func ops(for n: RNode, in plan: [Int: PlanItem]? = nil) -> [PlanOp] {
         guard !covered(n, in: plan) else { return [] }
-        if n.isDir { return n.inOld && !n.inNew && n.id != 0 ? [.copy, .move] : [] }
+        if n.isDir {
+            guard n.id != 0, n.inOld else { return [] }
+            if !n.inNew { return [.copy, .move] }
+            // Only identical copies: macsync checks every file by checksum.
+            return n.folderState == .identical ? [.trashOld] : []
+        }
         switch n.fileState {
         case .onlyOld: return [.copy, .move]
         case .oldNewer, .unclear: return [.replace, .keepBoth]
+        case .same, .moved: return [.trashOld]
         default: return []
         }
     }
 
     private func item(_ op: PlanOp, _ n: RNode) -> PlanItem {
-        if n.isDir { return PlanItem(op: op, dir: true, to: n.path, bytes: n.oldBytes ?? 0) }
-        let to = op == .copy || op == .move ? n.suggested ?? n.path : n.pathNew
+        if n.isDir {
+            let files = n.folder.flatMap { comparison?.folders[$0].total.oldFiles } ?? 0
+            return PlanItem(op: op, dir: true, to: op == .trashOld ? n.pathNew : n.path, bytes: n.oldBytes ?? 0, files: files)
+        }
+        let to = op == .copy || op == .move ? n.suggested ?? n.path : op == .trashOld ? n.movedTo ?? n.pathNew : n.pathNew
         return PlanItem(op: op, dir: false, to: to, bytes: n.oldBytes ?? 0)
     }
 
     func setPlan(_ op: PlanOp, _ targets: [RNode]) {
+        guard !applying else { return }
         var p = plan
         // `p`, not `plan`: a folder chosen together with its files covers them.
         for n in targets where ops(for: n, in: p).contains(op) {
@@ -679,6 +904,7 @@ final class ReconcileModel: ObservableObject {
     }
 
     func unplan(_ targets: [RNode]) {
+        guard !applying else { return }
         var p = plan
         for n in targets { p[n.id] = nil }
         plan = p
@@ -692,8 +918,9 @@ final class ReconcileModel: ObservableObject {
     }
 
     /// Copy what is only in ALT, take over what is newer there; never for
-    /// `unclear`. Choices already made stay.
+    /// `unclear`, never deletes in ALT. Choices already made stay.
     func suggest() {
+        guard !applying else { return }
         var p = plan
         func visit(_ id: Int, covered: Bool) {
             let n = nodes[id]
@@ -721,10 +948,46 @@ final class ReconcileModel: ObservableObject {
         nodes[id].children.contains { nodes[$0].suggested != nil || hasSuggestion(below: $0) }
     }
 
-    func clearPlan() { plan = [:] }
+    func clearPlan() {
+        guard !applying else { return }
+        plan = [:]
+    }
+
+    nonisolated static let largeBytes: Int64 = 1_000_000_000
+
+    /// The plan, largest first.
+    var planRows: [PlanRow] {
+        plan.map { PlanRow(id: $0.key, path: nodes[$0.key].path, item: $0.value) }
+            .sorted { ($0.item.bytes, $1.path) > ($1.item.bytes, $0.path) }
+    }
+
+    var planBytes: Int64 { plan.values.reduce(0) { $0 + $1.bytes } }
+    /// Written to NEU, and checked in ALT before it goes to the Trash.
+    var planCopyBytes: Int64 { plan.values.reduce(0) { $0 + ($1.op == .trashOld ? 0 : $1.bytes) } }
+    var planTrashBytes: Int64 { planBytes - planCopyBytes }
+    var planFiles: Int { plan.values.reduce(0) { $0 + $1.files } }
+
+    /// Free space on NEU's volume.
+    var newFreeBytes: Int64? {
+        guard let n = comparison?.new else { return nil }
+        let v = try? URL(fileURLWithPath: n).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return v?.volumeAvailableCapacityForImportantUsage
+    }
+
+    /// From the confirmation to the plan overview.
+    func reviewPlan() {
+        confirming = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.showingPlan = true }
+    }
+
+    /// ALT in Google Drive, iCloud & Co.: files may be downloaded first.
+    var oldInCloud: Bool {
+        guard let o = comparison?.old else { return false }
+        return o.contains("/Library/CloudStorage/") || o.contains("/Library/Mobile Documents/")
+    }
 
     var planCounts: [(PlanOp, Int)] {
-        [PlanOp.copy, .move, .replace, .keepBoth].compactMap { op in
+        PlanOp.all.compactMap { op in
             let n = plan.values.filter { $0.op == op }.count
             return n > 0 ? (op, n) : nil
         }
@@ -733,58 +996,94 @@ final class ReconcileModel: ObservableObject {
     var planSummary: String {
         guard !plan.isEmpty else { return "Plan: leer – Aktionen über das Kontextmenü oder „Vorschläge“" }
         let parts = planCounts.map { "\($0.1) \($0.0.short)" }
-        let bytes = plan.values.reduce(Int64(0)) { $0 + $1.bytes }
-        return "Plan: " + parts.joined(separator: " · ") + " · " + Activity.bytes(bytes)
+        return "Plan: " + parts.joined(separator: " · ") + " · " + Activity.bytes(planBytes)
     }
 
     // MARK: execute
 
-    func execute() {
-        guard let c = comparison, !plan.isEmpty, applying == nil, !comparing else { return }
-        let alert = NSAlert()
-        alert.messageText = plan.count == 1 ? "1 Aktion ausführen?" : "\(plan.count) Aktionen ausführen?"
-        var lines: [String] = []
-        for (op, n) in planCounts {
+    /// What the plan does, one line per kind of action (confirmation).
+    var planEffects: [String] {
+        planCounts.map { op, n in
             switch op {
-            case .copy: lines.append("• \(n) nach NEU kopieren")
-            case .move: lines.append("• \(n) nach NEU verschieben – die ALT-Quelle kommt nach bestätigter Kopie in den Papierkorb")
-            case .replace: lines.append("• \(n) NEU-Datei\(n == 1 ? "" : "en") durch die ALT-Fassung ersetzen – die bisherige NEU-Fassung kommt in den Papierkorb")
-            case .keepBoth: lines.append("• \(n) ALT-Fassung\(n == 1 ? "" : "en") zusätzlich neben die NEU-Datei legen („Name (ALT JJJJ-MM-TT)“)")
+            case .copy: return "\(n) nach NEU kopieren"
+            case .move: return "\(n) nach NEU verschieben"
+            case .replace: return "\(n) NEU-Datei\(n == 1 ? "" : "en") durch die ALT-Fassung ersetzen"
+            case .keepBoth: return "\(n) ALT-Fassung\(n == 1 ? "" : "en") zusätzlich neben die NEU-Datei legen („Name (ALT JJJJ-MM-TT)“)"
+            case .trashOld: return "\(n) in ALT löschen"
             }
         }
-        lines.append("")
-        lines.append("Nichts wird überschrieben oder endgültig gelöscht. Was sich seit dem Vergleich geändert hat, wird übersprungen.")
-        alert.informativeText = lines.joined(separator: "\n")
-        alert.alertStyle = plan.values.contains { $0.op == .move || $0.op == .replace } ? .warning : .informational
-        alert.addButton(withTitle: "Ausführen")
-        alert.addButton(withTitle: "Abbrechen")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+    }
 
-        let ordered = plan.keys.sorted()
-        var actions: [[String: Any]] = []
-        for id in ordered {
+    /// Asks first (sheet), see `start()`.
+    func execute() {
+        guard comparison != nil, !plan.isEmpty, !applying, !comparing else { return }
+        showingPlan = false
+        confirming = true
+    }
+
+    func start() {
+        confirming = false
+        guard comparison != nil, !plan.isEmpty, !applying, !comparing else { return }
+        // Deleting in ALT last: by then the copies before it are done.
+        let ordered = plan.keys.sorted {
+            (plan[$0]!.op == .trashOld ? 1 : 0, $0) < (plan[$1]!.op == .trashOld ? 1 : 0, $1)
+        }
+        launch(ordered.map { id in
             let n = nodes[id], it = plan[id]!
-            var a: [String: Any] = ["op": it.op.rawValue, "kind": it.dir ? "dir" : "file", "path": n.path, "to": it.to]
-            if !it.dir, let e = entry(n) {
-                if let m = e.mtimeOld { a["expect_old"] = ["size": e.size, "mtime_ms": m] }
+            var a = RunAction(op: it.op, dir: it.dir, path: n.path, to: it.to, bytes: it.bytes)
+            if !it.dir, it.op != .trashOld, let e = entry(n) {
+                if let m = e.mtimeOld { a.expectOld = ["size": e.size, "mtime_ms": m] }
                 if it.op == .replace || it.op == .keepBoth, let s = n.newBytes, let m = e.mtimeNew {
-                    a["expect_new"] = ["size": s, "mtime_ms": m]
+                    a.expectNew = ["size": s, "mtime_ms": m]
                 }
             }
-            actions.append(a)
+            return a
+        })
+    }
+
+    /// „In ALT löschen“ after a run: what was copied goes from ALT to the
+    /// Trash, after macsync found identical copies in NEU.
+    func trashOld(_ offers: [TrashOffer], confirmed: Bool = false) {
+        guard comparison != nil, !offers.isEmpty, !applying else { return }
+        if !confirmed && !confirmTrash(offers) { return }
+        report = nil
+        launch(offers.map { RunAction(op: .trashOld, dir: $0.dir, path: $0.path, to: $0.to, bytes: $0.bytes) })
+    }
+
+    private func confirmTrash(_ offers: [TrashOffer]) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = offers.count == 1 ? "„\(offers[0].path)“ in ALT löschen?" : "\(offers.count) Einträge in ALT löschen?"
+        var lines = offers.prefix(8).map { "• \($0.path) (\(Activity.bytes($0.bytes)))" }
+        if offers.count > 8 { lines.append("… und \(offers.count - 8) weitere") }
+        lines.append("")
+        lines.append("Diese Ordner/Dateien kommen aus ALT in den macOS-Papierkorb – nur wenn NEU von jeder Datei eine identische Kopie hat (Prüfsumme BLAKE3). NEU wird nicht verändert.")
+        if oldInCloud {
+            lines.append("")
+            lines.append("ALT liegt in Google Drive/iCloud: für die Prüfung werden die Dateien gelesen und dabei heruntergeladen.")
         }
+        alert.informativeText = lines.joined(separator: "\n")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "In ALT löschen")
+        alert.addButton(withTitle: "Abbrechen")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Writes the plan file and runs `macsync dupes ALT NEU --apply`.
+    private func launch(_ actions: [RunAction]) {
+        guard let c = comparison, !actions.isEmpty else { return }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("macsync-plan-\(UUID().uuidString).json")
         do {
-            try JSONSerialization.data(withJSONObject: ["actions": actions], options: [.prettyPrinted]).write(to: file)
+            try JSONSerialization.data(withJSONObject: ["actions": actions.map(\.json)], options: [.prettyPrinted]).write(to: file)
         } catch {
             self.error = "Plan nicht gespeichert: \(error.localizedDescription)"
             return
         }
-        let paths = ordered.map { nodes[$0].path }
-        applying = ApplyProgress(total: actions.count, current: paths.first ?? "")
+        run = ApplyRun(actions)
+        reindexRun()
+        run?.sample()
         let box = ReportBox()
-        _ = CLI.stream(["dupes", c.old, c.new, "--apply", file.path, "--json"], line: { [weak self] l in
-            Task { @MainActor in self?.applyLine(l, paths: paths, report: &box.report) }
+        applyProcess = CLI.stream(["dupes", c.old, c.new, "--apply", file.path, "--json"], line: { [weak self] l in
+            Task { @MainActor in self?.applyLine(l, report: &box.report) }
         }) { [weak self] status, err in
             Task { @MainActor in
                 try? FileManager.default.removeItem(at: file)
@@ -793,34 +1092,133 @@ final class ReconcileModel: ObservableObject {
         }
     }
 
-    private func applyLine(_ l: String, paths: [String], report: inout ApplyReport) {
+    /// Rows of the run by path: they survive a re-comparison.
+    private func reindexRun() {
+        runIndex = [:]
+        guard let run else { return }
+        let index = Dictionary(run.paths.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        for n in nodes where n.id != 0 {
+            if let i = index[n.path] { runIndex[n.id] = i }
+        }
+    }
+
+    /// SIGTERM: macsync stops the running action, removes its partial copy
+    /// and reports the rest as `cancelled`.
+    func cancelRun() {
+        guard applying, run?.cancelling == false else { return }
+        run?.cancelling = true
+        applyProcess?.terminate()
+    }
+
+    private func applyLine(_ l: String, report: inout ApplyReport) {
         guard let obj = (try? JSONSerialization.jsonObject(with: Data(l.utf8))) as? [String: Any] else { return }
         if obj["summary"] as? Bool == true {
             report.done = obj["done"] as? Int ?? 0
             report.skipped = obj["skipped"] as? Int ?? 0
             report.failed = obj["failed"] as? Int ?? 0
             report.bytes = (obj["bytes"] as? NSNumber)?.int64Value ?? 0
+            report.wasCancelled = obj["cancelled"] as? Bool ?? false
+            report.cleanStop = report.wasCancelled
+            return
+        }
+        if obj["start"] as? Bool == true {
+            guard var r = run else { return }
+            for a in obj["actions"] as? [[String: Any]] ?? [] {
+                if let i = a["index"] as? Int, r.bytes.indices.contains(i), let b = a["bytes"] as? NSNumber {
+                    r.bytes[i] = b.int64Value
+                }
+            }
+            r.byBytes = true
+            run = r
+            return
+        }
+        if obj["progress"] as? Bool == true {
+            guard var r = run, let i = obj["index"] as? Int, r.states.indices.contains(i), !r.states[i].finished else { return }
+            if r.current != i {
+                if let c = r.current, r.states[c] == .running { r.states[c] = .waiting }
+                r.current = i
+            }
+            if !r.cancelling { r.states[i] = .running }
+            r.currentDone = (obj["bytes_done"] as? NSNumber)?.int64Value ?? 0
+            r.file = obj["file"] as? String ?? ""
+            r.sample()
+            run = r
             return
         }
         let i = obj["index"] as? Int ?? report.results.count
-        report.results.append(ApplyResult(id: i, path: obj["path"] as? String ?? "", to: obj["to"] as? String ?? "",
-                                          result: obj["result"] as? String ?? "failed", error: obj["error"] as? String))
-        applying?.finished = report.results.count
-        applying?.current = paths.indices.contains(i + 1) ? paths[i + 1] : ""
+        let result = ApplyResult(id: i, path: obj["path"] as? String ?? "", to: obj["to"] as? String ?? "",
+                                 op: run.flatMap { $0.ops.indices.contains(i) ? $0.ops[i] : nil },
+                                 result: obj["result"] as? String ?? "failed", error: obj["error"] as? String)
+        report.results.append(result)
+        run?.finish(i, RunState(result: result.result), error: result.error)
     }
 
     private func applied(status: Int32, err: String, report: ApplyReport) {
-        applying = nil
+        applyProcess = nil
         var r = report
-        if r.results.isEmpty && status != 0 {
+        let cancelling = run?.cancelling == true
+        if var run {
+            // Without an outcome line (older macsync stopped by SIGTERM, crash).
+            for i in run.states.indices where !run.states[i].finished {
+                let state: RunState = cancelling ? .cancelled : .failed
+                let error = cancelling ? nil : (err.isEmpty ? "keine Rückmeldung von macsync" : err)
+                run.finish(i, state, error: error)
+                if !r.results.isEmpty || cancelling {
+                    r.results.append(ApplyResult(id: i, path: run.paths[i], to: run.tos[i], op: run.ops[i],
+                                                 result: state == .cancelled ? "cancelled" : "failed", error: error))
+                }
+            }
+            run.running = false
+            run.cancelling = false
+            self.run = run
+            if r.bytes == 0 {
+                r.bytes = run.states.indices.reduce(0) { $0 + (run.states[$1] == .done && run.ops[$1] != .trashOld ? run.bytes[$1] : 0) }
+            }
+            // ALT is still there next to its new copy: offer to delete it.
+            r.offers = r.results.compactMap { res in
+                guard res.result == "done", let op = res.op, [.copy, .replace, .keepBoth].contains(op),
+                      run.paths.indices.contains(res.id) else { return nil }
+                return TrashOffer(id: res.id, path: run.paths[res.id], to: res.to.isEmpty ? run.tos[res.id] : res.to,
+                                  dir: run.dirs[res.id], bytes: run.bytes[res.id])
+            }
+        }
+        r.wasCancelled = r.wasCancelled || cancelling
+        // From the outcome lines: also right when the summary is missing.
+        let count = { (result: String) in r.results.filter { $0.result == result }.count }
+        (r.done, r.skipped, r.failed, r.cancelled) = (count("done"), count("skipped"), count("failed"), count("cancelled"))
+        if r.results.isEmpty && status != 0 && !cancelling {
             r.error = status == 2 ? "Diese macsync-Version kann Pläne noch nicht ausführen (--apply fehlt)." : err
         }
         self.report = r
-        if !r.results.isEmpty {
+        onReport?(r)
+        if r.results.contains(where: { $0.result != "cancelled" }) {
             plan = [:]
-            // What was done changes the picture: compare again.
+            // What was done changes the picture: compare again (also when a
+            // comparison started during the run, it is outdated now).
+            if comparing { cancel() }
             compare()
         }
+        // Nothing happened: the plan stays; the rows show „abgebrochen“ until
+        // the result is closed (`closeReport`).
+    }
+
+    func closeReport() {
+        report = nil
+        if !applying, !plan.isEmpty {
+            run = nil
+            runIndex = [:]
+        }
+    }
+
+    /// Run state of a row: its own action or that of the folder it is in.
+    func runState(_ n: RNode) -> (state: RunState, index: Int)? {
+        guard let run else { return nil }
+        var p: Int? = n.id
+        while let id = p {
+            if let i = runIndex[id] { return (run.states[i], i) }
+            p = nodes[id].parent
+        }
+        return nil
     }
 }
 
@@ -863,10 +1261,22 @@ final class ReconcileWindow: NSObject, NSWindowDelegate {
         // of the start screen when not both folders are given.
         if let snapshot {
             let env = ProcessInfo.processInfo.environment
+            // MACSYNC_RECONCILE_DELAY="4,9": one shot per delay (name-4.png, name-9.png).
+            let delays = (env["MACSYNC_RECONCILE_DELAY"] ?? "").split(separator: ",").compactMap { Double($0) }
             let take = { [weak w] in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    guard let w, let frame = w.contentView?.superview else { return }
-                    ManagerWindow.snapshot(frame, to: URL(fileURLWithPath: snapshot))
+                for d in delays.isEmpty ? [1.5] : delays {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) {
+                        guard let w, let frame = w.contentView?.superview else { return }
+                        let base = URL(fileURLWithPath: snapshot)
+                        let url = delays.count > 1
+                            ? base.deletingPathExtension().appendingPathExtension("\(Int(d))").appendingPathExtension("png") : base
+                        // A sheet or popover is a window of its own: it goes next to it as name-sheet.png.
+                        let popover = NSApp.windows.first { $0.isVisible && $0.className.contains("Popover") }
+                        if let v = (w.attachedSheet ?? popover)?.contentView?.superview {
+                            ManagerWindow.snapshot(v, to: url.deletingPathExtension().appendingPathExtension("sheet.png"))
+                        }
+                        ManagerWindow.snapshot(frame, to: url)
+                    }
                 }
             }
             if m.comparing {
@@ -876,6 +1286,27 @@ final class ReconcileWindow: NSObject, NSWindowDelegate {
                     // Select once the table shows the new rows.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         if let p = env["MACSYNC_RECONCILE_SELECT"] { m?.select(path: p) }
+                        // Paths (comma separated) planned for „In ALT löschen“.
+                        for p in (env["MACSYNC_RECONCILE_TRASHPLAN"] ?? "").split(separator: ",") {
+                            if let m, let n = m.nodes.first(where: { $0.path == p }) { m.setPlan(.trashOld, [n]) }
+                        }
+                        // After the run: delete every offered copy in ALT, without asking.
+                        if env["MACSYNC_RECONCILE_TRASH"] != nil {
+                            m?.onReport = { [weak m] r in
+                                m?.onReport = nil
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { m?.trashOld(r.offers, confirmed: true) }
+                            }
+                        }
+                        // confirm | plan | execute (without asking), optionally cancelled after n s.
+                        switch env["MACSYNC_RECONCILE_SHOW"] {
+                        case "confirm": m?.execute()
+                        case "plan": m?.showingPlan = true
+                        case "execute": m?.start()
+                        default: break
+                        }
+                        if let s = env["MACSYNC_RECONCILE_CANCEL"].flatMap(Double.init) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + s) { m?.cancelRun() }
+                        }
                         take()
                     }
                 }
@@ -887,6 +1318,7 @@ final class ReconcileWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         model?.cancel()
+        model?.cancelRun()
         model = nil
         window = nil
     }

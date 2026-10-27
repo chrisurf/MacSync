@@ -816,6 +816,7 @@ dependencies = [
  "anyhow",
  "clap",
  "if-addrs",
+ "libc",
  "macsync-core",
  "macsync-daemon",
  "macsync-dupes",

@@ -592,13 +592,22 @@ fn counts(n: &macsync_dupes::Counts) -> String {
 }
 
 /// One finished action of `dupes --apply`.
-pub fn applied(o: &macsync_dupes::Outcome) {
+/// One progress line on the terminal, overwritten by the next.
+pub fn apply_progress(p: &macsync_dupes::Progress, total: u64) {
+    eprint!("\r\x1b[K{} of {} (all: {}) · {}", bytes(p.bytes_done), bytes(p.bytes), bytes(total), p.file);
+}
+
+pub fn applied(o: &macsync_dupes::Outcome, tty: bool) {
     use macsync_dupes::Done;
+    if tty {
+        eprint!("\r\x1b[K");
+    }
     let target = if o.to == o.path { String::new() } else { format!(" → {}", o.to) };
     match o.result {
         Done::Done => println!("✅ {}{target}", o.path),
         Done::Skipped => println!("⏭️  {}{target}: {}", o.path, o.error.as_deref().unwrap_or("skipped")),
         Done::Failed => println!("❌ {}{target}: {}", o.path, o.error.as_deref().unwrap_or("failed")),
+        Done::Cancelled => println!("⏹  {}{target}: cancelled", o.path),
     }
     if let Some(t) = &o.trashed {
         println!("   in the Trash: {t}");
@@ -608,6 +617,9 @@ pub fn applied(o: &macsync_dupes::Outcome) {
 pub fn apply_summary(s: &macsync_dupes::Summary) {
     println!();
     println!("{} done ({}), {} skipped, {} failed", s.done, bytes(s.bytes), s.skipped, s.failed);
+    if s.cancelled {
+        println!("Cancelled: what is done stays, the rest was not started; NEU is otherwise unchanged.");
+    }
 }
 
 fn bytes(n: u64) -> String {

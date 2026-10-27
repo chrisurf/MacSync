@@ -30,6 +30,11 @@
   einem gemeinsamen Baum mit den Zuständen aus `macsync dupes`, Warnung bei
   vertauschter Reihenfolge, Filter „Nur Offenes“. Aktionen sammeln sich in
   einem Plan („Vorschläge“, „Ausführen …“), danach neuer Vergleich
+- `--apply` meldet vorab die Größe jeder Aktion und beim Kopieren den
+  Fortschritt (auch innerhalb großer Dateien); SIGTERM/Ctrl-C bricht nach
+  spätestens 1 MB sauber ab, die halbe Kopie wird entfernt. Neue Aktion
+  `trash_old`: ALT-Datei oder -Ordner in den Papierkorb, nur wenn NEU von
+  jeder Datei eine identische Kopie hat (BLAKE3)
 - **Dateivergleich**: Textdateien zeilenweise wie in VS Code (nebeneinander
   oder untereinander, Änderungen innerhalb der Zeile, nächste/vorige
   Änderung), Bilder und PDFs nebeneinander

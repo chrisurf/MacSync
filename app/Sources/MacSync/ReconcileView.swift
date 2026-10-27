@@ -16,7 +16,7 @@ struct ReconcileView: View {
         }
         .frame(minWidth: 980, minHeight: 560)
         .sheet(item: $model.report) { r in
-            ReconcileReportView(report: r) { model.report = nil }
+            ReconcileReportView(model: model, report: r) { model.closeReport() }
         }
     }
 }
@@ -214,29 +214,21 @@ private struct ReconcileResult: View {
                 ReconcileDetail(model: model).padding(12)
             }
             Divider()
-            planBar.padding(10)
-        }
-        .overlay {
-            if let a = model.applying {
-                ZStack {
-                    Color.black.opacity(0.15)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Plan wird ausgeführt …").font(.headline)
-                        ProgressView(value: Double(a.finished), total: Double(max(a.total, 1)))
-                        Text("\(a.finished) von \(a.total)" + (a.current.isEmpty ? "" : " · \(a.current)"))
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    }
-                    .padding(20)
-                    .frame(width: 420)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
-                }
+            if let run = model.run, run.running {
+                ReconcileProgress(model: model, run: run).padding(12)
+            } else {
+                planBar.padding(10)
             }
+        }
+        .sheet(isPresented: $model.confirming) {
+            ReconcileConfirmView(model: model)
         }
     }
 
     private var topBar: some View {
         HStack(spacing: 10) {
             Button { model.backToStart() } label: { Label("Andere Ordner …", systemImage: "chevron.left") }
+                .disabled(model.applying)
             Spacer(minLength: 8)
             side("ALT", model.comparison?.old ?? model.oldPath, files: model.comparison?.oldFiles, bytes: model.comparison?.oldBytes,
                  last: model.comparison?.order.oldLastMs)
@@ -245,7 +237,7 @@ private struct ReconcileResult: View {
                 model.compare()
             } label: { Image(systemName: "arrow.left.arrow.right") }
                 .help("Seiten tauschen und neu vergleichen")
-                .disabled(model.comparing || model.applying != nil)
+                .disabled(model.comparing || model.applying)
             side("NEU", model.comparison?.new ?? model.newPath, files: model.comparison?.newFiles, bytes: model.comparison?.newBytes,
                  last: model.comparison?.order.newLastMs)
             Spacer(minLength: 8)
@@ -310,7 +302,7 @@ private struct ReconcileResult: View {
                     model.swap()
                     model.compare()
                 }
-                .disabled(model.comparing || model.applying != nil)
+                .disabled(model.comparing || model.applying)
                 Button("So lassen") { model.orderDismissed = true }
             }
             .font(.callout)
@@ -389,13 +381,16 @@ private struct ReconcileResult: View {
                 Text("· gleiche Dateien nicht aufgelistet (ältere macsync-Version)").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Button("Plan anzeigen …") { model.showingPlan.toggle() }
+                .disabled(model.plan.isEmpty)
+                .popover(isPresented: $model.showingPlan, arrowEdge: .top) { PlanOverview(model: model) }
             Button("Vorschläge") { model.suggest() }
                 .help("Nur in ALT → kopieren, in ALT neuer → ALT übernehmen; Unklares bleibt deine Entscheidung")
                 .disabled(model.comparison == nil)
             Button("Plan leeren") { model.clearPlan() }.disabled(model.plan.isEmpty)
             Button("Ausführen …") { model.execute() }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.plan.isEmpty || model.applying != nil || model.comparing)
+                .disabled(model.plan.isEmpty || model.applying || model.comparing)
         }
     }
 }
@@ -414,7 +409,7 @@ private struct ReconcileTable: View {
             TableColumn("Geändert") { n in Text(n.inOld ? date(n.oldMs) : "").foregroundStyle(.secondary) }
                 .width(min: 90, ideal: 118)
             TableColumn("") { n in StateCell(model: model, node: n) }
-                .width(min: 80, ideal: 100)
+                .width(min: 90, ideal: 124)
             TableColumn("NEU") { n in NameCell(model: model, node: n, old: false) }
                 .width(min: 160, ideal: 250)
             TableColumn("Größe") { n in size(n.inNew, n.newBytes) }
@@ -480,9 +475,11 @@ private struct NameCell: View {
     private var missing: some View {
         Text("—").foregroundStyle(.tertiary).frame(width: 16)
         if !old {
-            if let p = model.plan[node.id] {
+            if let to = model.plan[node.id]?.to ?? model.runState(node).flatMap({ s in
+                model.run.flatMap { $0.paths[s.index] == node.path ? $0.tos[s.index] : nil }
+            }) {
                 // Same place: the name is enough; elsewhere the whole target.
-                Text("→ " + (p.to == node.path ? node.name : p.to))
+                Text("→ " + (to == node.path ? node.name : to))
                     .foregroundStyle(Color.accentColor).lineLimit(1).truncationMode(.head)
             } else if let m = node.movedTo {
                 Text("→ \(m)").foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
@@ -502,20 +499,57 @@ private struct StateCell: View {
     var body: some View {
         HStack(spacing: 4) {
             Text(node.symbol)
-            if let p = model.plan[node.id] {
-                Text(p.op.short)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+            if let s = model.runState(node), let run = model.run {
+                RunBadge(state: s.state, op: run.ops[s.index], fraction: run.fraction(s.index))
+            } else if let p = model.plan[node.id] {
+                OpBadge(op: p.op)
             } else if model.covered(node) {
                 Text("mit Ordner").font(.caption).foregroundStyle(Color.accentColor)
             } else if node.isDir && node.open > 0 && node.folderState != .onlyOld {
                 Text("\(node.open) offen").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .help(node.stateTitle)
+        .help(help)
+    }
+
+    private var help: String {
+        if let s = model.runState(node), let e = model.run?.errors[s.index] { return e }
+        return node.stateTitle
+    }
+}
+
+/// Status of a plan action in its row while and after it runs.
+private struct RunBadge: View {
+    let state: RunState
+    let op: PlanOp
+    let fraction: Double?
+
+    var body: some View {
+        switch state {
+        case .waiting:
+            Text("wartet").font(.caption).foregroundStyle(.secondary)
+        case .running:
+            HStack(spacing: 4) {
+                if let fraction {
+                    ProgressView(value: fraction).progressViewStyle(.circular).controlSize(.mini)
+                    Text("läuft \(Int(fraction * 100)) %").monospacedDigit()
+                } else {
+                    ProgressView().controlSize(.mini)
+                    Text("läuft")
+                }
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Color.accentColor)
+        case .done:
+            Text("✓ " + op.done).font(.caption.weight(.medium)).foregroundStyle(.green)
+                .help(op == .trashOld ? "Prüfsumme identisch – ALT liegt im Papierkorb" : "")
+        case .skipped:
+            Text("übersprungen").font(.caption).foregroundStyle(.orange)
+        case .failed:
+            Text("Fehler").font(.caption.weight(.medium)).foregroundStyle(.red)
+        case .cancelled:
+            Text("abgebrochen").font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -526,12 +560,14 @@ private struct ReconcileActions: View {
     let menu: Bool
 
     var body: some View {
-        let ops = [PlanOp.copy, .move, .replace, .keepBoth].compactMap { op -> (PlanOp, [RNode])? in
-            let ns = targets.filter { model.ops(for: $0).contains(op) }
+        // While a plan runs it cannot be changed.
+        let editable = model.applying ? [] : targets
+        let ops = PlanOp.all.compactMap { op -> (PlanOp, [RNode])? in
+            let ns = editable.filter { model.ops(for: $0).contains(op) }
             return ns.isEmpty ? nil : (op, ns)
         }
-        let planned = targets.filter { model.plan[$0.id] != nil }
-        let keepNew = targets.contains { $0.fileState == .oldNewer || $0.fileState == .unclear }
+        let planned = editable.filter { model.plan[$0.id] != nil }
+        let keepNew = editable.contains { $0.fileState == .oldNewer || $0.fileState == .unclear }
         ForEach(ops, id: \.0) { op, ns in
             Button(title(op, ns)) { model.setPlan(op, ns) }
         }
@@ -670,35 +706,333 @@ private struct SideBox: View {
     }
 }
 
+// MARK: - plan overview, confirmation, progress
+
+/// Duration as „1 Std. 40 Min.“, „12 Min.“, „40 s“.
+private func duration(_ t: TimeInterval) -> String {
+    if t < 60 { return "\(max(Int(t.rounded()), 1)) s" }
+    let m = Int((t / 60).rounded())
+    if m < 60 { return "\(m) Min." }
+    return m % 60 == 0 ? "\(m / 60) Std." : "\(m / 60) Std. \(m % 60) Min."
+}
+
+private func files(_ n: Int) -> String { n == 1 ? "1 Datei" : "\(n) Dateien" }
+
+/// Size, from 1 GB on in orange with a warning sign.
+private struct SizeText: View {
+    let bytes: Int64
+
+    var body: some View {
+        if bytes >= ReconcileModel.largeBytes {
+            Label(Activity.bytes(bytes), systemImage: "exclamationmark.triangle.fill")
+                .fontWeight(.semibold)
+                .foregroundStyle(.orange)
+                .monospacedDigit()
+        } else {
+            Text(Activity.bytes(bytes)).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+}
+
+/// Plan marker; deleting in ALT in red.
+private struct OpBadge: View {
+    let op: PlanOp
+
+    var body: some View {
+        let color = op == .trashOld ? Color.red : Color.accentColor
+        Text(op.short)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.15)))
+    }
+}
+
+/// One planned action: what, where to, how big.
+private struct PlanLine: View {
+    let row: PlanRow
+
+    var body: some View {
+        HStack(spacing: 8) {
+            OpBadge(op: row.item.op).frame(width: 84, alignment: .leading)
+            Image(systemName: row.item.dir ? "folder.fill" : "doc")
+                .foregroundStyle(row.item.dir ? Color.accentColor : .secondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.path).lineLimit(1).truncationMode(.middle)
+                if row.item.op == .trashOld {
+                    Text("in den Papierkorb (ALT)" + (row.item.to != row.path ? " · Kopie in NEU: \(row.item.to)" : ""))
+                        .font(.caption).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
+                } else if row.item.to != row.path {
+                    Text("→ \(row.item.to)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                }
+            }
+            Spacer(minLength: 8)
+            if row.item.dir {
+                Text(files(row.item.files)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+            SizeText(bytes: row.item.bytes).frame(minWidth: 76, alignment: .trailing)
+        }
+    }
+}
+
+/// „Plan anzeigen“: all planned actions, largest first, each removable.
+private struct PlanOverview: View {
+    @ObservedObject var model: ReconcileModel
+
+    var body: some View {
+        let rows = model.planRows
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Plan").font(.headline)
+                Text("nach Größe").foregroundStyle(.secondary)
+                Spacer()
+                if rows.contains(where: \.large) {
+                    Text("\(rows.filter(\.large).count) ab 1 GB").font(.caption).foregroundStyle(.orange)
+                }
+            }
+            .padding(12)
+            Divider()
+            if rows.isEmpty {
+                Text("Der Plan ist leer.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
+            } else {
+                List(rows) { r in
+                    HStack(spacing: 6) {
+                        PlanLine(row: r)
+                        Button { model.unplan([model.nodes[r.id]]) } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Aus dem Plan nehmen")
+                    }
+                    .listRowBackground(r.large ? Color.orange.opacity(0.08) : Color.clear)
+                }
+                .listStyle(.plain)
+            }
+            Divider()
+            HStack {
+                Text(rows.count == 1 ? "1 Aktion" : "\(rows.count) Aktionen").fontWeight(.medium)
+                Spacer()
+                Text(files(model.planFiles)).foregroundStyle(.secondary).monospacedDigit()
+                Text("Gesamt").foregroundStyle(.secondary)
+                SizeText(bytes: model.planBytes).frame(minWidth: 76, alignment: .trailing)
+                Color.clear.frame(width: 16, height: 1)
+            }
+            .padding(12)
+        }
+        .frame(width: 600, height: min(520, CGFloat(130 + max(rows.count, 3) * 26)))
+    }
+}
+
+/// Before „Ausführen“: how much, the largest items, what can take long.
+private struct ReconcileConfirmView: View {
+    @ObservedObject var model: ReconcileModel
+
+    var body: some View {
+        let rows = model.planRows
+        let total = model.planCopyBytes
+        let trash = model.planTrashBytes
+        let free = model.newFreeBytes
+        VStack(alignment: .leading, spacing: 12) {
+            Text(rows.count == 1 ? "1 Aktion ausführen?" : "\(rows.count) Aktionen ausführen?").font(.title3.weight(.semibold))
+            HStack(spacing: 6) {
+                Text("\(files(model.planFiles)) ·")
+                if total > 0 || trash == 0 {
+                    SizeText(bytes: total)
+                    Text("nach NEU").foregroundStyle(.secondary)
+                }
+                if trash > 0 {
+                    if total > 0 { Text("·") }
+                    Text("\(Activity.bytes(trash)) in ALT prüfen und löschen").foregroundStyle(.red)
+                }
+                if let free, total > 0 { Text("· in NEU frei: \(Activity.bytes(free))").foregroundStyle(.secondary) }
+            }
+            if total >= ReconcileModel.largeBytes || model.oldInCloud || (free.map { $0 < total } ?? false) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let free, free < total {
+                        Label("In NEU ist nicht genug Platz frei (\(Activity.bytes(free)) für \(Activity.bytes(total))).",
+                              systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                    }
+                    if total >= ReconcileModel.largeBytes {
+                        Label("Das sind \(Activity.bytes(total)) – das kann lange dauern. Prüfe, ob wirklich alles nach NEU soll.",
+                              systemImage: "exclamationmark.triangle.fill")
+                    }
+                    if model.oldInCloud {
+                        Label(total == 0 ? "Dateien aus Google Drive/iCloud werden für die Prüfung erst heruntergeladen."
+                              : "Dateien aus Google Drive/iCloud werden dabei erst heruntergeladen.", systemImage: "icloud.and.arrow.down")
+                    }
+                }
+                .font(.callout)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(rows.count > 5 ? "Die 5 größten" : "Aktionen").font(.headline)
+                ForEach(rows.prefix(5)) { PlanLine(row: $0) }
+                if rows.count > 5 {
+                    Text("… und \(rows.count - 5) weitere (\(Activity.bytes(rows.dropFirst(5).reduce(0) { $0 + $1.item.bytes })))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(model.planEffects, id: \.self) { Text("• " + $0) }
+            }
+            .font(.callout)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("In den Papierkorb kommt:").fontWeight(.medium)
+                ForEach(model.planCounts, id: \.0) { op, _ in
+                    Text("\(op.short): \(op.trashes ?? "nichts")").foregroundStyle(op == .trashOld ? .red : .secondary)
+                }
+            }
+            .font(.callout)
+            Text("Nichts wird überschrieben oder endgültig gelöscht. Was sich seit dem Vergleich geändert hat, wird übersprungen. Abbrechen geht jederzeit, fertige Aktionen bleiben dann bestehen.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Plan anzeigen") { model.reviewPlan() }
+                Spacer()
+                Button("Abbrechen", role: .cancel) { model.confirming = false }.keyboardShortcut(.cancelAction)
+                Button("Ausführen") { model.start() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 600)
+    }
+}
+
+/// Replaces the plan bar while the plan runs.
+private struct ReconcileProgress: View {
+    @ObservedObject var model: ReconcileModel
+    let run: ApplyRun
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text(run.cancelling ? "Wird abgebrochen …" : "Plan wird ausgeführt").font(.headline)
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    Text(stats(ctx.date)).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Elapsed(since: run.started)
+                if run.cancelling {
+                    ProgressView().controlSize(.small)
+                    Button("Wird abgebrochen …") {}.disabled(true).controlSize(.large)
+                } else {
+                    Button(role: .destructive) { model.cancelRun() } label: {
+                        Label("Abbrechen", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .controlSize(.large)
+                    .help("Hält die laufende Aktion an und entfernt ihre halbe Kopie; fertige Aktionen bleiben")
+                }
+            }
+            ProgressView(value: run.fraction)
+            if let i = run.current, run.paths.indices.contains(i) {
+                HStack(spacing: 6) {
+                    OpBadge(op: run.ops[i])
+                    Text(run.paths[i]).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                    if run.byBytes {
+                        Text(current(i)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    if !run.file.isEmpty, run.file != run.paths[i] {
+                        Text("· \(run.file)").foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .font(.callout)
+            }
+        }
+    }
+
+    /// „1,2 GB von 75,1 GB · 3 von 10 · 12 MB/s · noch ca. 1 Std. 40 Min.“
+    private func stats(_ now: Date) -> String {
+        var parts: [String] = []
+        if run.byBytes { parts.append("\(Activity.bytes(run.processed)) von \(Activity.bytes(run.bytesTotal))") }
+        parts.append("\(run.finished) von \(run.total)" + (run.byBytes ? "" : " Aktionen"))
+        if run.byBytes && now.timeIntervalSince(run.lastData) > 5 {
+            // E.g. a file still downloading from Google Drive: the last rate says nothing.
+            parts.append("wartet auf Daten …")
+        } else {
+            if let r = run.rate, run.byBytes { parts.append(Activity.bytes(Int64(max(r, 0))) + "/s") }
+            if let t = run.remaining, !run.cancelling { parts.append("noch ca. " + duration(t)) }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func current(_ i: Int) -> String {
+        let pct = run.fraction(i).map { " · \(Int($0 * 100)) %" } ?? ""
+        return "\(Activity.bytes(run.currentDone)) von \(Activity.bytes(run.bytes[i]))" + pct
+    }
+}
+
 // MARK: - result of a plan
 
 private struct ReconcileReportView: View {
+    @ObservedObject var model: ReconcileModel
     let report: ApplyReport
     let close: () -> Void
+    /// Copies chosen for „Ausgewählte in ALT löschen …“.
+    @State private var chosen = Set<Int>()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(report.error == nil ? "Plan ausgeführt" : "Plan nicht ausgeführt").font(.title3.weight(.semibold))
+            Text(report.error != nil ? "Plan nicht ausgeführt" : report.wasCancelled ? "Plan abgebrochen"
+                 : report.results.allSatisfy({ $0.op == .trashOld }) ? "In ALT gelöscht" : "Plan ausgeführt")
+                .font(.title3.weight(.semibold))
             if let e = report.error {
                 Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
             } else {
-                Text("\(report.done) erledigt · \(report.skipped) übersprungen · \(report.failed) fehlgeschlagen · \(Activity.bytes(report.bytes))")
-                    .foregroundStyle(.secondary)
+                Text(counts).foregroundStyle(.secondary)
+                if report.wasCancelled {
+                    Label(report.done == 0
+                          ? "Abgebrochen, bevor etwas fertig war – NEU ist unverändert."
+                          : "Fertige Aktionen bleiben bestehen, sonst ist NEU unverändert."
+                            + (report.cleanStop ? " Die abgebrochene Aktion hat keine halbe Kopie hinterlassen." : ""),
+                          systemImage: "stop.circle")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if !report.results.isEmpty {
                 List(report.results.sorted { (rank($0), $0.id) < (rank($1), $1.id) }) { r in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        if let o = offer(r) {
+                            Toggle("", isOn: Binding(get: { chosen.contains(o.id) },
+                                                     set: { if $0 { chosen.insert(o.id) } else { chosen.remove(o.id) } }))
+                                .labelsHidden()
+                        }
                         Image(systemName: symbol(r)).foregroundStyle(color(r))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(r.to.isEmpty || r.to == r.path ? r.path : "\(r.path) → \(r.to)").lineLimit(1).truncationMode(.middle)
-                            if let e = r.error { Text(e).font(.caption).foregroundStyle(.secondary) }
+                            Text(r.to.isEmpty || r.to == r.path || r.op == .trashOld ? r.path : "\(r.path) → \(r.to)")
+                                .lineLimit(1).truncationMode(.middle)
+                            if let n = note(r) { Text(n).font(.caption).foregroundStyle(r.result == "done" ? .green : .secondary) }
+                        }
+                        Spacer(minLength: 8)
+                        if let o = offer(r) {
+                            Text(Activity.bytes(o.bytes)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                            Button("In ALT löschen …") { trash([o]) }.controlSize(.small)
                         }
                     }
                 }
                 .frame(minHeight: 160, maxHeight: 320)
             }
-            if report.error == nil {
-                Text("Ersetzte und verschobene Dateien liegen im Papierkorb. Der Vergleich wird neu berechnet.")
+            if !report.offers.isEmpty {
+                HStack(spacing: 8) {
+                    Button(chosen.count == report.offers.count ? "Keine auswählen" : "Alle auswählen") {
+                        chosen = chosen.count == report.offers.count ? [] : Set(report.offers.map(\.id))
+                    }
+                    Text("ALT kann nach Prüfung in den Papierkorb")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Ausgewählte in ALT löschen …") { trash(report.offers.filter { chosen.contains($0.id) }) }
+                        .disabled(chosen.isEmpty || model.applying)
+                }
+            }
+            if report.error == nil && report.results.contains(where: { $0.result != "cancelled" }) {
+                Text("Was in den Papierkorb kam, lässt sich dort wiederherstellen. Der Vergleich wird neu berechnet.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {
@@ -707,15 +1041,52 @@ private struct ReconcileReportView: View {
             }
         }
         .padding(20)
-        .frame(width: 560)
+        .frame(width: 680)
     }
 
-    private func rank(_ r: ApplyResult) -> Int { r.result == "failed" ? 0 : r.result == "skipped" ? 1 : 2 }
+    private func offer(_ r: ApplyResult) -> TrashOffer? { report.offers.first { $0.id == r.id } }
+
+    private func trash(_ offers: [TrashOffer]) {
+        guard !offers.isEmpty else { return }
+        model.trashOld(offers)
+    }
+
+    /// Below the path: reason, or what the done action means.
+    private func note(_ r: ApplyResult) -> String? {
+        if r.op == .trashOld {
+            switch r.result {
+            case "done": return "✓ Prüfsumme identisch – im Papierkorb"
+            case "skipped": return "übersprungen: \(r.error ?? "")"
+            default: return r.error
+            }
+        }
+        if r.result == "done", offer(r) != nil { return "in ALT und NEU vorhanden" }
+        return r.error
+    }
+
+    /// „3 erledigt (12,7 MB kopiert) · 1 übersprungen · 6 abgebrochen“, zeros left out.
+    private var counts: String {
+        var parts = ["\(report.done) erledigt" + (report.bytes > 0 ? " (\(Activity.bytes(report.bytes)) kopiert)" : "")]
+        if report.skipped > 0 { parts.append("\(report.skipped) übersprungen") }
+        if report.failed > 0 { parts.append("\(report.failed) fehlgeschlagen") }
+        if report.cancelled > 0 { parts.append("\(report.cancelled) abgebrochen") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func rank(_ r: ApplyResult) -> Int {
+        switch r.result {
+        case "failed": return 0
+        case "skipped": return 1
+        case "cancelled": return 2
+        default: return 3
+        }
+    }
 
     private func symbol(_ r: ApplyResult) -> String {
         switch r.result {
         case "done": return "checkmark.circle.fill"
         case "skipped": return "forward.circle.fill"
+        case "cancelled": return "stop.circle.fill"
         default: return "xmark.octagon.fill"
         }
     }
@@ -724,6 +1095,7 @@ private struct ReconcileReportView: View {
         switch r.result {
         case "done": return .green
         case "skipped": return .orange
+        case "cancelled": return .secondary
         default: return .red
         }
     }

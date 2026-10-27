@@ -3,7 +3,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use filetime::{set_file_mtime, FileTime};
-use macsync_dupes::{apply, compare, Done, Options, Outcome, Plan, State, Summary, Trash};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use macsync_dupes::{apply, apply_with, compare, Done, Event, Options, Outcome, Plan, State, Summary, Trash};
 
 const DAY: i64 = 86_400;
 const T0: i64 = 1_700_000_000;
@@ -238,4 +240,115 @@ fn long_names_fit_the_temporary_file() {
     assert!(out.iter().all(|o| o.result == Done::Done), "{out:?}");
     assert_eq!(fs::read_to_string(d.new.path().join(&name)).unwrap(), "alt");
     assert_eq!(fs::read_to_string(d.new.path().join(&to)).unwrap(), "x");
+}
+
+#[test]
+fn sizes_come_first_and_large_files_report_progress() {
+    let d = dirs();
+    let big = "x".repeat(3 << 20);
+    put(d.old.path(), "exp/big.bin", &big, 1);
+    put(d.old.path(), "exp/sub/a.txt", "abc", 1);
+    put(d.old.path(), "c.txt", "hello", 1);
+    let plan: Plan = serde_json::from_str(
+        r#"{"actions":[{"op":"copy","kind":"dir","path":"exp"},{"op":"copy","kind":"file","path":"c.txt"}]}"#,
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    let s = apply_with(
+        d.old.path(),
+        d.new.path(),
+        &plan,
+        &Trash::Dir(d.trash.path().to_path_buf()),
+        &AtomicBool::new(false),
+        |e| {
+            events.push(
+                serde_json::to_value(
+                    match e {
+                        Event::Start(s) => serde_json::to_value(s),
+                        Event::Progress(p) => serde_json::to_value(p),
+                        Event::Outcome(o) => serde_json::to_value(o),
+                    }
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(s.done, 2);
+    assert_eq!(events[0]["start"], true);
+    assert_eq!(events[0]["bytes_total"], (3 << 20) + 3 + 5);
+    assert_eq!(events[0]["actions"][0]["files"], 2);
+    assert_eq!(events[0]["actions"][1]["bytes"], 5);
+    let first = events.iter().find(|e| e["progress"] == true).expect("progress reported");
+    assert_eq!(first["index"], 0);
+    assert_eq!(first["bytes"], (3 << 20) + 3);
+    assert!(first["file"].as_str().unwrap().starts_with("exp/"), "{first}");
+    let last = events.iter().rposition(|e| e["progress"] == true).unwrap();
+    assert!(last < events.len() - 1, "the outcome follows the progress");
+}
+
+#[test]
+fn cancel_stops_cleanly_and_leaves_new_unchanged() {
+    let d = dirs();
+    put(d.old.path(), "done.txt", "first", 1);
+    put(d.old.path(), "exp/big.bin", &"x".repeat(4 << 20), 1);
+    put(d.old.path(), "later.txt", "never", 1);
+    let plan: Plan = serde_json::from_str(
+        r#"{"actions":[{"op":"copy","path":"done.txt"},{"op":"move","kind":"dir","path":"exp"},{"op":"copy","path":"later.txt"}]}"#,
+    )
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut out = Vec::new();
+    let s = apply_with(d.old.path(), d.new.path(), &plan, &Trash::Dir(d.trash.path().to_path_buf()), &cancel, |e| {
+        match e {
+            // Cancel as the large file starts (inside the folder copy).
+            Event::Progress(p) if p.index == 1 => cancel.store(true, Ordering::Relaxed),
+            Event::Outcome(o) => out.push(o.clone()),
+            _ => {}
+        }
+    })
+    .unwrap();
+    let results: Vec<_> = out.iter().map(|o| o.result).collect();
+    assert_eq!(results, [Done::Done, Done::Cancelled, Done::Cancelled]);
+    assert!(s.cancelled);
+    assert_eq!((s.done, s.failed), (1, 0));
+    let mut left: Vec<_> =
+        fs::read_dir(d.new.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    left.sort();
+    assert_eq!(left, ["done.txt"], "no half copy and nothing after the cancel");
+    assert!(d.old.path().join("exp/big.bin").exists(), "the cancelled move left ALT alone");
+    assert_eq!(fs::read_dir(d.trash.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn trash_old_only_when_new_has_identical_copies() {
+    let d = dirs();
+    for root in [d.old.path(), d.new.path()] {
+        put(root, "repo/src/main.rs", "fn main() {}", 1);
+        put(root, "repo/README.md", "# repo", 1);
+    }
+    put(d.new.path(), "repo/extra.txt", "only in NEU", 2);
+    put(d.old.path(), "other/a.txt", "ALT", 1);
+    put(d.new.path(), "other/a.txt", "NEU", 1);
+    put(d.old.path(), "gone/b.txt", "b", 1);
+    put(d.old.path(), "f.txt", "same", 1);
+    put(d.new.path(), "f.txt", "same", 5);
+    let (out, s) = run(
+        &d,
+        r#"{"actions":[
+            {"op":"trash_old","kind":"dir","path":"repo"},
+            {"op":"trash_old","kind":"dir","path":"other"},
+            {"op":"trash_old","kind":"dir","path":"gone"},
+            {"op":"trash_old","kind":"file","path":"f.txt"}]}"#,
+    );
+    let results: Vec<_> = out.iter().map(|o| o.result).collect();
+    assert_eq!(results, [Done::Done, Done::Skipped, Done::Skipped, Done::Done], "{out:?}");
+    assert_eq!(out[1].error.as_deref(), Some("other/a.txt differs in NEU"));
+    assert_eq!(out[2].error.as_deref(), Some("not in NEU"));
+    assert_eq!((s.done, s.skipped, s.bytes), (2, 2, 0));
+    assert!(!d.old.path().join("repo").exists() && !d.old.path().join("f.txt").exists());
+    assert!(d.trash.path().join("repo/src/main.rs").exists(), "in the Trash, not deleted");
+    assert!(d.old.path().join("other/a.txt").exists() && d.old.path().join("gone/b.txt").exists());
+    assert!(d.new.path().join("repo/extra.txt").exists(), "NEU untouched");
 }

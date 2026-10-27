@@ -316,12 +316,26 @@ fn dupes_apply(old: &Path, new: &Path, plan: &Path, json: bool) -> Result<()> {
     };
     let plan: macsync_dupes::Plan = serde_json::from_str(&text).with_context(|| format!("{}", plan.display()))?;
     let trash = macsync_dupes::Trash::from_env();
-    let s = macsync_dupes::apply(old, new, &plan, &trash, |o| {
-        if json {
-            println!("{}", serde_json::to_string(o).expect("serializable"));
-        } else {
-            output::applied(o);
+    // SIGINT/SIGTERM (Ctrl-C, "Abbrechen" in the app): stop cleanly.
+    unsafe {
+        libc::signal(libc::SIGINT, on_cancel as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, on_cancel as *const () as libc::sighandler_t);
+    }
+    use macsync_dupes::Event;
+    use std::io::IsTerminal;
+    let tty = std::io::stderr().is_terminal();
+    let mut total = 0;
+    let s = macsync_dupes::apply_with(old, new, &plan, &trash, &CANCEL, |e| match e {
+        Event::Start(s) if json => println!("{}", serde_json::to_string(s).expect("serializable")),
+        Event::Progress(p) if json => println!("{}", serde_json::to_string(p).expect("serializable")),
+        Event::Outcome(o) if json => println!("{}", serde_json::to_string(o).expect("serializable")),
+        Event::Start(s) => total = s.bytes_total,
+        Event::Progress(p) => {
+            if tty {
+                output::apply_progress(p, total);
+            }
         }
+        Event::Outcome(o) => output::applied(o, tty),
     })?;
     if json {
         println!("{}", serde_json::to_string(&s)?);
@@ -332,6 +346,12 @@ fn dupes_apply(old: &Path, new: &Path, plan: &Path, json: bool) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_cancel(_: libc::c_int) {
+    CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn config_path(cli: &Cli) -> PathBuf {
