@@ -20,7 +20,11 @@ enum Paths {
 
     /// `macsync` inside the app bundle (Contents/Helpers, next to the app
     /// executable in Contents/MacOS); falls back to ~/.local/bin for development.
+    /// MACSYNC_BIN overrides it (development, e.g. target/debug/macsync).
     static var binary: URL? {
+        if let p = ProcessInfo.processInfo.environment["MACSYNC_BIN"], FileManager.default.isExecutableFile(atPath: p) {
+            return URL(fileURLWithPath: p)
+        }
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/macsync")
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
         let dev = home.appendingPathComponent(".local/bin/macsync")

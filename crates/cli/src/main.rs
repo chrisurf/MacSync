@@ -190,6 +190,13 @@ enum Cmd {
         /// Show every pair, file and group (default: the largest ones).
         #[arg(long)]
         all: bool,
+        /// ALT NEU: list identical files as well (`state: "same"`).
+        #[arg(long, conflicts_with = "within")]
+        files: bool,
+        /// ALT NEU: carry out a plan (JSON, `-` for stdin): copy, move or
+        /// replace files of ALT into NEU, see docs/reconcile.md.
+        #[arg(long, value_name = "PLAN", conflicts_with_all = ["within", "files"])]
+        apply: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -258,14 +265,21 @@ struct DupesOpts {
     exclude: Vec<String>,
     no_defaults: bool,
     all: bool,
+    files: bool,
+    apply: Option<PathBuf>,
     json: bool,
     verbose: u8,
 }
 
 fn dupes(paths: &[PathBuf], o: DupesOpts) -> Result<()> {
-    let DupesOpts { within, exclude, no_defaults, all, json, verbose } = o;
+    let DupesOpts { within, exclude, no_defaults, all, files, apply, json, verbose } = o;
     use std::io::IsTerminal;
-    let mut opts = macsync_dupes::Options { progress: !json && std::io::stderr().is_terminal(), ..Default::default() };
+    if let Some(plan) = apply {
+        let [old, new] = paths else { bail!("--apply needs two folders: ALT NEU") };
+        return dupes_apply(old, new, &plan, json);
+    }
+    let mut opts =
+        macsync_dupes::Options { progress: !json && std::io::stderr().is_terminal(), files, ..Default::default() };
     if no_defaults {
         opts.exclude.clear();
         opts.skip_caches = false;
@@ -282,11 +296,40 @@ fn dupes(paths: &[PathBuf], o: DupesOpts) -> Result<()> {
             return Ok(());
         }
     }
+    if files {
+        bail!("--files needs two folders: ALT NEU");
+    }
     let r = macsync_dupes::scan(paths, &opts)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&r)?);
     } else {
         output::dupes(&r, all);
+    }
+    Ok(())
+}
+
+fn dupes_apply(old: &Path, new: &Path, plan: &Path, json: bool) -> Result<()> {
+    let text = if plan == Path::new("-") {
+        std::io::read_to_string(std::io::stdin())?
+    } else {
+        std::fs::read_to_string(plan).with_context(|| format!("{}", plan.display()))?
+    };
+    let plan: macsync_dupes::Plan = serde_json::from_str(&text).with_context(|| format!("{}", plan.display()))?;
+    let trash = macsync_dupes::Trash::from_env();
+    let s = macsync_dupes::apply(old, new, &plan, &trash, |o| {
+        if json {
+            println!("{}", serde_json::to_string(o).expect("serializable"));
+        } else {
+            output::applied(o);
+        }
+    })?;
+    if json {
+        println!("{}", serde_json::to_string(&s)?);
+    } else {
+        output::apply_summary(&s);
+    }
+    if s.failed > 0 {
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -332,8 +375,17 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Discover { timeout_s, json } = cli.cmd {
         return discover(&path, timeout_s, json);
     }
-    if let Cmd::Dupes { paths, within, exclude, no_default_excludes, all, json } = cli.cmd {
-        let o = DupesOpts { within, exclude, no_defaults: no_default_excludes, all, json, verbose: cli.verbose };
+    if let Cmd::Dupes { paths, within, exclude, no_default_excludes, all, files, apply, json } = cli.cmd {
+        let o = DupesOpts {
+            within,
+            exclude,
+            no_defaults: no_default_excludes,
+            all,
+            files,
+            apply,
+            json,
+            verbose: cli.verbose,
+        };
         return dupes(&paths, o);
     }
     let cfg = Config::load(&path)?;

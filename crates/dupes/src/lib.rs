@@ -13,8 +13,10 @@
 //!
 //! Contents are compared by hash, and only where name and size match. "Newer"
 //! means a later modification time; equal times with different contents are
-//! reported as unclear. Nothing is ever changed on disk.
+//! reported as unclear. Nothing is changed on disk, except by [`apply`]:
+//! carrying out a plan the user chose after comparing ALT with NEU.
 
+mod apply;
 mod compare;
 mod groups;
 mod hash;
@@ -28,6 +30,7 @@ use std::time::Instant;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 
+pub use apply::{apply, Action, Done, Expect, ItemKind, Op, Outcome, Plan, Summary, Trash};
 pub use compare::{compare, Comparison, Counts, Entry, Folder, FolderStatus, Order, OrderStatus, State};
 
 /// Names never looked at: Mac metadata, Git internals, dependencies, build and
@@ -70,6 +73,8 @@ pub struct Options {
     pub skip_caches: bool,
     /// Progress lines on stderr.
     pub progress: bool,
+    /// [`compare`]: list identical files in `entries` too.
+    pub files: bool,
 }
 
 impl Default for Options {
@@ -78,6 +83,7 @@ impl Default for Options {
             exclude: DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(),
             skip_caches: true,
             progress: false,
+            files: false,
         }
     }
 }

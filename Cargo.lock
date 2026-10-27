@@ -874,6 +874,7 @@ dependencies = [
  "macsync-core",
  "macsync-fs",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 

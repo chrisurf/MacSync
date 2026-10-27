@@ -38,7 +38,8 @@ pub struct Comparison {
     pub deletable_bytes: u64,
     /// Depth first, the root (`path` "") first; `children` index into it.
     pub folders: Vec<Folder>,
-    /// Every file that is not identical: changed, moved, only on one side.
+    /// Every file that is not identical: changed, moved, only on one side
+    /// (with [`Options::files`] the identical ones as well).
     pub entries: Vec<Entry>,
 }
 
@@ -99,10 +100,21 @@ pub struct Entry {
     pub path: String,
     pub state: State,
     pub size: u64,
+    /// Size of the NEU file, where there is one (the moved-to file for
+    /// `moved`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_new: Option<u64>,
     pub mtime_old: Option<i64>,
     pub mtime_new: Option<i64>,
     /// `moved`: where the content is in NEU.
     pub moved_to: Option<String>,
+    /// `only_old`: where it belongs in NEU because most of its folder was
+    /// moved there (absent: the same path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested: Option<String>,
+    /// Spelling in NEU, if it differs from `path` (case, normalisation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_new: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -273,14 +285,19 @@ pub fn compare(old: &Path, new: &Path, opts: &Options) -> io::Result<Comparison>
             path: n.rel.clone(),
             state: State::Same,
             size: n.size,
+            size_new: None,
             mtime_old: Some(n.mtime_ms),
             mtime_new: None,
             moved_to: None,
+            suggested: None,
+            path_new: None,
         };
         match partner(i) {
             Some(j) => {
                 let dt = t.nodes[j].mtime_ms - n.mtime_ms;
                 e.mtime_new = Some(t.nodes[j].mtime_ms);
+                e.size_new = Some(t.nodes[j].size);
+                e.path_new = Some(t.nodes[j].rel.clone()).filter(|p| *p != n.rel);
                 let same = ctx.content(i, j) == Content::Equal
                     || (ctx.content(i, j) == Content::Unknown && dt.abs() <= SAME_TIME_MS);
                 e.state = if same {
@@ -299,6 +316,7 @@ pub fn compare(old: &Path, new: &Path, opts: &Options) -> io::Result<Comparison>
                 Some(&j) => {
                     e.state = State::Moved;
                     e.mtime_new = Some(t.nodes[j].mtime_ms);
+                    e.size_new = Some(t.nodes[j].size);
                     e.moved_to = Some(t.nodes[j].rel.clone());
                     moved_targets.insert(j);
                 }
@@ -318,12 +336,16 @@ pub fn compare(old: &Path, new: &Path, opts: &Options) -> io::Result<Comparison>
             path: n.rel.clone(),
             state: State::OnlyNew,
             size: n.size,
+            size_new: Some(n.size),
             mtime_old: None,
             mtime_new: Some(n.mtime_ms),
             moved_to: None,
+            suggested: None,
+            path_new: None,
         };
         entries.push((keys[j].clone(), e));
     }
+    suggest(&mut entries, &by[1]);
     // An unreadable spot of ALT hides files: its folder cannot be judged.
     let mut hidden: Vec<String> = unreadable[0].clone();
     hidden.retain(|k| !k.is_empty());
@@ -336,7 +358,7 @@ pub fn compare(old: &Path, new: &Path, opts: &Options) -> io::Result<Comparison>
         std::cmp::Ordering::Equal => OrderStatus::Unknown,
     };
 
-    let (folders, entries) = build_folders(t, &keys, &mut entries, &hidden);
+    let (folders, entries) = build_folders(t, &keys, &mut entries, &hidden, opts.files);
     let deletable_bytes = deletable(&folders, 0);
     let side_sum = |side: usize| {
         let (mut n, mut b) = (0, 0);
@@ -383,6 +405,7 @@ fn build_folders(
     keys: &[String],
     entries: &mut Vec<(String, Entry)>,
     hidden: &[String],
+    keep_same: bool,
 ) -> (Vec<Folder>, Vec<Entry>) {
     let mut map: BTreeMap<String, Build> = BTreeMap::new();
     let ensure = |map: &mut BTreeMap<String, Build>, key: &str, path: &str| {
@@ -419,7 +442,7 @@ fn build_folders(
         }
     }
 
-    // Identical files are only counted, not listed.
+    // Identical files are only counted, not listed (unless asked for).
     let mut kept = Vec::new();
     for (key, e) in entries.drain(..) {
         let b = map.get_mut(&parent(&key)).expect("the folder of a file was scanned");
@@ -429,7 +452,7 @@ fn build_folders(
         } else {
             b.old_bytes += e.size;
         }
-        if e.state != State::Same {
+        if keep_same || e.state != State::Same {
             b.entries.push(kept.len());
             kept.push(e);
         }
@@ -480,6 +503,68 @@ fn build_folders(
     }
     visit("", 0, &map, &kids, &mut out);
     (out, kept)
+}
+
+/// Target paths in NEU for `only_old` files: if most files below a folder of
+/// ALT were moved to one other folder of NEU (keeping the layout below it),
+/// the missing ones belong there as well. The nearest such folder wins.
+fn suggest(entries: &mut [(String, Entry)], new_keys: &HashMap<&str, usize>) {
+    let ancestors = |k: &str| {
+        let mut out = vec![String::new()];
+        let mut acc = String::new();
+        let comps: Vec<&str> = k.split('/').collect();
+        for c in &comps[..comps.len() - 1] {
+            acc = rpath::join(&acc, c);
+            out.push(acc.clone());
+        }
+        out
+    };
+    // Files of ALT below each folder, and where moved ones went.
+    let mut files: HashMap<String, u64> = HashMap::new();
+    let mut votes: HashMap<String, HashMap<String, u64>> = HashMap::new();
+    for (k, e) in entries.iter() {
+        if e.state == State::OnlyNew {
+            continue;
+        }
+        for a in ancestors(k) {
+            *files.entry(a).or_default() += 1;
+        }
+        let Some(to) = e.moved_to.as_deref().filter(|_| e.state == State::Moved) else { continue };
+        let from: Vec<&str> = k.split('/').collect();
+        let to: Vec<&str> = to.split('/').collect();
+        let (from, to) = (&from[..from.len() - 1], &to[..to.len() - 1]);
+        // Shared trailing folders: each level up maps to the target's level.
+        let shared = from.iter().rev().zip(to.iter().rev()).take_while(|(a, b)| **a == rpath::case_key(b)).count();
+        for up in 0..=shared {
+            let (a, b) = (from[..from.len() - up].join("/"), to[..to.len() - up].join("/"));
+            if a != key_path(Path::new(&b)) {
+                *votes.entry(a).or_default().entry(b).or_default() += 1;
+            }
+        }
+    }
+    let target: HashMap<&str, &str> = votes
+        .iter()
+        .filter_map(|(a, v)| {
+            let (b, n) = v.iter().max_by_key(|(b, n)| (**n, std::cmp::Reverse(b.as_str())))?;
+            (n * 2 > files.get(a).copied().unwrap_or(0)).then_some((a.as_str(), b.as_str()))
+        })
+        .collect();
+    let mut found = Vec::new();
+    for (i, (k, e)) in entries.iter().enumerate() {
+        if e.state != State::OnlyOld {
+            continue;
+        }
+        let Some(a) = ancestors(k).into_iter().rev().find(|a| target.contains_key(a.as_str())) else { continue };
+        let depth = if a.is_empty() { 0 } else { a.split('/').count() };
+        let rest = e.path.split('/').skip(depth).collect::<Vec<_>>().join("/");
+        let s = rpath::join(target[a.as_str()], &rest);
+        if !new_keys.contains_key(key_path(Path::new(&s)).as_str()) {
+            found.push((i, s));
+        }
+    }
+    for (i, s) in found {
+        entries[i].1.suggested = Some(s);
+    }
 }
 
 fn status(f: &Folder) -> FolderStatus {

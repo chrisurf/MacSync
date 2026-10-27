@@ -105,6 +105,32 @@ pub fn fsync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
+/// Rename `from` to `to`, failing with `AlreadyExists` instead of replacing
+/// whatever is at `to` (a plain `rename` silently overwrites files and empty
+/// directories).
+pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let f = CString::new(from.as_os_str().as_bytes())?;
+    let t = CString::new(to.as_os_str().as_bytes())?;
+    #[cfg(target_os = "macos")]
+    let r = unsafe { libc::renamex_np(f.as_ptr(), t.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(target_os = "linux")]
+    let r = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_NOREPLACE) };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let r = {
+        if fs::symlink_metadata(to).is_ok() {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        unsafe { libc::rename(f.as_ptr(), t.as_ptr()) }
+    };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Remove whatever is at `path` (file, symlink or directory tree).
 pub fn remove_any(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
@@ -222,6 +248,22 @@ mod tests {
         assert!(trash.join("a/b/x").exists());
         assert!(trash.join("a/b/x.1").exists());
         assert!(move_to_trash(&d.path().join("missing"), &trash, "m").unwrap().is_none());
+    }
+
+    #[test]
+    fn rename_noreplace_never_overwrites() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b, c) = (d.path().join("a"), d.path().join("b"), d.path().join("c"));
+        write_new(&a, b"a").unwrap();
+        write_new(&b, b"b").unwrap();
+        let e = rename_noreplace(&a, &b).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&b).unwrap(), b"b");
+        fs::create_dir(&c).unwrap();
+        fs::create_dir(d.path().join("e")).unwrap();
+        assert!(rename_noreplace(&c, &d.path().join("e")).is_err());
+        rename_noreplace(&a, &d.path().join("x")).unwrap();
+        assert!(!a.exists());
     }
 
     #[test]

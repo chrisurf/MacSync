@@ -2,7 +2,8 @@
 
 `macsync dupes` zeigt, welche Ordner und Dateien unter **gleichem Namen**
 mehrfach vorkommen und **welche Kopie die aktuelle ist**. Es liest nur –
-nichts wird verschoben, geändert oder gelöscht. Eine Konfiguration oder ein
+nichts wird verschoben, geändert oder gelöscht (Ausnahme: `--apply`, siehe
+unten). Eine Konfiguration oder ein
 gekoppelter Mac ist nicht nötig.
 
 ```sh
@@ -48,6 +49,28 @@ gibt es eine Warnung – der Bericht bleibt aber bei den angegebenen Rollen.
 Ein **unlesbarer Startordner** bricht den Vergleich ab (macOS: dem Terminal
 Festplattenvollzugriff geben). Die frühere Suche nach gleichnamigen Ordnern
 über beide Ordner hinweg gibt es weiter mit `--within`.
+
+## Übernehmen: `--files` und `--apply`
+
+```sh
+macsync dupes ALT NEU --json --files            # auch die identischen Dateien
+macsync dupes ALT NEU --apply PLAN.json [--json] # einen Plan ausführen
+```
+
+`--files` listet in `entries` auch die gleichen Dateien (`state: "same"`),
+damit die App den ganzen Baum zeigen kann. Fehlt eine Datei in NEU, während
+die meisten Dateien ihres Ordners dort unter einem anderen Ordner liegen,
+nennt `suggested` den passenden Zielpfad; `path_new` steht da, wo NEU den
+Pfad anders schreibt.
+
+`--apply` führt einen Plan aus (`copy`, `move`, `replace`, `keep_both`; `-`
+liest ihn von stdin). Es wird nie überschrieben oder endgültig gelöscht:
+Kopien gehen über eine temporäre Datei, werden per BLAKE3 bestätigt und
+behalten Datum, Rechte und erweiterte Attribute; ersetzte NEU-Dateien und
+verschobene ALT-Quellen landen im macOS-Papierkorb (`/usr/bin/trash`, sonst
+`~/.Trash`; `MACSYNC_TRASH_DIR` lenkt das für Tests um). Hat sich eine Datei
+seit dem Vergleich geändert, wird die Aktion übersprungen. Format und Ausgabe:
+[reconcile.md](reconcile.md).
 
 ## Der typische Fall
 
@@ -130,5 +153,5 @@ Beispiel:
 2. Mit echten Ordnern testen, Regeln nachschärfen
 3. App: Fenster „Duplikate …“ – Ordner wählen, Ergebnisse, Quick Look,
    „Im Finder zeigen“
-4. Handeln: in den Papierkorb legen, „nur hier“-Dateien in die aktuelle Kopie
-   übernehmen
+4. Handeln: „nur hier“-Dateien in die aktuelle Kopie übernehmen ✅
+   (`--apply`, App: Ordnerabgleich); ganze Kopien in den Papierkorb legen

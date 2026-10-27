@@ -591,6 +591,25 @@ fn counts(n: &macsync_dupes::Counts) -> String {
     }
 }
 
+/// One finished action of `dupes --apply`.
+pub fn applied(o: &macsync_dupes::Outcome) {
+    use macsync_dupes::Done;
+    let target = if o.to == o.path { String::new() } else { format!(" → {}", o.to) };
+    match o.result {
+        Done::Done => println!("✅ {}{target}", o.path),
+        Done::Skipped => println!("⏭️  {}{target}: {}", o.path, o.error.as_deref().unwrap_or("skipped")),
+        Done::Failed => println!("❌ {}{target}: {}", o.path, o.error.as_deref().unwrap_or("failed")),
+    }
+    if let Some(t) = &o.trashed {
+        println!("   in the Trash: {t}");
+    }
+}
+
+pub fn apply_summary(s: &macsync_dupes::Summary) {
+    println!();
+    println!("{} done ({}), {} skipped, {} failed", s.done, bytes(s.bytes), s.skipped, s.failed);
+}
+
 fn bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;

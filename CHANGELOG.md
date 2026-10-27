@@ -16,6 +16,23 @@
   Verschobene Dateien werden per Hash erkannt. Die Reihenfolge wird an den
   geänderten Dateien geprüft; passt sie nicht, gibt es eine Warnung.
   Die bisherige Duplikatsuche über zwei Ordner: `--within`
+- `macsync dupes ALT NEU --files` listet auch die identischen Dateien, mit
+  `suggested` (wohin eine fehlende Datei gehört, wenn ihr Ordner in NEU
+  verschoben wurde) und `path_new` (andere Schreibweise in NEU)
+- `macsync dupes ALT NEU --apply PLAN.json`: führt einen Plan aus – kopieren,
+  verschieben, ersetzen oder beide Fassungen behalten (`name (ALT
+  JJJJ-MM-TT).ext`). Nie überschreiben: Kopien über eine temporäre Datei,
+  per BLAKE3 bestätigt, mit Datum, Rechten und erweiterten Attributen;
+  Ersetztes und Verschobenes kommt in den macOS-Papierkorb. Geänderte Dateien
+  werden übersprungen. Eine JSON-Zeile je Aktion für die App. Siehe
+  [docs/reconcile.md](docs/reconcile.md)
+- **Ordnerabgleich** (Menü → Ordnerabgleich …, ⌘O): ALT links, NEU rechts in
+  einem gemeinsamen Baum mit den Zuständen aus `macsync dupes`, Warnung bei
+  vertauschter Reihenfolge, Filter „Nur Offenes“. Aktionen sammeln sich in
+  einem Plan („Vorschläge“, „Ausführen …“), danach neuer Vergleich
+- **Dateivergleich**: Textdateien zeilenweise wie in VS Code (nebeneinander
+  oder untereinander, Änderungen innerhalb der Zeile, nächste/vorige
+  Änderung), Bilder und PDFs nebeneinander
 - **Konfliktansicht** (Menü → Konflikte …, ⌘K; im Manager über die rote
   Konflikt-Schaltfläche oder „Konflikt ansehen …“; Klick auf die Mitteilung;
   `open -a MacSync --args --conflicts`): alle offenen Konflikte über alle

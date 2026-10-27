@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         src.resume()
         sigterm = src
         MainActor.assumeIsolated { AppModel.shared.launch() }
+        // Test hook: MACSYNC_COMPARE="OLD|NEW" opens the file comparison.
+        MainActor.assumeIsolated { FileCompare.launchHookIfRequested() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -85,6 +87,8 @@ struct MenuContent: View {
             Button(n > 0 ? "Konflikte (\(n)) …" : "Konflikte …") { ConflictsWindow.shared.show() }
                 .keyboardShortcut("k")
         }
+        Button("Ordnerabgleich …") { ReconcileWindow.shared.show() }
+            .keyboardShortcut("o")
         Divider()
         Button("Über MacSync") { About.show() }
         SettingsLink { Text("Einstellungen …") }
