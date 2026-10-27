@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/fs", "crates/gitaware", "crates/store", "crates/engine", "crates/net", "crates/daemon", "crates/cli"]
+members = ["crates/core", "crates/fs", "crates/gitaware", "crates/store", "crates/engine", "crates/net", "crates/daemon", "crates/dupes", "crates/cli"]
 
 [workspace.package]
 publish = false
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 repository = "https://github.com/chrisurf/MacSync"
 
@@ -16,6 +16,7 @@ macsync-store = { path = "crates/store" }
 macsync-engine = { path = "crates/engine" }
 macsync-net = { path = "crates/net" }
 macsync-daemon = { path = "crates/daemon" }
+macsync-dupes = { path = "crates/dupes" }
 
 anyhow = "1"
 thiserror = "2"

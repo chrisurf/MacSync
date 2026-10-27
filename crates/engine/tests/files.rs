@@ -343,3 +343,48 @@ fn excluded_paths_are_not_synced_and_not_deleted_remotely() {
     assert!(b.root().join("r/src/lib.rs").exists());
     assert!(!b.root().join("r/target").exists());
 }
+
+#[test]
+fn conflict_view_and_bulk_resolve() {
+    let p = Pair::new();
+    for f in ["a.txt", "b.txt", "c.txt"] {
+        write(&p.ra(), &format!("w/{f}"), "base");
+    }
+    p.sync();
+    for f in ["a.txt", "b.txt", "c.txt"] {
+        write(&p.ra(), &format!("w/{f}"), "A");
+        write(&p.rb(), &format!("w/{f}"), "B!");
+    }
+    p.sync();
+
+    let views = p.a.conflict_views(false).unwrap();
+    assert_eq!(views.len(), 3);
+    let v = views.iter().find(|v| v.path == "a.txt").unwrap();
+    assert_eq!((v.class.as_str(), v.local.state, v.remote.state), ("concurrent-modify", "present", "present"));
+    assert_eq!((v.local.size, v.remote.size), (Some(1), Some(2)));
+    assert!(v.can_keep_both);
+    // Both versions can be opened on this Mac: the file and the stored copy.
+    assert_eq!(fs::read_to_string(v.local.file.as_ref().unwrap()).unwrap(), "A");
+    assert_eq!(fs::read_to_string(v.remote.file.as_ref().unwrap()).unwrap(), "B!");
+
+    // All at once; an unknown id fails on its own without stopping the rest.
+    let mut ids: Vec<i64> = views.iter().map(|v| v.id).collect();
+    ids.push(9999);
+    let r = p.a.resolve_many(&ids, Choice::Remote).unwrap();
+    assert_eq!(r.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ids, "results in request order");
+    assert_eq!(r.iter().filter(|(_, r)| r.is_ok()).count(), 3);
+    assert!(r[3].1.is_err());
+    assert!(p.a.conflict_views(false).unwrap().is_empty());
+    assert_eq!(
+        p.a.conflict_views(true).unwrap().iter().filter(|v| v.resolution.as_deref() == Some("remote")).count(),
+        3
+    );
+    // Resolving again reports it instead of doing anything.
+    assert!(p.a.resolve_many(&ids[..1], Choice::Local).unwrap()[0].1.is_err());
+
+    p.sync();
+    for f in ["a.txt", "b.txt", "c.txt"] {
+        assert_eq!(read(&p.ra(), &format!("w/{f}")), "B!");
+    }
+    p.assert_identical();
+}

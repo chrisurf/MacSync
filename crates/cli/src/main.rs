@@ -30,9 +30,9 @@ struct Cli {
     /// Configuration file (default: ~/.config/macsync/config.toml or $MACSYNC_CONFIG).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
-    /// More log output.
-    #[arg(short, long, global = true)]
-    verbose: bool,
+    /// More output: log messages; for `dupes` sub-folders (-v) and files (-vv).
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -126,9 +126,15 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Resolve a conflict.
+    /// Resolve conflicts (one or more ids, or --all).
     Resolve {
-        id: i64,
+        #[arg(required_unless_present = "all")]
+        ids: Vec<i64>,
+        /// All open conflicts (with --unit: of that unit and the units below it).
+        #[arg(long, conflicts_with = "ids")]
+        all: bool,
+        #[arg(long, requires = "all")]
+        unit: Option<String>,
         /// local | remote | both
         #[arg(long)]
         keep: String,
@@ -162,6 +168,41 @@ enum Cmd {
         /// Destination (default: original location, must not exist).
         #[arg(long)]
         to: Option<PathBuf>,
+    },
+    /// Find same-named folders and files and show which copy is current, or
+    /// compare an older copy with a newer one (read-only; needs no
+    /// configuration).
+    Dupes {
+        /// One folder (duplicates inside it) or two folders: the older copy
+        /// first, the newer second (what of the older can go?).
+        #[arg(required = true, num_args = 1..=2)]
+        paths: Vec<PathBuf>,
+        /// Two folders: find same-named folders and files across and inside
+        /// both instead of comparing the older with the newer.
+        #[arg(long)]
+        within: bool,
+        /// Skip names matching this glob (repeatable), e.g. `--exclude '*.tmp'`.
+        #[arg(long)]
+        exclude: Vec<String>,
+        /// Also look into .git, node_modules, build/cache folders and Mac metadata.
+        #[arg(long)]
+        no_default_excludes: bool,
+        /// Show every pair, file and group (default: the largest ones).
+        #[arg(long)]
+        all: bool,
+        /// ALT NEU: list identical files as well (`state: "same"`).
+        #[arg(long, conflicts_with = "within")]
+        files: bool,
+        /// ALT NEU: carry out a plan (JSON, `-` for stdin): copy, move or
+        /// replace files of ALT into NEU, see docs/reconcile.md.
+        #[arg(long, value_name = "PLAN", conflicts_with_all = ["within", "files"])]
+        apply: Option<PathBuf>,
+        /// With --apply: only report sizes and whether Google Drive/iCloud
+        /// delivers the plan's placeholders; changes nothing.
+        #[arg(long, requires = "apply")]
+        probe: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// LaunchAgent / systemd user service.
     Service {
@@ -209,7 +250,8 @@ fn main() {
     let cli = Cli::parse();
     macsync_net::set_build_version(VERSION);
     let default = match (&cli.cmd, cli.verbose) {
-        (_, true) => "debug",
+        (Cmd::Dupes { .. }, _) => "warn",
+        (_, 1..) => "debug",
         (Cmd::Daemon, _) => "info",
         _ => "warn",
     };
@@ -220,6 +262,110 @@ fn main() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }
+}
+
+struct DupesOpts {
+    within: bool,
+    exclude: Vec<String>,
+    no_defaults: bool,
+    all: bool,
+    files: bool,
+    apply: Option<PathBuf>,
+    probe: bool,
+    json: bool,
+    verbose: u8,
+}
+
+fn dupes(paths: &[PathBuf], o: DupesOpts) -> Result<()> {
+    let DupesOpts { within, exclude, no_defaults, all, files, apply, probe, json, verbose } = o;
+    use std::io::IsTerminal;
+    if let Some(plan) = apply {
+        let [old, new] = paths else { bail!("--apply needs two folders: ALT NEU") };
+        return dupes_apply(old, new, &plan, probe, json);
+    }
+    let mut opts =
+        macsync_dupes::Options { progress: !json && std::io::stderr().is_terminal(), files, ..Default::default() };
+    if no_defaults {
+        opts.exclude.clear();
+        opts.skip_caches = false;
+    }
+    opts.exclude.extend(exclude);
+    if let [old, new] = paths {
+        if !within {
+            let c = macsync_dupes::compare(old, new, &opts)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&c)?);
+            } else {
+                output::compare(&c, verbose, all);
+            }
+            return Ok(());
+        }
+    }
+    if files {
+        bail!("--files needs two folders: ALT NEU");
+    }
+    let r = macsync_dupes::scan(paths, &opts)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r)?);
+    } else {
+        output::dupes(&r, all);
+    }
+    Ok(())
+}
+
+fn dupes_apply(old: &Path, new: &Path, plan: &Path, probe: bool, json: bool) -> Result<()> {
+    let text = if plan == Path::new("-") {
+        std::io::read_to_string(std::io::stdin())?
+    } else {
+        std::fs::read_to_string(plan).with_context(|| format!("{}", plan.display()))?
+    };
+    let plan: macsync_dupes::Plan = serde_json::from_str(&text).with_context(|| format!("{}", plan.display()))?;
+    if probe {
+        let p = macsync_dupes::probe(old, &plan)?;
+        if json {
+            println!("{}", serde_json::to_string(&p)?);
+        } else {
+            output::probe(&p);
+        }
+        return Ok(());
+    }
+    let trash = macsync_dupes::Trash::from_env();
+    // SIGINT/SIGTERM (Ctrl-C, "Abbrechen" in the app): stop cleanly.
+    unsafe {
+        libc::signal(libc::SIGINT, on_cancel as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, on_cancel as *const () as libc::sighandler_t);
+    }
+    use macsync_dupes::Event;
+    use std::io::IsTerminal;
+    let tty = std::io::stderr().is_terminal();
+    let mut total = 0;
+    let s = macsync_dupes::apply_with(old, new, &plan, &trash, &CANCEL, |e| match e {
+        Event::Start(s) if json => println!("{}", serde_json::to_string(s).expect("serializable")),
+        Event::Progress(p) if json => println!("{}", serde_json::to_string(p).expect("serializable")),
+        Event::Outcome(o) if json => println!("{}", serde_json::to_string(o).expect("serializable")),
+        Event::Start(s) => total = s.bytes_total,
+        Event::Progress(p) => {
+            if tty {
+                output::apply_progress(p, total);
+            }
+        }
+        Event::Outcome(o) => output::applied(o, tty),
+    })?;
+    if json {
+        println!("{}", serde_json::to_string(&s)?);
+    } else {
+        output::apply_summary(&s);
+    }
+    if s.failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_cancel(_: libc::c_int) {
+    CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn config_path(cli: &Cli) -> PathBuf {
@@ -263,9 +409,23 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Discover { timeout_s, json } = cli.cmd {
         return discover(&path, timeout_s, json);
     }
+    if let Cmd::Dupes { paths, within, exclude, no_default_excludes, all, files, apply, probe, json } = cli.cmd {
+        let o = DupesOpts {
+            within,
+            exclude,
+            no_defaults: no_default_excludes,
+            all,
+            files,
+            apply,
+            probe,
+            json,
+            verbose: cli.verbose,
+        };
+        return dupes(&paths, o);
+    }
     let cfg = Config::load(&path)?;
     match cli.cmd {
-        Cmd::Init { .. } | Cmd::Discover { .. } | Cmd::Migrate => unreachable!(),
+        Cmd::Init { .. } | Cmd::Discover { .. } | Cmd::Dupes { .. } | Cmd::Migrate => unreachable!(),
         Cmd::Pair { cmd } => pair(&cfg, cmd),
         Cmd::Peers => {
             let peers = open_store(&cfg)?.peers()?;
@@ -374,12 +534,41 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Resolve { id, keep } => {
-            let v = via_daemon(&cfg, IpcRequest::Resolve { id, choice: keep.clone() }, |n| {
-                let c = macsync_engine::Choice::parse(&keep).context("--keep must be local, remote or both")?;
-                Ok(json!(n.engine.resolve(id, c)?))
-            })?;
-            println!("{}", v.as_str().unwrap_or_default());
+        Cmd::Resolve { ids, all, unit, keep } => {
+            macsync_engine::Choice::parse(&keep).context("--keep must be local, remote or both")?;
+            let ids = if all {
+                let prefix = unit.as_ref().map(|u| format!("{u}/"));
+                open_store(&cfg)?
+                    .conflicts(false)?
+                    .into_iter()
+                    .filter(|c| match (&unit, &prefix) {
+                        (Some(u), Some(p)) => &c.unit == u || c.unit.starts_with(p.as_str()),
+                        _ => true,
+                    })
+                    .map(|c| c.id)
+                    .collect()
+            } else {
+                ids
+            };
+            if ids.is_empty() {
+                println!("no open conflicts");
+                return Ok(());
+            }
+            let req = IpcRequest::ResolveMany { ids: ids.clone(), choice: keep.clone() };
+            let v = via_daemon(&cfg, req, |n| ipc::resolve_many(&n.engine, &ids, &keep))?;
+            let mut failed = 0;
+            for r in v.as_array().into_iter().flatten() {
+                let msg = r["message"].as_str().unwrap_or_default();
+                if r["ok"].as_bool() == Some(true) {
+                    println!("{msg}");
+                } else {
+                    failed += 1;
+                    eprintln!("error: {msg}");
+                }
+            }
+            if failed > 0 {
+                bail!("{failed} of {} conflicts not resolved", ids.len());
+            }
             Ok(())
         }
         Cmd::Log { unit, since, limit, json } => {

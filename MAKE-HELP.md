@@ -73,6 +73,20 @@ make status                # Zustand beider Seiten
 make log                   # was in der letzten Stunde passiert ist
 ```
 
+## Duplikate finden (nur lesend)
+
+```sh
+make dupes DIR=~/Dokumente                       # doppelte Ordner und Dateien darin
+make dupes DIR=/Volumes/Backup DIR2=~/Dokumente  # ALT zuerst, NEU danach: was aus ALT kann weg?
+make dupes DIR=… DIR2=… ARGS=-v                  # Unterordner, die nicht weg können (-vv: Dateien)
+```
+
+Pfade mit Leerzeichen in Anführungszeichen, **ohne** Backslash:
+`DIR="/Users/…/Other computers/My Mac/…"`.
+
+Zeigt, welche Kopie aktuell ist und welche weg kann – löscht nichts.
+Details: [docs/duplicates.md](docs/duplicates.md).
+
 ## Häufige Optionen
 
 | Option | Wirkung |

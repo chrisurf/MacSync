@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.4.0 – Duplikate finden (in Arbeit)
+
+### Hinzugefügt
+- `macsync dupes <Ordner> [<Ordner2>]` (`make dupes DIR=…`): findet Ordner und
+  Dateien gleichen Namens und sagt, welche Kopie aktuell ist – `IDENTICAL`,
+  `NEWER` (die ältere kann weg) oder `DIVERGED` (erst zusammenführen), mit
+  Kopier-Zeitpunkt und Änderungen danach. Nur lesend; Inhalte per Hash, nur
+  wo Name und Grösse passen; iCloud-Platzhalter werden nicht geladen.
+  Ausgabe als Text oder `--json`. Siehe [docs/duplicates.md](docs/duplicates.md)
+- `macsync dupes ALT NEU`: zwei Ordner werden als ältere und neuere Kopie
+  verglichen (über den relativen Pfad) – pro Hauptordner eine Zeile: ✅
+  identisch, 🚮 kann weg, 🟧 prüfen, 🟥 nur in ALT, ➕ nur in NEU. `-v` geht
+  in die Unterordner, die nicht weg können, `-vv` nennt die Dateien.
+  Verschobene Dateien werden per Hash erkannt. Die Reihenfolge wird an den
+  geänderten Dateien geprüft; passt sie nicht, gibt es eine Warnung.
+  Die bisherige Duplikatsuche über zwei Ordner: `--within`
+- `macsync dupes ALT NEU --files` listet auch die identischen Dateien, mit
+  `suggested` (wohin eine fehlende Datei gehört, wenn ihr Ordner in NEU
+  verschoben wurde) und `path_new` (andere Schreibweise in NEU)
+- `macsync dupes ALT NEU --apply PLAN.json`: führt einen Plan aus – kopieren,
+  verschieben, ersetzen oder beide Fassungen behalten (`name (ALT
+  JJJJ-MM-TT).ext`). Nie überschreiben: Kopien über eine temporäre Datei,
+  per BLAKE3 bestätigt, mit Datum, Rechten und erweiterten Attributen;
+  Ersetztes und Verschobenes kommt in den macOS-Papierkorb. Geänderte Dateien
+  werden übersprungen. Eine JSON-Zeile je Aktion für die App. Siehe
+  [docs/reconcile.md](docs/reconcile.md)
+- **Ordnerabgleich** (Menü → Ordnerabgleich …, ⌘O): ALT links, NEU rechts in
+  einem gemeinsamen Baum mit den Zuständen aus `macsync dupes`, Warnung bei
+  vertauschter Reihenfolge, Filter „Nur Offenes“. Aktionen sammeln sich in
+  einem Plan („Vorschläge“, „Ausführen …“), danach neuer Vergleich
+- `--apply` meldet vorab die Größe jeder Aktion und beim Kopieren den
+  Fortschritt (auch innerhalb großer Dateien); SIGTERM/Ctrl-C bricht nach
+  spätestens 1 MB sauber ab, die halbe Kopie wird entfernt. Neue Aktion
+  `trash_old`: ALT-Datei oder -Ordner in den Papierkorb, nur wenn NEU von
+  jeder Datei eine identische Kopie hat (BLAKE3). Ordnerkopien lassen
+  Wiederherstellbares aus (`node_modules`, `.venv`, Caches), `.git` nie
+- Cloud-Platzhalter (Google Drive, iCloud): `--apply … --probe` prüft vorab,
+  ob die Cloud liefert; liefert sie nicht, nennt der Fehler die Datei
+  (`code: cloud_unavailable`) und weitere Cloud-Aktionen werden nicht
+  versucht. Die App führt dann nicht aus und erklärt, was zu tun ist
+- Ordner aus der Cloud werden vor dem Kopieren mit 16 parallelen Lesern
+  geladen: Google Drive braucht pro Datei 1–2 s unabhängig von der Größe,
+  nacheinander dauerte ein Repo mit 2 000 Dateien eine Stunde, jetzt gut
+  zwei Minuten
+- **Dateivergleich**: Textdateien zeilenweise wie in VS Code (nebeneinander
+  oder untereinander, Änderungen innerhalb der Zeile, nächste/vorige
+  Änderung), Bilder und PDFs nebeneinander
+- **Konfliktansicht** (Menü → Konflikte …, ⌘K; im Manager über die rote
+  Konflikt-Schaltfläche oder „Konflikt ansehen …“; Klick auf die Mitteilung;
+  `open -a MacSync --args --conflicts`): alle offenen Konflikte über alle
+  Ordner in einer Liste, nach Ordner und Art filterbar, mit Erklärung in
+  Klartext und beiden Fassungen nebeneinander (Größe, Änderungsdatum, „neuer“,
+  Öffnen, Im Finder zeigen, Vergleichen mit FileMerge). Lösen pro Konflikt
+  oder gesammelt für eine Auswahl (⌘A); „Erledigt“ zeigt die Historie.
+  Siehe [docs/sync-manager.md](docs/sync-manager.md#7-konflikte)
+- `macsync resolve` nimmt mehrere IDs oder `--all [--unit <Ordner>]`; jede
+  Einheit wird dabei nur einmal erfasst statt einmal pro Konflikt. IPC
+  `conflicts` und `resolve-many`
+
+### Behoben
+- Ein unlesbarer Startordner (z. B. Google Drive ohne Festplattenvollzugriff)
+  galt als leer – und der andere Ordner damit als „enthält alles“. Jetzt
+  bricht `dupes` mit Fehlermeldung und Hinweis auf die Berechtigung ab;
+  unlesbare Unterordner gelten nie als löschbar
+- **Umbenennen nur der Gross-/Kleinschreibung** (`agent` → `Agent`) auf
+  APFS: kam beim anderen Mac als `case-collision`-Konflikt plus Löschen in
+  den Papierkorb an und wurde erst in einer weiteren Runde neu übertragen.
+  Jetzt wird die Datei bzw. der Ordner dort in einem Schritt umbenannt –
+  ohne Konflikt, ohne Löschen, ohne erneute Übertragung; Inhaltsänderungen
+  im selben Zug werden übernommen
+- **Hauptordner bzw. Repository umbenannt** (`obsidian` → `Obsidian`): Der
+  alte Name blieb als zweiter Ordner bestehen, der dieselben Dateien mit
+  eigenen Versionsvektoren erfasste – Hunderte Konflikte, im Manager
+  `obsidian` und `Obsidian` nebeneinander. Jetzt wird der Ordner
+  umbenannt (Historie bleibt), der andere Mac zieht die Schreibweise nach.
+  Solche Doppel aus älteren Versionen werden beim Start entfernt, ihre
+  Konflikte geschlossen; Dateien bleiben unberührt. Ist ein Ordner auf
+  beiden Macs unterschiedlich geschrieben, wartet MacSync, statt hin und
+  her umzubenennen – auf einem Mac angleichen genügt
+- Echte Kollision der Schreibweise (`todo.md` und `TODO.md` unabhängig
+  angelegt): „Version des anderen Macs übernehmen“ übernahm den Inhalt, aber
+  nicht dessen Schreibweise. Jetzt wird auch umbenannt
+- `make app` packte mit neueren Swift-Versionen eine veraltete App ein
+  (Ausgabeordner `.build/out/Products` statt `.build/arm64-apple-macosx`);
+  der Pfad wird jetzt von `swift build --show-bin-path` erfragt
+
 ## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 
 ### Umbenennung RepoSync → MacSync (ADR-0011)

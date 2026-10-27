@@ -423,6 +423,13 @@ struct ManagerView: View {
                     .fixedSize()
             }
             Spacer()
+            if let n = app.status?.conflicts, n > 0 {
+                Button { ConflictsWindow.shared.show() } label: {
+                    Label(n == 1 ? "1 Konflikt" : "\(n) Konflikte", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                }
+                .help("Alle Konflikte anzeigen und lösen (⌘K)")
+            }
             Picker("", selection: $model.filter) {
                 ForEach(ManagerModel.Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
@@ -487,7 +494,8 @@ struct ManagerView: View {
     private func menu(for items: [SyncItem]) -> some View {
         if items.count == 1, let i = items.first {
             if i.isDir || i.existsHere { Button(i.isDir ? "Öffnen" : "Öffnen") { model.open(i) } }
-            if let _ = i.conflictId {
+            if let id = i.conflictId {
+                Button("Konflikt ansehen …") { ConflictsWindow.shared.show(select: id) }
                 Menu("Konflikt lösen") {
                     Button("Meine Version behalten") { model.resolve(i, keep: "local") }
                     Button("Version von \(model.peerName) übernehmen") { model.resolve(i, keep: "remote") }
@@ -639,6 +647,7 @@ final class ManagerWindow: NSObject, NSWindowDelegate {
 
     func show(path: String? = nil) {
         if let w = window {
+            if let path, let m = model { Task { await m.open(path: path) } }
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return

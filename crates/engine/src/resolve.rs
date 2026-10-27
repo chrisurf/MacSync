@@ -1,10 +1,13 @@
 //! Resolving recorded conflicts: keep the local version, take the remote
 //! version from the conflict store, or keep both.
 
-use anyhow::{bail, Context, Result};
+use std::collections::BTreeMap;
+
+use anyhow::{anyhow, bail, Context, Result};
 use macsync_core::{path as rpath, ConflictClass, Entry, Hash, Kind};
 use macsync_fs::ops;
-use macsync_store::Stored;
+use macsync_store::{ConflictRow, Stored};
+use serde::Serialize;
 
 use crate::capture::ScanOptions;
 use crate::plan::{class_of, rank_of, Op, OpKind, Phase, Plan, Source};
@@ -42,26 +45,74 @@ impl Choice {
 impl Engine {
     /// Resolve conflict `id`. Returns a human readable summary.
     pub fn resolve(&self, id: i64, choice: Choice) -> Result<String> {
-        let c = self.store().conflict(id)?.with_context(|| format!("no conflict #{id}"))?;
-        if c.resolved_ms.is_some() {
-            bail!("conflict #{id} is already resolved ({})", c.resolution.unwrap_or_default());
+        self.resolve_many(&[id], choice)?.remove(0).1
+    }
+
+    /// Resolve several conflicts with the same choice, one result per id (in
+    /// the given order). Each unit is scanned once before and once after its
+    /// conflicts, not per conflict – hundreds of conflicts in one large unit
+    /// are resolved in one go.
+    pub fn resolve_many(&self, ids: &[i64], choice: Choice) -> Result<Vec<(i64, Result<String>)>> {
+        let mut out: Vec<(i64, Option<Result<String>>)> = ids.iter().map(|&id| (id, None)).collect();
+        let mut by_unit: BTreeMap<String, Vec<(usize, ConflictRow)>> = BTreeMap::new();
+        for (i, &id) in ids.iter().enumerate() {
+            match self.store().conflict(id)? {
+                None => out[i].1 = Some(Err(anyhow!("no conflict #{id}"))),
+                Some(c) => match (&c.resolution, c.resolved_ms) {
+                    (r, Some(_)) => {
+                        out[i].1 =
+                            Some(Err(anyhow!("conflict #{id} is already resolved ({})", r.clone().unwrap_or_default())))
+                    }
+                    _ => by_unit.entry(c.unit.clone()).or_default().push((i, c)),
+                },
+            }
         }
+        for (unit, rows) in by_unit {
+            let lock = self.unit_lock(&unit);
+            let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
+            // Make sure the index reflects the disk before deciding anything.
+            let s = self.scan_unit_locked(&unit, &ScanOptions::default())?;
+            if let Some(d) = s.deferred {
+                for (i, _) in rows {
+                    out[i].1 = Some(Err(anyhow!("unit {unit} is busy: {d}")));
+                }
+                continue;
+            }
+            for (i, c) in rows {
+                let r = self.resolve_locked(&c, choice).and_then(|()| {
+                    self.store().resolve_conflict(c.id, choice.as_str())?;
+                    self.store().log(
+                        &unit,
+                        "resolve",
+                        &c.path,
+                        &format!("conflict #{} resolved: {}", c.id, choice.as_str()),
+                        "",
+                    )?;
+                    Ok(format!("conflict #{} ({} {}) resolved: {}", c.id, c.class, c.path, choice.as_str()))
+                });
+                out[i].1 = Some(r);
+            }
+            self.scan_unit_locked(&unit, &ScanOptions::default())?;
+            let open = self.store().open_conflict_count(&unit)?;
+            self.store().set_unit_status(&unit, if open > 0 { "conflict" } else { "resolved" }, false)?;
+        }
+        Ok(out
+            .into_iter()
+            .map(|(id, r)| (id, r.unwrap_or_else(|| Err(anyhow!("conflict #{id} not processed")))))
+            .collect())
+    }
+
+    /// Apply `choice` to one open conflict; the unit lock is held and the
+    /// index is current.
+    fn resolve_locked(&self, c: &ConflictRow, choice: Choice) -> Result<()> {
+        let id = c.id;
         let unit = c.unit.clone();
-        let lock = self.unit_lock(&unit);
-        let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
-        // Make sure the index reflects the disk before deciding anything.
-        let s = self.scan_unit_locked(&unit, &ScanOptions::default())?;
-        if let Some(d) = s.deferred {
-            bail!("unit {unit} is busy: {d}");
-        }
         let me = self.cfg.device.clone();
         let class = ConflictClass::parse(&c.class);
 
         match choice {
             Choice::Local | Choice::Both => {
-                if choice == Choice::Both
-                    && (c.remotes.len() != 1 || c.remotes[0].kind != Kind::File || c.remotes[0].deleted)
-                {
+                if choice == Choice::Both && !keeps_both(c) {
                     bail!("'both' is only possible for a single file conflict; use local or remote");
                 }
                 if class != Some(ConflictClass::CaseCollision) {
@@ -102,22 +153,64 @@ impl Engine {
             Choice::Remote => {
                 let staging = self.staging_root().join(format!("resolve-{id}-{}", crate::new_tx_id()));
                 std::fs::create_dir_all(&staging)?;
-                let r = self.apply_conflict_remote(&c, &staging);
+                let r = self.apply_conflict_remote(c, &staging);
                 if self.store().tx_pending()?.iter().all(|t| !staging.ends_with(&t.id)) {
                     let _ = ops::remove_any(&staging);
                 }
                 r?;
             }
         }
-        self.store().resolve_conflict(id, choice.as_str())?;
-        self.store().log(&unit, "resolve", &c.path, &format!("conflict #{id} resolved: {}", choice.as_str()), "")?;
-        self.scan_unit_locked(&unit, &ScanOptions::default())?;
-        let open = self.store().open_conflict_count(&unit)?;
-        self.store().set_unit_status(&unit, if open > 0 { "conflict" } else { "resolved" }, false)?;
-        Ok(format!("conflict #{id} ({} {}) resolved: {}", c.class, c.path, choice.as_str()))
+        Ok(())
     }
 
-    fn apply_conflict_remote(&self, c: &macsync_store::ConflictRow, staging: &std::path::Path) -> Result<()> {
+    /// Conflicts with both versions side by side (the app's conflict view).
+    pub fn conflict_views(&self, include_resolved: bool) -> Result<Vec<ConflictView>> {
+        let rows = self.store().conflicts(include_resolved)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for c in rows {
+            // Case collisions: the local entry is spelled differently.
+            let ck = rpath::case_key(&c.path);
+            let local_path = c
+                .locals
+                .iter()
+                .find(|l| l.path == c.path)
+                .or_else(|| c.locals.iter().find(|l| rpath::case_key(&l.path) == ck))
+                .map(|l| l.path.clone())
+                .unwrap_or_else(|| c.path.clone());
+            let local = match self.store().entry(&c.unit, &local_path)? {
+                Some(s) => {
+                    let file = macsync_fs::abs_path(&self.cfg.root, &c.unit, &s.disk);
+                    Side::of(&s.entry, file.exists().then_some(file))
+                }
+                None => Side::missing(),
+            };
+            let remote = match c.remotes.iter().find(|r| r.path == c.path).or(c.remotes.first()) {
+                Some(r) => {
+                    let file =
+                        std::path::Path::new(&c.stored).join(if r.path.is_empty() { "_unit_root" } else { &r.path });
+                    Side::of(r, (!r.deleted && file.exists()).then_some(file))
+                }
+                None => Side::missing(),
+            };
+            out.push(ConflictView {
+                id: c.id,
+                unit: c.unit.clone(),
+                path: c.path.clone(),
+                local_path,
+                class: c.class.clone(),
+                created_ms: c.created_ms,
+                resolved_ms: c.resolved_ms,
+                resolution: c.resolution.clone(),
+                paths: c.remotes.len().max(c.locals.len()),
+                can_keep_both: keeps_both(&c),
+                local,
+                remote,
+            });
+        }
+        Ok(out)
+    }
+
+    fn apply_conflict_remote(&self, c: &ConflictRow, staging: &std::path::Path) -> Result<()> {
         let unit = c.unit.as_str();
         let kind = self.store().unit(unit)?.map(|u| u.kind).unwrap_or(macsync_core::UnitKind::Folder);
         let me = self.cfg.device.clone();
@@ -131,15 +224,57 @@ impl Engine {
             lock: None,
             actions: Vec::new(),
         };
+        let case_collision = ConflictClass::parse(&c.class) == Some(ConflictClass::CaseCollision);
         for r in &c.remotes {
-            let local = self.store().entry(unit, &r.path)?;
+            let mut local = self.store().entry(unit, &r.path)?;
+            let class = class_of(kind, &r.path);
+            // Case collision: the local version is spelled differently. Taking
+            // the remote version takes its spelling too – rename in place and
+            // retire the old spelling (the peer follows the rename).
+            let mut respelled = None;
+            if case_collision && self.case_insensitive && local.is_none() && !r.deleted {
+                let ck = rpath::case_key(&r.path);
+                for l in c.locals.iter().filter(|l| l.path != r.path && rpath::case_key(&l.path) == ck) {
+                    if let Some(s) =
+                        self.store().entry(unit, &l.path)?.filter(|s| !s.entry.deleted && s.entry.kind == r.kind)
+                    {
+                        respelled = Some(s);
+                        break;
+                    }
+                }
+            }
+            let mut disk = local.as_ref().map(|l| l.disk.clone()).unwrap_or_else(|| r.path.clone());
+            if let Some(s) = &respelled {
+                disk = rpath::join(rpath::parent(&s.disk).unwrap_or(""), rpath::file_name(&r.path));
+                plan.ops.push(Op {
+                    path: s.entry.path.clone(),
+                    disk: s.disk.clone(),
+                    kind: OpKind::DbOnly,
+                    phase: Phase::Db,
+                    rank: rank_of(class),
+                    entry: Entry::tombstone(&s.entry.path, s.entry.kind, s.entry.vv.merge_bump(&r.vv, &me)),
+                    staged: None,
+                    source: None,
+                    reason: format!("renamed to {} (conflict resolved)", r.path),
+                });
+                plan.ops.push(Op {
+                    path: r.path.clone(),
+                    disk: disk.clone(),
+                    kind: OpKind::Rename,
+                    phase: Phase::Dirs,
+                    rank: rank_of(class),
+                    entry: Entry { vv: r.vv.merge_bump(&s.entry.vv, &me), ..r.clone() },
+                    staged: None,
+                    source: Some(Source::Rename { from: s.disk.clone() }),
+                    reason: format!("conflict resolved: spelling {:?} taken", r.path),
+                });
+                local = Some(Stored { entry: Entry { path: r.path.clone(), ..s.entry.clone() }, ..s.clone() });
+            }
             let mut e = r.clone();
             e.vv = match &local {
                 Some(l) => l.entry.vv.merge_bump(&r.vv, &me),
                 None => r.vv.merge_bump(&r.vv, &me),
             };
-            let class = class_of(kind, &r.path);
-            let disk = local.as_ref().map(|l| l.disk.clone()).unwrap_or_else(|| r.path.clone());
             let live_local = local.as_ref().filter(|l| !l.entry.deleted);
             let (op_kind, phase) = if r.deleted {
                 if live_local.is_none() {
@@ -193,6 +328,70 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+/// A conflict as shown in the app.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConflictView {
+    pub id: i64,
+    pub unit: String,
+    /// Path of the remote version.
+    pub path: String,
+    /// Path of the local version (differs only for case collisions).
+    pub local_path: String,
+    pub class: String,
+    pub created_ms: i64,
+    pub resolved_ms: Option<i64>,
+    pub resolution: Option<String>,
+    /// Number of paths held back (the whole Git state for `git-state`).
+    pub paths: usize,
+    pub can_keep_both: bool,
+    /// The version on this Mac now.
+    pub local: Side,
+    /// The version of the other Mac that was held back.
+    pub remote: Side,
+}
+
+/// One version of a conflicting path.
+#[derive(Clone, Debug, Serialize)]
+pub struct Side {
+    /// `present`, `deleted` or `missing`.
+    pub state: &'static str,
+    pub kind: &'static str,
+    pub size: Option<u64>,
+    pub mtime_ms: Option<i64>,
+    /// Where this version can be opened on this Mac (the file itself, or its
+    /// copy in the conflict store).
+    pub file: Option<String>,
+}
+
+impl Side {
+    fn of(e: &Entry, file: Option<std::path::PathBuf>) -> Side {
+        let kind = match e.kind {
+            Kind::File => "file",
+            Kind::Dir => "dir",
+            Kind::Symlink => "symlink",
+        };
+        if e.deleted {
+            return Side { state: "deleted", kind, size: None, mtime_ms: None, file: None };
+        }
+        Side {
+            state: "present",
+            kind,
+            size: (e.kind == Kind::File).then_some(e.size),
+            mtime_ms: (e.mtime_ns != 0).then_some(e.mtime_ns / 1_000_000),
+            file: file.map(|f| f.to_string_lossy().into_owned()),
+        }
+    }
+
+    fn missing() -> Side {
+        Side { state: "missing", kind: "file", size: None, mtime_ms: None, file: None }
+    }
+}
+
+/// "Keep both" adds the remote version as a sibling file: one live file only.
+fn keeps_both(c: &ConflictRow) -> bool {
+    c.remotes.len() == 1 && c.remotes[0].kind == Kind::File && !c.remotes[0].deleted
 }
 
 /// `dir/name.ext` → `dir/name.conflict-<device>.ext`.

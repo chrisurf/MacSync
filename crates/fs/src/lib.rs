@@ -57,6 +57,40 @@ pub fn root_rel(unit: &str, rel: &str) -> String {
     }
 }
 
+/// Spelling of the root-relative path `rel` as stored on disk (NFC), resolved
+/// component by component. On a case-insensitive volume `obsidian` and
+/// `Obsidian` both open the same directory; this returns the one name that
+/// really exists. `None` if a component does not exist in any spelling.
+pub fn spelling_on_disk(root: &Path, rel: &str) -> Option<String> {
+    use macsync_core::path as rpath;
+    if rel.is_empty() || rel == ROOT_UNIT {
+        return Some(rel.to_string());
+    }
+    let mut dir = root.to_path_buf();
+    let mut out = String::new();
+    for comp in rel.split('/') {
+        let want = rpath::nfc(comp);
+        let mut found: Option<(String, std::ffi::OsString)> = None;
+        for e in std::fs::read_dir(&dir).ok()?.flatten() {
+            let os = e.file_name();
+            let Some(name) = os.to_str().map(rpath::nfc) else {
+                continue;
+            };
+            if name == want {
+                found = Some((name, os));
+                break;
+            }
+            if found.is_none() && rpath::case_key(&name) == rpath::case_key(&want) {
+                found = Some((name, os));
+            }
+        }
+        let (name, os) = found?;
+        dir.push(os);
+        out = rpath::join(&out, &name);
+    }
+    Some(out)
+}
+
 /// True if a directory is a Git working tree (has a `.git` dir or file).
 pub fn is_git_dir(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir.join(".git")).is_ok_and(|m| m.is_dir() || m.is_file())

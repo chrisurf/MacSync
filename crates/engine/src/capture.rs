@@ -294,6 +294,7 @@ impl Engine {
     /// tombstones); they are never dropped silently.
     pub fn scan_all(&self, full: bool) -> Result<Vec<ScanReport>> {
         let root = &self.cfg.root;
+        self.reconcile_unit_spelling()?;
         for (name, kind) in scan::top_level_units(root, &self.cfg.excludes)? {
             self.ensure_unit(&name, kind)?;
         }

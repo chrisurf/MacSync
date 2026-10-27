@@ -14,6 +14,7 @@ flowchart BT
   engine[macsync-engine<br/>Capture, Serve, Pull, Apply, Recovery]
   net[macsync-net<br/>Noise/TCP, Pairing, LAN, mDNS]
   daemon[macsync-daemon<br/>Watcher, Scheduler, IPC]
+  dupes[macsync-dupes<br/>Duplikate, nur lesend]
   cli[macsync-cli<br/>Binary macsync]
   fs --> core
   git --> core
@@ -21,7 +22,8 @@ flowchart BT
   engine --> fs & git & store
   net --> engine
   daemon --> net
-  cli --> daemon
+  dupes --> fs
+  cli --> daemon & dupes
 ```
 
 | Crate | Wichtigste Typen / Funktionen |
@@ -33,6 +35,7 @@ flowchart BT
 | `engine` | `Engine::{scan_unit, scan_all, verify, sync_from, pull_unit, resolve, recover, handle}`, Trait `PeerApi` |
 | `net` | `SecureStream` (Noise XX), `Server`, `NetPeer: PeerApi`, `pairing::{listen, connect}`, `lan::is_local`, `discovery` |
 | `daemon` | `Config`, `Node`, `Daemon` (Threads), `ipc` (JSON über Unix-Socket), `service` |
+| `dupes` | `scan` → `Report` mit `DirPair` (`Verdict`: identical/newer/diverged, Kopier-Zeitpunkt) und `FileGroup`; unabhängig von Sync und Konfiguration ([duplicates.md](duplicates.md)) |
 
 ## Einheiten
 

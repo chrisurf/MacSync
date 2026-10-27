@@ -201,6 +201,11 @@ status: ## Show the synchronisation state
 log: ## Show the journal of the last hour
 	$(RS) log --since 1h
 
+.PHONY: dupes
+dupes: build ## Duplicates in DIR, or what of the older DIR can go given the newer DIR2 (read-only) [ARGS=-v|-vv|--all]
+	@if [ -z "$(DIR)" ]; then echo "usage: make dupes DIR=~/Dokumente | make dupes DIR=<older> DIR2=<newer> [ARGS=-v]"; exit 1; fi
+	$(BIN) dupes "$(DIR)" $(if $(DIR2),"$(DIR2)") $(ARGS)
+
 .PHONY: service-install
 service-install: ## Install the LaunchAgent (see the Local Network note in the docs first)
 	$(RS) service install

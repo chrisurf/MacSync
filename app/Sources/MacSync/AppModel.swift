@@ -158,7 +158,7 @@ final class AppModel: ObservableObject {
                 UserDefaults.standard.set(true, forKey: "offeredLaunchAtLogin")
                 setLaunchAtLogin(true)
             }
-        } else {
+        } else if ProcessInfo.processInfo.environment["MACSYNC_RECONCILE"] == nil {
             SetupWindow.shared.show()
         }
         // `open -a MacSync --args --manager [Ordner]` opens the sync manager directly.
@@ -166,6 +166,17 @@ final class AppModel: ObservableObject {
         if isConfigured, let i = args.firstIndex(of: "--manager") {
             let path = args.indices.contains(i + 1) && !args[i + 1].hasPrefix("-") ? args[i + 1] : nil
             ManagerWindow.shared.show(path: path)
+        }
+        // `open -a MacSync --args --conflicts [id]` opens the conflict view.
+        if isConfigured, let i = args.firstIndex(of: "--conflicts") {
+            ConflictsWindow.shared.show(select: args.indices.contains(i + 1) ? Int64(args[i + 1]) : nil)
+        }
+        // MACSYNC_RECONCILE="ALT|NEU" opens the folder reconcile and compares
+        // (screenshots with MACSYNC_SNAPSHOT, see ReconcileWindow).
+        if let r = ProcessInfo.processInfo.environment["MACSYNC_RECONCILE"] {
+            let parts = r.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            ReconcileWindow.shared.show(old: parts.first.flatMap { $0.isEmpty ? nil : $0 },
+                                        new: parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil)
         }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             Task { @MainActor in await AppModel.shared.refresh() }
@@ -175,6 +186,8 @@ final class AppModel: ObservableObject {
 
     func quit() {
         daemon.stop()
+        // An open sheet (e.g. the result of a reconcile) would block terminating.
+        for w in NSApp.windows { if let s = w.attachedSheet { w.endSheet(s) } }
         NSApp.terminate(nil)
     }
 
@@ -366,7 +379,8 @@ final class AppModel: ObservableObject {
         guard n > lastConflicts, UserDefaults.standard.object(forKey: "notifyConflicts") as? Bool ?? true else { return }
         let content = UNMutableNotificationContent()
         content.title = "MacSync: Konflikt"
-        content.body = n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert."
+        content.body = (n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert.")
+            + " Klicken zum Anzeigen und Lösen."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "conflicts", content: content, trigger: nil))
     }
 

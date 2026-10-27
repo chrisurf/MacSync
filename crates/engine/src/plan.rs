@@ -23,6 +23,8 @@ pub enum ActionKind {
     Conflict,
     /// Not applied (nested unit, unsafe object deletion, …).
     Skip,
+    /// Only the spelling of the name changes (case-insensitive volume).
+    Rename,
 }
 
 impl ActionKind {
@@ -36,6 +38,7 @@ impl ActionKind {
             ActionKind::KeepLocal => "keep-local",
             ActionKind::Conflict => "conflict",
             ActionKind::Skip => "skip",
+            ActionKind::Rename => "rename",
         }
     }
 }
@@ -55,6 +58,8 @@ pub(crate) enum OpKind {
     Meta,
     Delete,
     DbOnly,
+    /// Change the spelling of an existing name in place (`Source::Rename`).
+    Rename,
 }
 
 /// Execution phase (lower first).
@@ -94,6 +99,8 @@ pub(crate) enum Source {
     Reflog { local_disk: String, local_blob: Hash, remote: Hash, remote_size: u64 },
     /// Copy from a file in the conflict store (conflict resolution).
     File { path: String, hash: Hash },
+    /// Unit-relative disk path of the same file under its previous spelling.
+    Rename { from: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,7 +128,7 @@ pub(crate) struct Plan {
 
 impl Plan {
     /// Sort operations into the Git-aware apply order:
-    /// directories (shallow first) → objects → packed-refs → refs → reflogs →
+    /// spelling renames and directories (shallow first) → objects → packed-refs → refs → reflogs →
     /// HEAD/metadata → worktree (hard-link followers after leaders) →
     /// deletions (deep first) → index → object deletions → database-only.
     pub fn sort(&mut self) {
@@ -140,7 +147,7 @@ impl Plan {
 fn sub_key(o: &Op) -> (i64, u8, u8) {
     let depth = rpath::depth(&o.path) as i64;
     match o.phase {
-        Phase::Dirs => (depth, 0, 0),
+        Phase::Dirs => (depth, (o.kind != OpKind::Rename) as u8, 0),
         Phase::Writes => (o.rank as i64, o.entry.link.is_some() as u8, 0),
         Phase::Deletes | Phase::ObjectDeletes => (-depth, 0, 0),
         _ => (0, 0, 0),

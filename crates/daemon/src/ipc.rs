@@ -50,6 +50,16 @@ pub enum IpcRequest {
         #[serde(default)]
         dir: String,
     },
+    /// Conflicts with both versions side by side (the app's conflict view).
+    Conflicts {
+        #[serde(default)]
+        all: bool,
+    },
+    /// Resolve several conflicts with the same choice.
+    ResolveMany {
+        ids: Vec<i64>,
+        choice: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -169,7 +179,30 @@ fn dispatch(req: IpcRequest, node: &Node, shared: &Shared) -> Result<Value> {
             serde_json::to_value(r)?
         }
         IpcRequest::Browse { unit, dir } => Daemon::ipc_browse(node, shared, unit.as_deref(), &dir)?,
+        IpcRequest::Conflicts { all } => {
+            let name = engine.store().peers()?.into_iter().last().map(|r| r.name);
+            json!({ "peer": name, "conflicts": engine.conflict_views(all)? })
+        }
+        IpcRequest::ResolveMany { ids, choice } => {
+            let v = resolve_many(engine, &ids, &choice)?;
+            Daemon::kick(shared);
+            v
+        }
     })
+}
+
+/// `[{id, ok, message}]` for each conflict, in the given order.
+pub fn resolve_many(engine: &macsync_engine::Engine, ids: &[i64], choice: &str) -> Result<Value> {
+    let c = Choice::parse(choice).with_context(|| format!("invalid choice {choice}"))?;
+    let rows: Vec<Value> = engine
+        .resolve_many(ids, c)?
+        .into_iter()
+        .map(|(id, r)| match r {
+            Ok(m) => json!({ "id": id, "ok": true, "message": m }),
+            Err(e) => json!({ "id": id, "ok": false, "message": format!("{e:#}") }),
+        })
+        .collect();
+    Ok(Value::Array(rows))
 }
 
 #[cfg(test)]

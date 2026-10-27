@@ -126,14 +126,24 @@ enum CLI {
         p.standardOutput = out
         p.standardError = err
         let buffer = LineBuffer()
+        // `done` only after stdout reached EOF and the process exited, so no
+        // line arrives late or out of order (the handler runs serially).
+        let finished = DispatchGroup()
+        finished.enter()
+        finished.enter()
         out.fileHandleForReading.readabilityHandler = { h in
-            for l in buffer.feed(h.availableData) { line(l) }
+            let chunk = h.availableData
+            if chunk.isEmpty {
+                h.readabilityHandler = nil
+                finished.leave()
+            } else {
+                for l in buffer.feed(chunk) { line(l) }
+            }
         }
-        p.terminationHandler = { proc in
-            out.fileHandleForReading.readabilityHandler = nil
-            for l in buffer.feed(out.fileHandleForReading.readDataToEndOfFile()) { line(l) }
+        p.terminationHandler = { _ in finished.leave() }
+        finished.notify(queue: .global()) {
             let e = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            done(proc.terminationStatus, e.split(separator: "\n").last.map { String($0).replacingOccurrences(of: "error: ", with: "") } ?? "")
+            done(p.terminationStatus, e.split(separator: "\n").last.map { String($0).replacingOccurrences(of: "error: ", with: "") } ?? "")
         }
         do { try p.run() } catch { done(1, error.localizedDescription); return nil }
         return p
