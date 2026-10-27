@@ -34,7 +34,12 @@
   Fortschritt (auch innerhalb großer Dateien); SIGTERM/Ctrl-C bricht nach
   spätestens 1 MB sauber ab, die halbe Kopie wird entfernt. Neue Aktion
   `trash_old`: ALT-Datei oder -Ordner in den Papierkorb, nur wenn NEU von
-  jeder Datei eine identische Kopie hat (BLAKE3)
+  jeder Datei eine identische Kopie hat (BLAKE3). Ordnerkopien lassen
+  Wiederherstellbares aus (`node_modules`, `.venv`, Caches), `.git` nie
+- Cloud-Platzhalter (Google Drive, iCloud): `--apply … --probe` prüft vorab,
+  ob die Cloud liefert; liefert sie nicht, nennt der Fehler die Datei
+  (`code: cloud_unavailable`) und weitere Cloud-Aktionen werden nicht
+  versucht. Die App führt dann nicht aus und erklärt, was zu tun ist
 - **Dateivergleich**: Textdateien zeilenweise wie in VS Code (nebeneinander
   oder untereinander, Änderungen innerhalb der Zeile, nächste/vorige
   Änderung), Bilder und PDFs nebeneinander

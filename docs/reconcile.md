@@ -131,3 +131,36 @@ der ersten abweichenden Datei (`"x/a.txt differs in NEU"`, `"… is missing in
 NEU"`, `"not in NEU"`). Fortschritt zählt die geprüften Bytes; liegt ALT in
 Google Drive, werden die Dateien dafür gelesen (heruntergeladen). NEU wird nie
 verändert, `trashed` nennt den Ort im Papierkorb.
+
+#### Dateien aus der Cloud (Google Drive, iCloud)
+
+Platzhalter-Dateien (`dataless`: Inhalt noch in der Cloud) muss die
+Cloud-App beim Lesen erst herunterladen. Läuft sie nicht oder ist sie
+offline, schlägt das Lesen fehl (meist `os error 60`, Zeitüberschreitung).
+
+- `start` und jede Größe in `actions` haben zusätzlich `cloud_files` und
+  `cloud_bytes`: was davon erst geladen werden muss.
+- Scheitert das Lesen einer Platzhalter-Datei, endet die Aktion `failed` mit
+  `"code":"cloud_unavailable"` und einem `error`, der die Datei nennt. Alle
+  folgenden Aktionen mit Platzhaltern werden dann ohne Versuch ebenso
+  gemeldet (die Cloud liefert ja nicht).
+- Vorab-Prüfung ohne Änderung: `macsync dupes ALT NEU --apply PLAN --probe
+  --json` gibt eine Zeile aus und liest dafür nur die kleinste
+  Platzhalter-Datei des Plans an (sie wird dabei heruntergeladen):
+
+```json
+{"probe":true,"bytes_total":12700000,"files":181,"cloud_files":120,"cloud_bytes":11900000,"cloud_ok":false,"error":"Google Drive/iCloud did not deliver claude-code/LICENSE.md: Operation timed out (os error 60)","actions":[{"index":0,"bytes":12700000,"files":181,"cloud_files":120,"cloud_bytes":11900000}]}
+```
+
+`cloud_ok`: `true` (liefert), `false` (liefert nicht, `error` sagt warum),
+`null` (keine Platzhalter im Plan).
+
+#### Was Ordner-Aktionen auslassen
+
+Ordnerkopien, ihre Größen und die Prüfung von `trash_old` lassen aus, was
+der Vergleich ignoriert und Werkzeuge neu erzeugen (`DEFAULT_EXCLUDES`:
+`node_modules`, `.venv`, `__pycache__`, Caches, `.DS_Store` …, dazu Ordner
+mit `CACHEDIR.TAG` wie `target`). **`.git` wird immer mitkopiert und geprüft**,
+denn die Historie lässt sich nicht neu erzeugen. Weicht `.git` ab, bleibt
+ALT stehen: `"repo/.git differs in NEU: ALT may have commits, branches or
+stashes that NEU lacks – compare with git"`.

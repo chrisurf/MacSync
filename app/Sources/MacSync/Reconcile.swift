@@ -369,6 +369,10 @@ struct ApplyResult: Identifiable, Sendable {
     /// `done`, `skipped`, `failed` or `cancelled`.
     let result: String
     let error: String?
+    /// `cloud_unavailable`: Google Drive/iCloud did not deliver a placeholder file.
+    var code: String?
+
+    var cloudUnavailable: Bool { code == "cloud_unavailable" }
 }
 
 struct ApplyReport: Identifiable {
@@ -393,6 +397,20 @@ struct ApplyReport: Identifiable {
 @MainActor
 private final class ReportBox {
     var report = ApplyReport(results: [])
+}
+
+/// `--apply PLAN --probe`: does the cloud deliver the placeholder files of the plan?
+struct CloudProbe {
+    /// nil: no placeholders in the plan.
+    var ok: Bool?
+    var error: String?
+    var files = 0
+    var bytes: Int64 = 0
+    /// Per plan node, when macsync reports it per action: still in the cloud,
+    /// and what macsync will really copy (a folder copy takes everything in
+    /// it, also what the comparison leaves out).
+    var perNode: [Int: Int64] = [:]
+    var sizes: [Int: (bytes: Int64, files: Int)] = [:]
 }
 
 /// A copy that is now in ALT and NEU; ALT may go after a checksum check.
@@ -449,6 +467,9 @@ struct ApplyRun {
     var bytes: [Int64]
     var states: [RunState]
     var errors: [String?]
+    var codes: [String?]
+    /// To be downloaded from the cloud first (from the `start` line).
+    var cloudBytes: [Int64]
     /// A `start` line came: progress by bytes, else by actions (older macsync).
     var byBytes = false
     var current: Int?
@@ -456,9 +477,11 @@ struct ApplyRun {
     var currentDone: Int64 = 0
     var file = ""
     var finished = 0
-    /// Size of all finished actions, and of those done (actually copied).
-    var finishedBytes: Int64 = 0
+    /// Size of the actions done (actually copied).
     var doneBytes: Int64 = 0
+    /// Of skipped, failed and cancelled actions: out of the total, so bar and
+    /// ETA only count what really gets copied.
+    var droppedBytes: Int64 = 0
     /// Copied bytes over the last seconds, for the rate.
     var samples: [(Date, Int64)] = []
     /// Last line from macsync: without one for a while rate and ETA are stale.
@@ -475,13 +498,15 @@ struct ApplyRun {
         bytes = actions.map(\.bytes)
         states = Array(repeating: .waiting, count: actions.count)
         errors = Array(repeating: nil, count: actions.count)
+        codes = Array(repeating: nil, count: actions.count)
+        cloudBytes = Array(repeating: 0, count: actions.count)
         current = actions.isEmpty ? nil : 0
         if !actions.isEmpty { states[0] = .running }
     }
 
     var total: Int { paths.count }
-    var bytesTotal: Int64 { bytes.reduce(0, +) }
-    var processed: Int64 { finishedBytes + currentDone }
+    var bytesTotal: Int64 { bytes.reduce(0, +) - droppedBytes }
+    var processed: Int64 { doneBytes + currentDone }
 
     var fraction: Double {
         if byBytes {
@@ -517,13 +542,13 @@ struct ApplyRun {
         while samples.count > 2 && samples[1].0 < now.addingTimeInterval(-10) { samples.removeFirst() }
     }
 
-    mutating func finish(_ index: Int, _ state: RunState, error: String?) {
+    mutating func finish(_ index: Int, _ state: RunState, error: String?, code: String? = nil) {
         guard states.indices.contains(index), !states[index].finished else { return }
         states[index] = state
         errors[index] = error
+        codes[index] = code
         finished += 1
-        finishedBytes += bytes[index]
-        if state == .done { doneBytes += bytes[index] }
+        if state == .done { doneBytes += bytes[index] } else { droppedBytes += bytes[index] }
         if index == current {
             currentDone = 0
             file = ""
@@ -575,7 +600,18 @@ final class ReconcileModel: ObservableObject {
     @Published var search = "" { didSet { rebuild() } }
     @Published var selection = Set<Int>() { didSet { if selection != oldValue { loadLines() } } }
     @Published private(set) var lines: LineInfo?
-    @Published private(set) var plan: [Int: PlanItem] = [:] { didSet { if mode == .open { rebuild() } } }
+    @Published private(set) var plan: [Int: PlanItem] = [:] {
+        didSet {
+            probe = nil
+            if mode == .open { rebuild() }
+        }
+    }
+    /// Cloud check of the current plan (before „Ausführen“).
+    @Published private(set) var probe: CloudProbe?
+    @Published private(set) var probing = false
+    private var probeProcess: Process?
+    /// „Ausführen …“ was pressed and not yet answered.
+    private var confirmWanted = false
     @Published var orderDismissed = false
     @Published var error: String?
     @Published var needsFullDiskAccess = false
@@ -957,15 +993,24 @@ final class ReconcileModel: ObservableObject {
 
     /// The plan, largest first.
     var planRows: [PlanRow] {
-        plan.map { PlanRow(id: $0.key, path: nodes[$0.key].path, item: $0.value) }
+        plan.map { PlanRow(id: $0.key, path: nodes[$0.key].path, item: sized($0.key)) }
             .sorted { ($0.item.bytes, $1.path) > ($1.item.bytes, $0.path) }
     }
 
-    var planBytes: Int64 { plan.values.reduce(0) { $0 + $1.bytes } }
+    /// A plan item with macsync's sizes once the probe has them.
+    private func sized(_ id: Int) -> PlanItem {
+        let it = plan[id]!
+        guard let s = probe?.sizes[id] else { return it }
+        return PlanItem(op: it.op, dir: it.dir, to: it.to, bytes: s.bytes, files: s.files)
+    }
+
+    private var sizedPlan: [PlanItem] { plan.keys.map(sized) }
+
+    var planBytes: Int64 { sizedPlan.reduce(0) { $0 + $1.bytes } }
     /// Written to NEU, and checked in ALT before it goes to the Trash.
-    var planCopyBytes: Int64 { plan.values.reduce(0) { $0 + ($1.op == .trashOld ? 0 : $1.bytes) } }
+    var planCopyBytes: Int64 { sizedPlan.reduce(0) { $0 + ($1.op == .trashOld ? 0 : $1.bytes) } }
     var planTrashBytes: Int64 { planBytes - planCopyBytes }
-    var planFiles: Int { plan.values.reduce(0) { $0 + $1.files } }
+    var planFiles: Int { sizedPlan.reduce(0) { $0 + $1.files } }
 
     /// Free space on NEU's volume.
     var newFreeBytes: Int64? {
@@ -976,8 +1021,31 @@ final class ReconcileModel: ObservableObject {
 
     /// From the confirmation to the plan overview.
     func reviewPlan() {
+        confirmWanted = false
         confirming = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.showingPlan = true }
+    }
+
+    /// macsync's reason in German where the user has to act on it.
+    nonisolated static func reason(_ error: String) -> String {
+        if error.contains(".git differs in NEU") {
+            return "Git-Historie weicht ab (.git) – ALT könnte Commits/Branches haben, die NEU fehlen"
+        }
+        return error
+    }
+
+    /// „Google Drive“, „iCloud“, „Dropbox“ … for ALT in cloud storage.
+    var cloudName: String {
+        guard let o = comparison?.old else { return "Die Cloud" }
+        if o.contains("/Library/Mobile Documents/") { return "iCloud" }
+        guard let r = o.range(of: "/Library/CloudStorage/") else { return "Die Cloud" }
+        let provider = o[r.upperBound...].split(separator: "/").first.map { String($0.split(separator: "-").first ?? $0) } ?? ""
+        switch provider {
+        case "GoogleDrive": return "Google Drive"
+        case "OneDrive": return "OneDrive"
+        case "": return "Die Cloud"
+        default: return provider
+        }
     }
 
     /// ALT in Google Drive, iCloud & Co.: files may be downloaded first.
@@ -1014,21 +1082,83 @@ final class ReconcileModel: ObservableObject {
         }
     }
 
-    /// Asks first (sheet), see `start()`.
+    /// Checks the cloud first, then asks (sheet), see `start()`.
     func execute() {
         guard comparison != nil, !plan.isEmpty, !applying, !comparing else { return }
         showingPlan = false
-        confirming = true
+        confirmWanted = true
+        checkCloud()
+        // A quick check needs no spinner; a slow one shows it in the sheet.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.confirmWanted, self.probing else { return }
+            self.confirming = true
+        }
+        if !probing { confirming = true }
+    }
+
+    func cancelConfirm() {
+        confirmWanted = false
+        confirming = false
+        probeProcess?.terminate()
+    }
+
+    /// `--probe`: reads only the smallest placeholder file of the plan. An
+    /// older macsync without it is skipped silently.
+    func checkCloud() {
+        guard let c = comparison, !probing else { return }
+        let ordered = planOrder
+        guard let file = writePlan(planActions(ordered)) else { return }
+        probe = nil
+        probing = true
+        let out = LineCollector()
+        probeProcess = CLI.stream(["dupes", c.old, c.new, "--apply", file.path, "--probe", "--json"], line: { out.add($0) }) { [weak self] _, _ in
+            let text = out.text
+            Task { @MainActor in
+                try? FileManager.default.removeItem(at: file)
+                self?.probed(text, ordered: ordered)
+            }
+        }
+        if probeProcess == nil { probing = false }
+    }
+
+    private func probed(_ text: String, ordered: [Int]) {
+        probeProcess = nil
+        let obj = text.split(separator: "\n").lazy
+            .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+            .first { $0["probe"] as? Bool == true }
+        var p: CloudProbe?
+        if let obj {
+            var q = CloudProbe(ok: obj["cloud_ok"] as? Bool, error: obj["error"] as? String,
+                               files: obj["cloud_files"] as? Int ?? 0, bytes: (obj["cloud_bytes"] as? NSNumber)?.int64Value ?? 0)
+            for a in obj["actions"] as? [[String: Any]] ?? [] {
+                guard let i = a["index"] as? Int, ordered.indices.contains(i) else { continue }
+                if let b = a["cloud_bytes"] as? NSNumber, b.int64Value > 0 { q.perNode[ordered[i]] = b.int64Value }
+                if let b = a["bytes"] as? NSNumber, let f = a["files"] as? Int { q.sizes[ordered[i]] = (b.int64Value, f) }
+            }
+            p = q
+        }
+        probe = p // after `plan` may have changed: its didSet cleared the old one
+        probing = false
+        if confirmWanted { confirming = true }
+    }
+
+    /// Plan file order; deleting in ALT last: by then the copies before it are done.
+    private var planOrder: [Int] {
+        plan.keys.sorted {
+            (plan[$0]!.op == .trashOld ? 1 : 0, $0) < (plan[$1]!.op == .trashOld ? 1 : 0, $1)
+        }
     }
 
     func start() {
+        confirmWanted = false
         confirming = false
+        probeProcess?.terminate()
         guard comparison != nil, !plan.isEmpty, !applying, !comparing else { return }
-        // Deleting in ALT last: by then the copies before it are done.
-        let ordered = plan.keys.sorted {
-            (plan[$0]!.op == .trashOld ? 1 : 0, $0) < (plan[$1]!.op == .trashOld ? 1 : 0, $1)
-        }
-        launch(ordered.map { id in
+        launch(planActions(planOrder))
+    }
+
+    private func planActions(_ ordered: [Int]) -> [RunAction] {
+        ordered.map { id in
             let n = nodes[id], it = plan[id]!
             var a = RunAction(op: it.op, dir: it.dir, path: n.path, to: it.to, bytes: it.bytes)
             if !it.dir, it.op != .trashOld, let e = entry(n) {
@@ -1038,7 +1168,7 @@ final class ReconcileModel: ObservableObject {
                 }
             }
             return a
-        })
+        }
     }
 
     /// „In ALT löschen“ after a run: what was copied goes from ALT to the
@@ -1059,7 +1189,7 @@ final class ReconcileModel: ObservableObject {
         lines.append("Diese Ordner/Dateien kommen aus ALT in den macOS-Papierkorb – nur wenn NEU von jeder Datei eine identische Kopie hat (Prüfsumme BLAKE3). NEU wird nicht verändert.")
         if oldInCloud {
             lines.append("")
-            lines.append("ALT liegt in Google Drive/iCloud: für die Prüfung werden die Dateien gelesen und dabei heruntergeladen.")
+            lines.append("ALT liegt in \(cloudName): für die Prüfung werden die Dateien gelesen und dabei heruntergeladen.")
         }
         alert.informativeText = lines.joined(separator: "\n")
         alert.alertStyle = .warning
@@ -1070,14 +1200,7 @@ final class ReconcileModel: ObservableObject {
 
     /// Writes the plan file and runs `macsync dupes ALT NEU --apply`.
     private func launch(_ actions: [RunAction]) {
-        guard let c = comparison, !actions.isEmpty else { return }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("macsync-plan-\(UUID().uuidString).json")
-        do {
-            try JSONSerialization.data(withJSONObject: ["actions": actions.map(\.json)], options: [.prettyPrinted]).write(to: file)
-        } catch {
-            self.error = "Plan nicht gespeichert: \(error.localizedDescription)"
-            return
-        }
+        guard let c = comparison, !actions.isEmpty, let file = writePlan(actions) else { return }
         run = ApplyRun(actions)
         reindexRun()
         run?.sample()
@@ -1089,6 +1212,17 @@ final class ReconcileModel: ObservableObject {
                 try? FileManager.default.removeItem(at: file)
                 self?.applied(status: status, err: err, report: box.report)
             }
+        }
+    }
+
+    private func writePlan(_ actions: [RunAction]) -> URL? {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("macsync-plan-\(UUID().uuidString).json")
+        do {
+            try JSONSerialization.data(withJSONObject: ["actions": actions.map(\.json)], options: [.prettyPrinted]).write(to: file)
+            return file
+        } catch {
+            self.error = "Plan nicht gespeichert: \(error.localizedDescription)"
+            return nil
         }
     }
 
@@ -1124,9 +1258,9 @@ final class ReconcileModel: ObservableObject {
         if obj["start"] as? Bool == true {
             guard var r = run else { return }
             for a in obj["actions"] as? [[String: Any]] ?? [] {
-                if let i = a["index"] as? Int, r.bytes.indices.contains(i), let b = a["bytes"] as? NSNumber {
-                    r.bytes[i] = b.int64Value
-                }
+                guard let i = a["index"] as? Int, r.bytes.indices.contains(i) else { continue }
+                if let b = a["bytes"] as? NSNumber { r.bytes[i] = b.int64Value }
+                if let b = a["cloud_bytes"] as? NSNumber { r.cloudBytes[i] = b.int64Value }
             }
             r.byBytes = true
             run = r
@@ -1148,9 +1282,10 @@ final class ReconcileModel: ObservableObject {
         let i = obj["index"] as? Int ?? report.results.count
         let result = ApplyResult(id: i, path: obj["path"] as? String ?? "", to: obj["to"] as? String ?? "",
                                  op: run.flatMap { $0.ops.indices.contains(i) ? $0.ops[i] : nil },
-                                 result: obj["result"] as? String ?? "failed", error: obj["error"] as? String)
+                                 result: obj["result"] as? String ?? "failed", error: obj["error"] as? String,
+                                 code: obj["code"] as? String)
         report.results.append(result)
-        run?.finish(i, RunState(result: result.result), error: result.error)
+        run?.finish(i, RunState(result: result.result), error: result.error, code: result.code)
     }
 
     private func applied(status: Int32, err: String, report: ApplyReport) {

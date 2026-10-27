@@ -409,7 +409,7 @@ private struct ReconcileTable: View {
             TableColumn("Geändert") { n in Text(n.inOld ? date(n.oldMs) : "").foregroundStyle(.secondary) }
                 .width(min: 90, ideal: 118)
             TableColumn("") { n in StateCell(model: model, node: n) }
-                .width(min: 90, ideal: 124)
+                .width(min: 90, ideal: 150)
             TableColumn("NEU") { n in NameCell(model: model, node: n, old: false) }
                 .width(min: 160, ideal: 250)
             TableColumn("Größe") { n in size(n.inNew, n.newBytes) }
@@ -500,7 +500,8 @@ private struct StateCell: View {
         HStack(spacing: 4) {
             Text(node.symbol)
             if let s = model.runState(node), let run = model.run {
-                RunBadge(state: s.state, op: run.ops[s.index], fraction: run.fraction(s.index))
+                RunBadge(state: s.state, op: run.ops[s.index], fraction: run.fraction(s.index),
+                         cloud: run.codes[s.index] == "cloud_unavailable" ? model.cloudName : nil)
             } else if let p = model.plan[node.id] {
                 OpBadge(op: p.op)
             } else if model.covered(node) {
@@ -513,7 +514,7 @@ private struct StateCell: View {
     }
 
     private var help: String {
-        if let s = model.runState(node), let e = model.run?.errors[s.index] { return e }
+        if let s = model.runState(node), let e = model.run?.errors[s.index] { return ReconcileModel.reason(e) }
         return node.stateTitle
     }
 }
@@ -523,6 +524,8 @@ private struct RunBadge: View {
     let state: RunState
     let op: PlanOp
     let fraction: Double?
+    /// Failed because the cloud did not deliver: its name.
+    var cloud: String?
 
     var body: some View {
         switch state {
@@ -546,7 +549,11 @@ private struct RunBadge: View {
         case .skipped:
             Text("übersprungen").font(.caption).foregroundStyle(.orange)
         case .failed:
-            Text("Fehler").font(.caption.weight(.medium)).foregroundStyle(.red)
+            if let cloud {
+                Text("\(cloud) liefert nicht").font(.caption.weight(.medium)).foregroundStyle(.red)
+            } else {
+                Text("Fehler").font(.caption.weight(.medium)).foregroundStyle(.red)
+            }
         case .cancelled:
             Text("abgebrochen").font(.caption).foregroundStyle(.secondary)
         }
@@ -752,6 +759,8 @@ private struct OpBadge: View {
 /// One planned action: what, where to, how big.
 private struct PlanLine: View {
     let row: PlanRow
+    /// Still in the cloud (from the probe).
+    var cloud: Int64 = 0
 
     var body: some View {
         HStack(spacing: 8) {
@@ -769,6 +778,11 @@ private struct PlanLine: View {
                 }
             }
             Spacer(minLength: 8)
+            if cloud > 0 {
+                Label(Activity.bytes(cloud), systemImage: "icloud.and.arrow.down")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .help("\(Activity.bytes(cloud)) davon liegen nur in der Cloud und werden erst geladen")
+            }
             if row.item.dir {
                 Text(files(row.item.files)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
@@ -799,7 +813,7 @@ private struct PlanOverview: View {
             } else {
                 List(rows) { r in
                     HStack(spacing: 6) {
-                        PlanLine(row: r)
+                        PlanLine(row: r, cloud: model.probe?.perNode[r.id] ?? 0)
                         Button { model.unplan([model.nodes[r.id]]) } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                         }
@@ -822,6 +836,44 @@ private struct PlanOverview: View {
             .padding(12)
         }
         .frame(width: 600, height: min(520, CGFloat(130 + max(rows.count, 3) * 26)))
+    }
+}
+
+/// The cloud app does not deliver placeholder files: what to do.
+private struct CloudHint: View {
+    @ObservedObject var model: ReconcileModel
+    let error: String?
+    /// „Erneut prüfen“ (before running).
+    let retry: Bool
+
+    var body: some View {
+        let name = model.cloudName
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "icloud.slash").font(.title2).foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(name) liefert die Dateien gerade nicht.").fontWeight(.semibold)
+                if let error {
+                    Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        .lineLimit(2).truncationMode(.middle)
+                }
+                Text("1. \(name) starten und warten, bis es verbunden ist")
+                Text("Tipp: Ordner im Finder per Rechtsklick → „\(name == "iCloud" ? "Jetzt laden" : "Offline verfügbar")“ vorher herunterladen")
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if let c = model.comparison {
+                        Button("ALT im Finder zeigen") { model.reveal([URL(fileURLWithPath: c.old)]) }
+                    }
+                    if retry {
+                        Button("Erneut prüfen") { model.checkCloud() }.disabled(model.probing)
+                    }
+                }
+                .padding(.top, 2)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.1)))
     }
 }
 
@@ -848,6 +900,18 @@ private struct ReconcileConfirmView: View {
                 }
                 if let free, total > 0 { Text("· in NEU frei: \(Activity.bytes(free))").foregroundStyle(.secondary) }
             }
+            if model.probing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Prüfe \(model.cloudName) …").foregroundStyle(.secondary)
+                }
+            } else if let p = model.probe, p.bytes > 0 {
+                Label("davon \(Activity.bytes(p.bytes)) aus der Cloud zu laden (\(files(p.files)))", systemImage: "icloud.and.arrow.down")
+                    .foregroundStyle(.secondary)
+            }
+            if let p = model.probe, p.ok == false {
+                CloudHint(model: model, error: p.error, retry: true)
+            }
             if total >= ReconcileModel.largeBytes || model.oldInCloud || (free.map { $0 < total } ?? false) {
                 VStack(alignment: .leading, spacing: 6) {
                     if let free, free < total {
@@ -859,8 +923,8 @@ private struct ReconcileConfirmView: View {
                               systemImage: "exclamationmark.triangle.fill")
                     }
                     if model.oldInCloud {
-                        Label(total == 0 ? "Dateien aus Google Drive/iCloud werden für die Prüfung erst heruntergeladen."
-                              : "Dateien aus Google Drive/iCloud werden dabei erst heruntergeladen.", systemImage: "icloud.and.arrow.down")
+                        Label(total == 0 ? "Dateien aus \(model.cloudName) werden für die Prüfung erst heruntergeladen."
+                              : "Dateien aus \(model.cloudName) werden dabei erst heruntergeladen.", systemImage: "icloud.and.arrow.down")
                     }
                 }
                 .font(.callout)
@@ -870,7 +934,7 @@ private struct ReconcileConfirmView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(rows.count > 5 ? "Die 5 größten" : "Aktionen").font(.headline)
-                ForEach(rows.prefix(5)) { PlanLine(row: $0) }
+                ForEach(rows.prefix(5)) { PlanLine(row: $0, cloud: model.probe?.perNode[$0.id] ?? 0) }
                 if rows.count > 5 {
                     Text("… und \(rows.count - 5) weitere (\(Activity.bytes(rows.dropFirst(5).reduce(0) { $0 + $1.item.bytes })))")
                         .font(.caption).foregroundStyle(.secondary)
@@ -892,10 +956,13 @@ private struct ReconcileConfirmView: View {
             HStack {
                 Button("Plan anzeigen") { model.reviewPlan() }
                 Spacer()
-                Button("Abbrechen", role: .cancel) { model.confirming = false }.keyboardShortcut(.cancelAction)
-                Button("Ausführen") { model.start() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
+                Button("Abbrechen", role: .cancel) { model.cancelConfirm() }.keyboardShortcut(.cancelAction)
+                if model.probe?.ok != false {
+                    Button("Ausführen") { model.start() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(model.probing)
+                }
             }
         }
         .padding(20)
@@ -981,7 +1048,8 @@ private struct ReconcileReportView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(report.error != nil ? "Plan nicht ausgeführt" : report.wasCancelled ? "Plan abgebrochen"
-                 : report.results.allSatisfy({ $0.op == .trashOld }) ? "In ALT gelöscht" : "Plan ausgeführt")
+                 : report.results.allSatisfy({ $0.op == .trashOld }) ? (report.done == 0 ? "Nichts in ALT gelöscht" : "In ALT gelöscht")
+                 : "Plan ausgeführt")
                 .font(.title3.weight(.semibold))
             if let e = report.error {
                 Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -996,6 +1064,9 @@ private struct ReconcileReportView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if let r = report.results.first(where: \.cloudUnavailable) {
+                CloudHint(model: model, error: r.error, retry: false)
+            }
             if !report.results.isEmpty {
                 List(report.results.sorted { (rank($0), $0.id) < (rank($1), $1.id) }) { r in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1008,7 +1079,10 @@ private struct ReconcileReportView: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(r.to.isEmpty || r.to == r.path || r.op == .trashOld ? r.path : "\(r.path) → \(r.to)")
                                 .lineLimit(1).truncationMode(.middle)
-                            if let n = note(r) { Text(n).font(.caption).foregroundStyle(r.result == "done" ? .green : .secondary) }
+                            if let n = note(r) {
+                                Text(n).font(.caption).foregroundStyle(r.result == "done" ? .green : .secondary)
+                                    .help(r.error ?? "")
+                            }
                         }
                         Spacer(minLength: 8)
                         if let o = offer(r) {
@@ -1056,11 +1130,12 @@ private struct ReconcileReportView: View {
         if r.op == .trashOld {
             switch r.result {
             case "done": return "✓ Prüfsumme identisch – im Papierkorb"
-            case "skipped": return "übersprungen: \(r.error ?? "")"
+            case "skipped": return "übersprungen: " + ReconcileModel.reason(r.error ?? "")
             default: return r.error
             }
         }
         if r.result == "done", offer(r) != nil { return "in ALT und NEU vorhanden" }
+        if r.cloudUnavailable { return "\(model.cloudName) liefert nicht" }
         return r.error
     }
 

@@ -21,7 +21,7 @@ use macsync_core::{path as rpath, Hash, Kind};
 use macsync_fs::{meta, ops, time};
 use serde::{Deserialize, Serialize};
 
-use crate::walk;
+use crate::{walk, DEFAULT_EXCLUDES};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Plan {
@@ -99,6 +99,9 @@ pub struct Outcome {
     pub error: Option<String>,
     /// Location in the Trash of the moved ALT source or replaced NEU file.
     pub trashed: Option<String>,
+    /// `cloud_unavailable`: Google Drive/iCloud did not deliver a placeholder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<&'static str>,
     /// Bytes copied.
     #[serde(skip)]
     pub bytes: u64,
@@ -119,6 +122,8 @@ pub struct Summary {
 pub struct Start {
     pub start: bool,
     pub bytes_total: u64,
+    pub cloud_files: u64,
+    pub cloud_bytes: u64,
     pub actions: Vec<Size>,
 }
 
@@ -128,6 +133,23 @@ pub struct Size {
     /// Bytes to copy (a folder: all files in it).
     pub bytes: u64,
     pub files: u64,
+    /// Placeholders whose content is still in the cloud.
+    pub cloud_files: u64,
+    pub cloud_bytes: u64,
+}
+
+/// Result of `probe`: sizes of a plan and whether the cloud delivers.
+#[derive(Debug, Serialize)]
+pub struct Probe {
+    pub probe: bool,
+    pub bytes_total: u64,
+    pub files: u64,
+    pub cloud_files: u64,
+    pub cloud_bytes: u64,
+    /// `None`: no placeholders in the plan.
+    pub cloud_ok: Option<bool>,
+    pub error: Option<String>,
+    pub actions: Vec<Size>,
 }
 
 /// Bytes copied so far within action `index`.
@@ -201,6 +223,8 @@ fn home_trash() -> PathBuf {
 enum Stop {
     Skip(String),
     Fail(String),
+    /// A placeholder could not be read: the cloud app does not deliver.
+    Cloud(String),
     Cancel,
 }
 
@@ -208,10 +232,36 @@ impl From<io::Error> for Stop {
     fn from(e: io::Error) -> Stop {
         if e.get_ref().is_some_and(|r| r.is::<Cancelled>()) {
             Stop::Cancel
+        } else if e.get_ref().is_some_and(|r| r.is::<CloudUnavailable>()) {
+            Stop::Cloud(e.to_string())
         } else {
             Stop::Fail(e.to_string())
         }
     }
+}
+
+/// Error payload: reading a cloud placeholder failed.
+#[derive(Debug)]
+struct CloudUnavailable(String);
+
+impl std::fmt::Display for CloudUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CloudUnavailable {}
+
+fn is_cloud(md: &fs::Metadata) -> bool {
+    meta::raw_flags(md) & meta::SF_DATALESS != 0
+}
+
+/// A read error of the placeholder `src` (`rel` in ALT) as `CloudUnavailable`.
+fn cloud_error(rel: &Path, e: io::Error) -> io::Error {
+    if e.get_ref().is_some_and(|r| r.is::<Cancelled>()) {
+        return e;
+    }
+    io::Error::other(CloudUnavailable(format!("Google Drive/iCloud did not deliver {}: {e}", rel.display())))
 }
 
 /// Error payload of a copy stopped by a cancel.
@@ -295,10 +345,18 @@ pub fn apply_with(
 ) -> io::Result<Summary> {
     let roots = [walk::canonical(old)?, walk::canonical(new)?];
     walk::check_roots(&roots)?;
-    let sizes: Vec<Size> = plan.actions.iter().enumerate().map(|(index, a)| size_of(&roots[0], index, a)).collect();
-    let start = Start { start: true, bytes_total: sizes.iter().map(|s| s.bytes).sum(), actions: sizes };
+    let sizes: Vec<Size> = plan.actions.iter().enumerate().map(|(index, a)| scan(&roots[0], index, a).0).collect();
+    let start = Start {
+        start: true,
+        bytes_total: sizes.iter().map(|s| s.bytes).sum(),
+        cloud_files: sizes.iter().map(|s| s.cloud_files).sum(),
+        cloud_bytes: sizes.iter().map(|s| s.cloud_bytes).sum(),
+        actions: sizes,
+    };
     on(Event::Start(&start));
     let mut sum = Summary { summary: true, ..Default::default() };
+    // Once the cloud failed to deliver, later placeholders are not tried.
+    let mut cloud_down: Option<String> = None;
     for (index, a) in plan.actions.iter().enumerate() {
         let to = a.to.clone().unwrap_or_else(|| a.path.clone());
         let mut o = Outcome {
@@ -308,10 +366,13 @@ pub fn apply_with(
             result: Done::Done,
             error: None,
             trashed: None,
+            code: None,
             bytes: 0,
         };
         let res = if cancel.load(Ordering::Relaxed) {
             Err(Stop::Cancel)
+        } else if let Some(m) = cloud_down.as_ref().filter(|_| start.actions[index].cloud_files > 0) {
+            Err(Stop::Cloud(format!("not tried, the cloud did not deliver before: {m}")))
         } else {
             let mut ctx = Ctx {
                 cancel,
@@ -342,6 +403,13 @@ pub fn apply_with(
                 o.error = Some(m);
                 sum.failed += 1;
             }
+            Err(Stop::Cloud(m)) => {
+                o.result = Done::Failed;
+                o.code = Some("cloud_unavailable");
+                cloud_down.get_or_insert_with(|| m.clone());
+                o.error = Some(m);
+                sum.failed += 1;
+            }
             Err(Stop::Cancel) => {
                 o.result = Done::Cancelled;
                 sum.cancelled = true;
@@ -352,11 +420,13 @@ pub fn apply_with(
     Ok(sum)
 }
 
-/// Bytes and files an action will copy, by `stat` only (0 if unreadable).
-fn size_of(old_root: &Path, index: usize, a: &Action) -> Size {
-    let mut s = Size { index, bytes: 0, files: 0 };
+/// Bytes and files an action will copy, by `stat` only (0 if unreadable),
+/// and its smallest cloud placeholder.
+fn scan(old_root: &Path, index: usize, a: &Action) -> (Size, Option<(u64, PathBuf)>) {
+    let mut s = Size { index, bytes: 0, files: 0, cloud_files: 0, cloud_bytes: 0 };
+    let mut smallest: Option<(u64, PathBuf)> = None;
     if rpath::validate(&a.path).is_err() {
-        return s;
+        return (s, smallest);
     }
     let mut stack = vec![old_root.join(&a.path)];
     while let Some(p) = stack.pop() {
@@ -364,11 +434,57 @@ fn size_of(old_root: &Path, index: usize, a: &Action) -> Size {
         if md.is_file() {
             s.bytes += md.len();
             s.files += 1;
+            if is_cloud(&md) {
+                s.cloud_files += 1;
+                s.cloud_bytes += md.len();
+                // An empty placeholder reads without the cloud: no test.
+                if md.len() > 0 && smallest.as_ref().is_none_or(|(n, _)| md.len() < *n) {
+                    smallest = Some((md.len(), p));
+                }
+            }
         } else if md.is_dir() {
-            stack.extend(fs::read_dir(&p).into_iter().flatten().flatten().map(|e| e.path()));
+            stack
+                .extend(fs::read_dir(&p).into_iter().flatten().flatten().map(|e| e.path()).filter(|c| !rebuildable(c)));
         }
     }
-    s
+    (s, smallest)
+}
+
+/// Sizes of `plan` and whether the cloud delivers its placeholders: reads the
+/// first byte of the smallest non-empty one (which downloads it). Changes
+/// nothing else.
+pub fn probe(old: &Path, plan: &Plan) -> io::Result<Probe> {
+    let root = walk::canonical(old)?;
+    let mut p = Probe {
+        probe: true,
+        bytes_total: 0,
+        files: 0,
+        cloud_files: 0,
+        cloud_bytes: 0,
+        cloud_ok: None,
+        error: None,
+        actions: Vec::new(),
+    };
+    let mut smallest: Option<(u64, PathBuf)> = None;
+    for (index, a) in plan.actions.iter().enumerate() {
+        let (s, small) = scan(&root, index, a);
+        p.bytes_total += s.bytes;
+        p.files += s.files;
+        p.cloud_files += s.cloud_files;
+        p.cloud_bytes += s.cloud_bytes;
+        if let Some(c) = small.filter(|c| smallest.as_ref().is_none_or(|m| c.0 < m.0)) {
+            smallest = Some(c);
+        }
+        p.actions.push(s);
+    }
+    if let Some((_, file)) = smallest {
+        let read = File::open(&file).and_then(|mut f| f.read(&mut [0u8; 1]));
+        p.cloud_ok = Some(read.is_ok());
+        if let Err(e) = read {
+            p.error = Some(cloud_error(file.strip_prefix(&root).unwrap_or(&file), e).to_string());
+        }
+    }
+    Ok(p)
 }
 
 fn run(roots: &[PathBuf; 2], a: &Action, to: &str, trash: &Trash, ctx: &mut Ctx) -> Result<Ran, Stop> {
@@ -481,26 +597,50 @@ fn same_in_new(src: &Path, dst: &Path, ctx: &mut Ctx) -> Result<(), Stop> {
     let root = ctx.old_root;
     let rel = || src.strip_prefix(root).unwrap_or(src).display().to_string();
     let Ok(new_md) = fs::symlink_metadata(dst) else {
-        return Err(Stop::Skip(format!("{} is missing in NEU", rel())));
+        return Err(not_same(rel(), "is missing in NEU"));
     };
     if md.file_type().is_symlink() {
         if !new_md.file_type().is_symlink() || fs::read_link(src)? != fs::read_link(dst)? {
-            return Err(Stop::Skip(format!("{} differs in NEU", rel())));
+            return Err(not_same(rel(), "differs in NEU"));
         }
     } else if md.is_dir() {
         if !new_md.is_dir() {
-            return Err(Stop::Skip(format!("{} is not a folder in NEU", rel())));
+            return Err(not_same(rel(), "is not a folder in NEU"));
         }
         for e in fs::read_dir(src)? {
             let e = e?;
-            same_in_new(&e.path(), &dst.join(e.file_name()), ctx)?;
+            if !rebuildable(&e.path()) {
+                same_in_new(&e.path(), &dst.join(e.file_name()), ctx)?;
+            }
         }
     } else if md.is_file()
-        && (!new_md.is_file() || new_md.len() != md.len() || hash_with(src, ctx)? != ops::hash_file(dst)?)
+        && (!new_md.is_file()
+            || new_md.len() != md.len()
+            || hash_with(src, ctx).map_err(|e| if is_cloud(&md) { cloud_error(Path::new(&rel()), e) } else { e })?
+                != ops::hash_file(dst)?)
     {
-        return Err(Stop::Skip(format!("{} differs in NEU", rel())));
+        return Err(not_same(rel(), "differs in NEU"));
     }
     Ok(())
+}
+
+/// Why `trash_old` keeps `rel`; inside `.git` the history itself differs.
+fn not_same(rel: String, what: &str) -> Stop {
+    match rel.split_once(".git/").or_else(|| rel.strip_suffix(".git").map(|r| (r, ""))) {
+        Some((repo, _)) if repo.is_empty() || repo.ends_with('/') => Stop::Skip(format!(
+            "{repo}.git differs in NEU: ALT may have commits, branches or stashes that NEU lacks – compare with git"
+        )),
+        _ => Stop::Skip(format!("{rel} {what}")),
+    }
+}
+
+/// Left out of folder copies and checks: what the comparison ignores and
+/// tools rebuild (`node_modules`, `.venv`, caches …). `.git` is kept: its
+/// history cannot be rebuilt.
+fn rebuildable(p: &Path) -> bool {
+    let name = p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    (name != ".git" && DEFAULT_EXCLUDES.contains(&name.as_ref()))
+        || (fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()) && p.join("CACHEDIR.TAG").is_file())
 }
 
 /// BLAKE3 of a file in 1 MB chunks, with progress and cancel in between.
@@ -586,7 +726,8 @@ fn temp_path(dir: &Path, dst: &Path) -> PathBuf {
 fn copy_file(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<u64> {
     ctx.check()?;
     let md = fs::symlink_metadata(src)?;
-    let want = stream(src, dst, ctx)?;
+    let rel = src.strip_prefix(ctx.old_root).unwrap_or(src).to_path_buf();
+    let want = stream(src, dst, ctx).map_err(|e| if is_cloud(&md) { cloud_error(&rel, e) } else { e })?;
     meta::unlock_for_write(dst);
     copy_meta(src, dst, &md, Kind::File)?;
     if ops::hash_file(dst)? != want {
@@ -628,6 +769,9 @@ fn copy_dir(src: &Path, dst: &Path, ctx: &mut Ctx) -> io::Result<u64> {
     for e in fs::read_dir(src)? {
         let e = e?;
         let (s, d, ft) = (e.path(), dst.join(e.file_name()), e.file_type()?);
+        if rebuildable(&s) {
+            continue;
+        }
         if ft.is_symlink() {
             std::os::unix::fs::symlink(fs::read_link(&s)?, &d)?;
         } else if ft.is_dir() {

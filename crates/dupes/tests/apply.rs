@@ -352,3 +352,51 @@ fn trash_old_only_when_new_has_identical_copies() {
     assert!(d.old.path().join("other/a.txt").exists() && d.old.path().join("gone/b.txt").exists());
     assert!(d.new.path().join("repo/extra.txt").exists(), "NEU untouched");
 }
+
+#[test]
+fn probe_reports_sizes_and_no_cloud_for_local_files() {
+    let d = dirs();
+    put(d.old.path(), "exp/a.txt", "abc", 1);
+    put(d.old.path(), "b.txt", "hello", 1);
+    let plan: Plan =
+        serde_json::from_str(r#"{"actions":[{"op":"copy","kind":"dir","path":"exp"},{"op":"copy","path":"b.txt"}]}"#)
+            .unwrap();
+    let p = macsync_dupes::probe(d.old.path(), &plan).unwrap();
+    assert_eq!((p.files, p.bytes_total, p.cloud_files), (2, 8, 0));
+    assert_eq!(p.cloud_ok, None, "nothing to fetch from the cloud");
+    assert_eq!(p.actions.iter().map(|a| a.files).collect::<Vec<_>>(), [1, 1]);
+    assert_eq!(fs::read_dir(d.new.path()).unwrap().count(), 0, "a probe changes nothing");
+}
+
+#[test]
+fn folder_copies_leave_out_rebuildable_folders_but_keep_git() {
+    let d = dirs();
+    put(d.old.path(), "repo/src/main.rs", "fn main() {}", 1);
+    put(d.old.path(), "repo/.git/HEAD", "ref: refs/heads/main", 1);
+    put(d.old.path(), "repo/node_modules/x/index.js", "module.exports = 1", 1);
+    put(d.old.path(), "repo/.venv/lib/site.py", "x", 1);
+    put(d.old.path(), "repo/target/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55", 1);
+    put(d.old.path(), "repo/target/debug/bin", "x", 1);
+    let (out, s) = run(&d, r#"{"actions":[{"op":"copy","kind":"dir","path":"repo"}]}"#);
+    assert_eq!(out[0].result, Done::Done, "{:?}", out[0].error);
+    let n = d.new.path().join("repo");
+    assert!(n.join("src/main.rs").exists() && n.join(".git/HEAD").exists(), ".git is history: copied");
+    assert!(!n.join("node_modules").exists() && !n.join(".venv").exists() && !n.join("target").exists());
+    assert_eq!(s.bytes, 12 + 20);
+    // ALT can go although NEU lacks the rebuildable folders.
+    let (out, _) = run(&d, r#"{"actions":[{"op":"trash_old","kind":"dir","path":"repo"}]}"#);
+    assert_eq!(out[0].result, Done::Done, "{:?}", out[0].error);
+}
+
+#[test]
+fn trash_old_names_a_differing_git_history() {
+    let d = dirs();
+    for (root, head) in [(d.old.path(), "ref: refs/heads/feature"), (d.new.path(), "ref: refs/heads/main")] {
+        put(root, "repo/README.md", "# repo", 1);
+        put(root, "repo/.git/HEAD", head, 1);
+    }
+    let (out, _) = run(&d, r#"{"actions":[{"op":"trash_old","kind":"dir","path":"repo"}]}"#);
+    assert_eq!(out[0].result, Done::Skipped);
+    assert!(out[0].error.as_deref().unwrap().starts_with("repo/.git differs in NEU: ALT may have commits"), "{out:?}");
+    assert!(d.old.path().join("repo/.git/HEAD").exists());
+}

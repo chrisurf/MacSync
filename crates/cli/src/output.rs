@@ -592,6 +592,21 @@ fn counts(n: &macsync_dupes::Counts) -> String {
 }
 
 /// One finished action of `dupes --apply`.
+pub fn probe(p: &macsync_dupes::Probe) {
+    println!("{} files, {}", p.files, bytes(p.bytes_total));
+    match p.cloud_ok {
+        None => println!("☁️  no placeholders: everything is on disk"),
+        Some(true) => {
+            println!("☁️  {} files ({}) still in the cloud – it delivers", p.cloud_files, bytes(p.cloud_bytes))
+        }
+        Some(false) => {
+            println!("❌ {} files ({}) still in the cloud – it does not deliver", p.cloud_files, bytes(p.cloud_bytes));
+            println!("   {}", p.error.as_deref().unwrap_or(""));
+            println!("   Start Google Drive/iCloud, or download the folders first (Finder → Make Available Offline).");
+        }
+    }
+}
+
 /// One progress line on the terminal, overwritten by the next.
 pub fn apply_progress(p: &macsync_dupes::Progress, total: u64) {
     eprint!("\r\x1b[K{} of {} (all: {}) · {}", bytes(p.bytes_done), bytes(p.bytes), bytes(total), p.file);

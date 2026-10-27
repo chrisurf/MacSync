@@ -197,6 +197,10 @@ enum Cmd {
         /// replace files of ALT into NEU, see docs/reconcile.md.
         #[arg(long, value_name = "PLAN", conflicts_with_all = ["within", "files"])]
         apply: Option<PathBuf>,
+        /// With --apply: only report sizes and whether Google Drive/iCloud
+        /// delivers the plan's placeholders; changes nothing.
+        #[arg(long, requires = "apply")]
+        probe: bool,
         #[arg(long)]
         json: bool,
     },
@@ -267,16 +271,17 @@ struct DupesOpts {
     all: bool,
     files: bool,
     apply: Option<PathBuf>,
+    probe: bool,
     json: bool,
     verbose: u8,
 }
 
 fn dupes(paths: &[PathBuf], o: DupesOpts) -> Result<()> {
-    let DupesOpts { within, exclude, no_defaults, all, files, apply, json, verbose } = o;
+    let DupesOpts { within, exclude, no_defaults, all, files, apply, probe, json, verbose } = o;
     use std::io::IsTerminal;
     if let Some(plan) = apply {
         let [old, new] = paths else { bail!("--apply needs two folders: ALT NEU") };
-        return dupes_apply(old, new, &plan, json);
+        return dupes_apply(old, new, &plan, probe, json);
     }
     let mut opts =
         macsync_dupes::Options { progress: !json && std::io::stderr().is_terminal(), files, ..Default::default() };
@@ -308,13 +313,22 @@ fn dupes(paths: &[PathBuf], o: DupesOpts) -> Result<()> {
     Ok(())
 }
 
-fn dupes_apply(old: &Path, new: &Path, plan: &Path, json: bool) -> Result<()> {
+fn dupes_apply(old: &Path, new: &Path, plan: &Path, probe: bool, json: bool) -> Result<()> {
     let text = if plan == Path::new("-") {
         std::io::read_to_string(std::io::stdin())?
     } else {
         std::fs::read_to_string(plan).with_context(|| format!("{}", plan.display()))?
     };
     let plan: macsync_dupes::Plan = serde_json::from_str(&text).with_context(|| format!("{}", plan.display()))?;
+    if probe {
+        let p = macsync_dupes::probe(old, &plan)?;
+        if json {
+            println!("{}", serde_json::to_string(&p)?);
+        } else {
+            output::probe(&p);
+        }
+        return Ok(());
+    }
     let trash = macsync_dupes::Trash::from_env();
     // SIGINT/SIGTERM (Ctrl-C, "Abbrechen" in the app): stop cleanly.
     unsafe {
@@ -395,7 +409,7 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Discover { timeout_s, json } = cli.cmd {
         return discover(&path, timeout_s, json);
     }
-    if let Cmd::Dupes { paths, within, exclude, no_default_excludes, all, files, apply, json } = cli.cmd {
+    if let Cmd::Dupes { paths, within, exclude, no_default_excludes, all, files, apply, probe, json } = cli.cmd {
         let o = DupesOpts {
             within,
             exclude,
@@ -403,6 +417,7 @@ fn run(cli: Cli) -> Result<()> {
             all,
             files,
             apply,
+            probe,
             json,
             verbose: cli.verbose,
         };
