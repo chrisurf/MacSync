@@ -45,8 +45,11 @@ fn copy_file_keeps_content_date_and_mode() {
     let d = dirs();
     put(d.old.path(), "a/b.txt", "hello world\n", 3);
     fs::set_permissions(d.old.path().join("a/b.txt"), fs::Permissions::from_mode(0o640)).unwrap();
-    let tag = vec![("com.apple.metadata:_kMDItemUserTags".to_string(), b"rot".to_vec())];
+    // A name valid on macOS and Linux (`user.` namespace); some file systems
+    // have no xattrs at all, then there is nothing to keep.
+    let tag = vec![("user.macsync.test".to_string(), b"rot".to_vec())];
     macsync_fs::meta::write_xattrs(&d.old.path().join("a/b.txt"), &tag, false).unwrap();
+    let tag = macsync_fs::meta::read_xattrs(&d.old.path().join("a/b.txt"));
     let (out, s) = run(&d, r#"{"actions":[{"op":"copy","kind":"file","path":"a/b.txt","to":"x/y/b.txt"}]}"#);
     assert_eq!(out[0].result, Done::Done, "{:?}", out[0].error);
     assert_eq!((s.done, s.failed, s.bytes), (1, 0, 12));
