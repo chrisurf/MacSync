@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.4.0 – Duplikate finden (in Arbeit)
+## 0.5.0 (in Arbeit)
+
+### Behoben
+- Synchronisations-Manager: Git-Repositories direkt in einem Ordner (z. B.
+  `chrisurf/MacSync`) fehlten in der Liste und im Baum; zu sehen waren nur
+  die losen Dateien daneben, eine Ebene tiefer stimmte es. Synchronisiert
+  wurden sie trotzdem. Ursache: Präfix `chrisurf//` beim Suchen der Einheiten
+
+## 0.4.0 – Duplikate finden, Ordnerabgleich (2026-10-27)
 
 ### Hinzugefügt
 - `macsync dupes <Ordner> [<Ordner2>]` (`make dupes DIR=…`): findet Ordner und

@@ -811,7 +811,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "macsync-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake3",
  "hex",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-daemon"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-dupes"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake3",
  "filetime",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-engine"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-fs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake3",
  "filetime",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-gitaware"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake3",
  "macsync-core",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-net"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -946,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "macsync-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "macsync-core",

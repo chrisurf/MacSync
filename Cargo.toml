@@ -4,7 +4,7 @@ members = ["crates/core", "crates/fs", "crates/gitaware", "crates/store", "crate
 
 [workspace.package]
 publish = false
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 repository = "https://github.com/chrisurf/MacSync"
 

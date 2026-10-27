@@ -100,8 +100,10 @@ impl Engine {
 
         let mut items = Vec::new();
         // Units directly below this directory (top level, or nested repositories).
+        // `join(u, "")` is `u/`, so the unit's own top level needs no join.
         let prefix = match unit {
             None => String::new(),
+            Some(u) if dir.is_empty() => format!("{u}/"),
             Some(u) => format!("{}/", rpath::join(u, dir)),
         };
         let names: BTreeSet<&String> = local_roots.keys().chain(remote_roots.iter().flat_map(|r| r.keys())).collect();

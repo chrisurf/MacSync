@@ -92,3 +92,33 @@ fn deleted_unit_disappears() {
         assert!(offline.iter().all(|i| i.name != "old"));
     }
 }
+
+/// A git repository inside a folder is a unit of its own; the folder's
+/// listing shows it at the folder's top level and one level deeper.
+#[test]
+fn nested_repositories_are_listed_in_their_folder() {
+    let p = Pair::new();
+    for repo in ["work/app", "work/clients/acme"] {
+        fs::create_dir_all(p.ra().join(repo).join(".git/refs/heads")).unwrap();
+        fs::write(p.ra().join(repo).join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::write(p.ra().join(repo).join("README.md"), repo).unwrap();
+    }
+    fs::write(p.ra().join("work/notes.txt"), "loose").unwrap();
+    p.sync();
+
+    for (e, peer) in [(&p.a, &p.b), (&p.b, &p.a)] {
+        let top = e.browse(Some(peer as &dyn PeerApi), Some("work"), "").unwrap();
+        assert_eq!(state(&top, "app"), (ItemState::Synced, Presence::Present, Presence::Present));
+        let app = top.iter().find(|i| i.name == "app").unwrap();
+        assert!(app.is_unit && app.unit == "work/app", "{app:#?}");
+        assert_eq!(state(&top, "notes.txt").0, ItemState::Synced);
+        assert_eq!(state(&top, "clients").0, ItemState::Synced);
+
+        let deeper = e.browse(Some(peer as &dyn PeerApi), Some("work"), "clients").unwrap();
+        assert!(deeper.iter().find(|i| i.name == "acme").unwrap().is_unit, "{deeper:#?}");
+
+        // Offline too: the local units are known.
+        let off = e.browse(None, Some("work"), "").unwrap();
+        assert!(off.iter().any(|i| i.name == "app" && i.is_unit), "{off:#?}");
+    }
+}
