@@ -1,0 +1,17 @@
+[package]
+name = "macsync-dupes"
+description = "Read-only duplicate finder of MacSync: same-named folders and files, which copy is current"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+macsync-core.workspace = true
+macsync-fs.workspace = true
+blake3.workspace = true
+globset.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+filetime.workspace = true

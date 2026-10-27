@@ -201,6 +201,11 @@ status: ## Show the synchronisation state
 log: ## Show the journal of the last hour
 	$(RS) log --since 1h
 
+.PHONY: dupes
+dupes: build ## Find same-named folders/files, show the current copy (read-only): DIR=… [DIR2=…] [ARGS=--all]
+	@if [ -z "$(DIR)" ]; then echo "usage: make dupes DIR=~/Dokumente [DIR2=~/Backup] [ARGS=--all]"; exit 1; fi
+	$(BIN) dupes "$(DIR)" $(if $(DIR2),"$(DIR2)") $(ARGS)
+
 .PHONY: service-install
 service-install: ## Install the LaunchAgent (see the Local Network note in the docs first)
 	$(RS) service install

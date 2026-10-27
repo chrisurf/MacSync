@@ -18,6 +18,17 @@ pub fn rfc3339(ms: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
 }
 
+/// Format milliseconds since the epoch as `YYYY-MM-DD HH:MM` in local time.
+pub fn local(ms: i64) -> String {
+    let secs = ms.div_euclid(1000) as libc::time_t;
+    // SAFETY: localtime_r only writes into the provided struct.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+        return rfc3339(ms);
+    }
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min)
+}
+
 fn civil(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);

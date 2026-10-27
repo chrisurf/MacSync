@@ -163,6 +163,24 @@ enum Cmd {
         #[arg(long)]
         to: Option<PathBuf>,
     },
+    /// Find same-named folders and files and show which copy is current
+    /// (read-only; needs no configuration).
+    Dupes {
+        /// One folder (duplicates inside it) or two folders (compare them).
+        #[arg(required = true, num_args = 1..=2)]
+        paths: Vec<PathBuf>,
+        /// Skip names matching this glob (repeatable), e.g. `--exclude '*.tmp'`.
+        #[arg(long)]
+        exclude: Vec<String>,
+        /// Also look into .git, node_modules, build/cache folders and Mac metadata.
+        #[arg(long)]
+        no_default_excludes: bool,
+        /// Show every pair, file and group (default: the largest ones).
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// LaunchAgent / systemd user service.
     Service {
         #[command(subcommand)]
@@ -222,6 +240,23 @@ fn main() {
     }
 }
 
+fn dupes(paths: &[PathBuf], exclude: Vec<String>, no_defaults: bool, all: bool, json: bool) -> Result<()> {
+    use std::io::IsTerminal;
+    let mut opts = macsync_dupes::Options { progress: !json && std::io::stderr().is_terminal(), ..Default::default() };
+    if no_defaults {
+        opts.exclude.clear();
+        opts.skip_caches = false;
+    }
+    opts.exclude.extend(exclude);
+    let r = macsync_dupes::scan(paths, &opts)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r)?);
+    } else {
+        output::dupes(&r, all);
+    }
+    Ok(())
+}
+
 fn config_path(cli: &Cli) -> PathBuf {
     cli.config.clone().unwrap_or_else(config::default_config_path)
 }
@@ -263,9 +298,12 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Discover { timeout_s, json } = cli.cmd {
         return discover(&path, timeout_s, json);
     }
+    if let Cmd::Dupes { paths, exclude, no_default_excludes, all, json } = cli.cmd {
+        return dupes(&paths, exclude, no_default_excludes, all, json);
+    }
     let cfg = Config::load(&path)?;
     match cli.cmd {
-        Cmd::Init { .. } | Cmd::Discover { .. } | Cmd::Migrate => unreachable!(),
+        Cmd::Init { .. } | Cmd::Discover { .. } | Cmd::Dupes { .. } | Cmd::Migrate => unreachable!(),
         Cmd::Pair { cmd } => pair(&cfg, cmd),
         Cmd::Peers => {
             let peers = open_store(&cfg)?.peers()?;

@@ -202,3 +202,177 @@ pub fn browse(v: &Value) {
         println!("{:<22} {}{dir}{paused}", state, i["name"].as_str().unwrap_or(""));
     }
 }
+
+/// `macsync dupes`: folder pairs, then same-named files.
+pub fn dupes(r: &macsync_dupes::Report, all: bool) {
+    use macsync_dupes::{GroupKind, Verdict};
+    let t = macsync_fs::time::local;
+    let limit = |n: usize| if all { usize::MAX } else { n };
+    let roots: Vec<String> = r.roots.iter().map(|p| p.display().to_string()).collect();
+    println!(
+        "{}: {} files, {} folders, {} · {} compared by content · {:.1} s",
+        roots.join(" ↔ "),
+        r.files,
+        r.dirs,
+        bytes(r.bytes),
+        r.hashed_files,
+        r.elapsed_ms as f64 / 1000.0
+    );
+    if r.dataless > 0 {
+        println!("{} iCloud files not downloaded: compared by size and date only", r.dataless);
+    }
+    for n in &r.notes {
+        println!("note: {n}");
+    }
+    if !r.skipped.is_empty() {
+        println!("{} paths not readable (see --json)", r.skipped.len());
+    }
+
+    println!("\nFOLDERS ({})", r.pairs.len());
+    if r.pairs.is_empty() {
+        println!("  no same-named folders with the same content");
+    }
+    for (k, p) in r.pairs.iter().take(limit(25)).enumerate() {
+        let (a, b) = (&p.a.display, &p.b.display);
+        println!();
+        match p.verdict {
+            Verdict::Identical => {
+                println!("{:>2}. IDENTICAL  {a}", k + 1);
+                println!("               {b}");
+                println!("    → same {} files: one copy can go (frees {})", p.identical, bytes(p.reclaimable_bytes));
+            }
+            Verdict::Newer => {
+                println!("{:>2}. NEWER      {a}   ← current", k + 1);
+                println!("    OLDER      {b}");
+                println!(
+                    "    → the current copy contains everything of the older one: it can go (frees {})",
+                    bytes(p.reclaimable_bytes)
+                );
+            }
+            Verdict::Diverged => {
+                println!("{:>2}. DIVERGED   {a}   ← changed more recently", k + 1);
+                println!("               {b}");
+                println!("    → both contain something the other lacks: merge first");
+            }
+        }
+        let mut facts = vec![format!("{} identical", p.identical + p.unverified)];
+        for (n, what) in [
+            (p.newer_a.len(), format!("newer in {a}")),
+            (p.newer_b.len(), format!("newer in {b}")),
+            (p.only_a.len(), format!("only in {a}")),
+            (p.only_b.len(), format!("only in {b}")),
+            (p.unclear.len(), "different, same date".to_string()),
+        ] {
+            if n > 0 {
+                facts.push(format!("{n} {what}"));
+            }
+        }
+        println!("    {}", facts.join(" · "));
+        // The copy event explains the history: when the copy was made, and
+        // which side was worked on afterwards.
+        for s in [&p.a, &p.b] {
+            if let Some(e) = s.copied {
+                println!(
+                    "    {}: {} of {} files created {} – copied or moved here",
+                    s.display,
+                    e.files,
+                    s.files,
+                    t(e.at_ms)
+                );
+            }
+        }
+        if let (Some(x), Some(y)) = (p.a.changed_since_copy, p.b.changed_since_copy) {
+            println!("    changed after that: {x} in {a}, {y} in {b}");
+        }
+        println!("    last change: {} in {a}, {} in {b}", t(p.a.newest_ms), t(p.b.newest_ms));
+        let max = limit(8);
+        // Dates in the order of the title: the newer side first.
+        let changed = |title: String, l: &[macsync_dupes::Changed], b_first: bool| {
+            if l.is_empty() {
+                return;
+            }
+            println!("    {title}:");
+            for c in l.iter().take(max) {
+                let (x, y) = if b_first { (c.mtime_b, c.mtime_a) } else { (c.mtime_a, c.mtime_b) };
+                println!("      {}  ({} vs {})", c.path, t(x), t(y));
+            }
+            if l.len() > max {
+                println!("      … {} more (--all)", l.len() - max);
+            }
+        };
+        let only = |title: String, l: &[macsync_dupes::Item]| {
+            if l.is_empty() {
+                return;
+            }
+            println!("    {title}:");
+            for i in l.iter().take(max) {
+                println!("      {}  ({}, {})", i.path, bytes(i.size), t(i.mtime_ms));
+            }
+            if l.len() > max {
+                println!("      … {} more (--all)", l.len() - max);
+            }
+        };
+        changed(format!("newer in {a} (vs {b})"), &p.newer_a, false);
+        changed(format!("newer in {b} (vs {a})"), &p.newer_b, true);
+        changed(format!("different, same date ({a} vs {b})"), &p.unclear, false);
+        only(format!("only in {a}"), &p.only_a);
+        only(format!("only in {b}"), &p.only_b);
+    }
+    if r.pairs.len() > limit(25) {
+        println!("\n… {} more folder pairs (--all)", r.pairs.len() - 25);
+    }
+
+    let dup = r.groups.iter().filter(|g| g.kind == GroupKind::Duplicates).count();
+    println!("\nFILES ({dup} with identical copies, {} with different versions)", r.groups.len() - dup);
+    if r.groups.is_empty() {
+        println!("  no other same-named files");
+    }
+    for g in r.groups.iter().take(limit(30)) {
+        println!();
+        match g.kind {
+            GroupKind::Duplicates => {
+                println!("{}  {} identical copies (frees {})", g.name, g.members.len(), bytes(g.reclaimable_bytes))
+            }
+            GroupKind::Versions => {
+                let n = g.members.iter().map(|m| m.content).max().unwrap_or(0);
+                println!("{}  {} copies, {n} versions", g.name, g.members.len())
+            }
+        }
+        for m in &g.members {
+            let mut tags = Vec::new();
+            if g.kind == GroupKind::Versions {
+                tags.push(format!("v{}", m.content));
+            }
+            if m.newest {
+                tags.push("newest".into());
+            }
+            if m.paired {
+                tags.push("in folder pair".into());
+            }
+            if m.dataless {
+                tags.push("iCloud".into());
+            }
+            println!("  {:<60} {:>9}  {}  {}", m.display, bytes(m.size), t(m.mtime_ms), tags.join(", "));
+        }
+    }
+    if r.groups.len() > limit(30) {
+        println!("\n… {} more file groups (--all)", r.groups.len() - 30);
+    }
+    println!("\nCan be freed without losing anything: {}", bytes(r.reclaimable_bytes));
+    println!("Nothing was changed. Check before deleting – and prefer the Trash.");
+}
+
+fn bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
+}

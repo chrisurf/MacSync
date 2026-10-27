@@ -88,6 +88,7 @@ macsync browse Notizen         # Dateien eines Ordners mit Zustand
 macsync conflicts              # offene Konflikte
 macsync log --since 1h         # was passiert ist und warum
 macsync-connect ~/MacSync      # zwei Macs ohne App verbinden
+macsync dupes ~/Dokumente      # doppelte Ordner/Dateien: welche Kopie ist aktuell? (nur lesend)
 ```
 
 Aus dem Quellcode bauen:
@@ -120,6 +121,7 @@ Alle Befehle: `make help` · Kurzanleitung: [MAKE-HELP.md](MAKE-HELP.md)
 | [MAKE-HELP.md](MAKE-HELP.md) | Kurzanleitung: verbinden, stoppen, Hilfe |
 | [docs/getting-started-mac.md](docs/getting-started-mac.md) | Test auf zwei Macs im eigenen WLAN – Schritt für Schritt |
 | [docs/sync-manager.md](docs/sync-manager.md) | Synchronisations-Manager, Fortschritt, Status-Symbol |
+| [docs/duplicates.md](docs/duplicates.md) | Duplikate finden: welche Kopie eines Ordners aktuell ist |
 | [docs/operations.md](docs/operations.md) | Konfiguration, Bedienung, Fehlerbehebung |
 | [docs/architecture.md](docs/architecture.md) | Crates, Datenmodell, Protokoll, Abläufe |
 | [docs/concept.md](docs/concept.md) | Originalkonzept |

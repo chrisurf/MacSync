@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 – Duplikate finden (in Arbeit)
+
+### Hinzugefügt
+- `macsync dupes <Ordner> [<Ordner2>]` (`make dupes DIR=…`): findet Ordner und
+  Dateien gleichen Namens und sagt, welche Kopie aktuell ist – `IDENTICAL`,
+  `NEWER` (die ältere kann weg) oder `DIVERGED` (erst zusammenführen), mit
+  Kopier-Zeitpunkt und Änderungen danach. Nur lesend; Inhalte per Hash, nur
+  wo Name und Grösse passen; iCloud-Platzhalter werden nicht geladen.
+  Ausgabe als Text oder `--json`. Siehe [docs/duplicates.md](docs/duplicates.md)
+
 ## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 
 ### Umbenennung RepoSync → MacSync (ADR-0011)
