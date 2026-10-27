@@ -1,7 +1,7 @@
 //! Pulling a unit from a peer: Merkle descent, decisions, Git coherence,
 //! staging with hash verification, pre-apply checks.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -33,6 +33,8 @@ pub enum Outcome {
     Deferred(String),
     Paused,
     Failed(String),
+    /// The name is another spelling of a local unit (case-insensitive volume).
+    Skipped(String),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -172,6 +174,12 @@ impl Engine {
         crate::validate_unit_name(unit)?;
         let root = self.cfg.root.clone();
         let mut rep = PullReport::new(unit, remote.root);
+        if !opts.dry_run {
+            if let Some(why) = self.respell_for_pull(unit, remote_names)? {
+                rep.outcome = Outcome::Skipped(why);
+                return Ok(rep);
+            }
+        }
         let row = self.store().unit(unit)?;
         if row.as_ref().is_some_and(|u| u.paused) {
             rep.outcome = Outcome::Paused;
@@ -263,6 +271,43 @@ impl Engine {
             n.into_iter().filter_map(|u| u.strip_prefix(&format!("{unit}/")).map(str::to_string)).collect()
         };
 
+        // 4. Spelling-only renames (case-insensitive volume): the peer renamed
+        //    `old` to `new`, which name the same file here. `new` takes over
+        //    the local entry of `old` and the file is renamed in place – never
+        //    deleted and fetched again, never reported as a case collision.
+        let mut respelled: HashMap<String, String> = HashMap::new();
+        let mut respell_sources: HashSet<String> = HashSet::new();
+        if self.case_insensitive {
+            for (new, old) in case_renames(&decisions, &local, &remote_entries, &nested) {
+                let o = local[&old].clone();
+                let mut s = o.clone();
+                s.entry.path = new.clone();
+                s.disk = respell_disk(&o.disk, &old, &new);
+                if let Some(t) = local.get(&new) {
+                    s.entry.vv = s.entry.vv.merge(&t.entry.vv);
+                }
+                // The peer's tombstone of `old` superseded our state of it
+                // (otherwise `old` would not be a rename source), so the
+                // peer's `new` is the successor of our entry, even though its
+                // version vector starts afresh under the new name.
+                let r = &remote_entries[&new];
+                let vv = s.entry.vv.merge(&r.vv);
+                let d = if !s.entry.same_state(r) {
+                    Decision::TakeRemote(vv)
+                } else if s.entry.vv == r.vv {
+                    Decision::Nothing
+                } else {
+                    Decision::AdoptVv(vv)
+                };
+                if let Some(slot) = decisions.iter_mut().find(|(p, _, _)| *p == new) {
+                    slot.2 = d;
+                }
+                local.insert(new.clone(), s);
+                respelled.insert(new, o.disk);
+                respell_sources.insert(old);
+            }
+        }
+
         let tx = crate::new_tx_id();
         let mut plan = Plan {
             tx: tx.clone(),
@@ -294,6 +339,34 @@ impl Engine {
             if nested.iter().any(|n| rpath::is_within(&path, n)) {
                 plan.actions.push(action(ActionKind::Skip, "belongs to a nested unit".into()));
                 continue;
+            }
+            if respell_sources.contains(&path) {
+                // Old spelling of a renamed entry: only its row becomes a tombstone.
+                if let (Decision::TakeRemote(vv), Some(l)) = (&d, l) {
+                    let tomb = Entry::tombstone(&path, l.entry.kind, vv.clone());
+                    plan.ops.push(db_op(&path, &l.disk, tomb, "renamed (spelling only)"));
+                }
+                continue;
+            }
+            if let Some(from) = respelled.get(&path) {
+                let s = l.expect("respelled entry is local");
+                let mut e = s.entry.clone();
+                if let Decision::AdoptVv(vv) | Decision::KeepLocalWins(vv) = &d {
+                    e.vv = vv.clone();
+                }
+                plan.ops.push(Op {
+                    path: path.clone(),
+                    disk: s.disk.clone(),
+                    kind: OpKind::Rename,
+                    phase: Phase::Dirs,
+                    rank: rank_of(class),
+                    entry: e,
+                    staged: None,
+                    source: Some(Source::Rename { from: from.clone() }),
+                    reason: "renamed (spelling only)".into(),
+                });
+                let label = format!("renamed from {}", rpath::file_name(from));
+                plan.actions.push(action(ActionKind::Rename, label));
             }
             let in_group = git_state_conflict && class.is_some_and(|c| c.is_git_state());
             if in_group && matches!(d, Decision::TakeRemote(_) | Decision::MergeReflog(_) | Decision::Conflict(_)) {
@@ -497,7 +570,9 @@ impl Engine {
         rep.writes = plan
             .ops
             .iter()
-            .filter(|o| matches!(o.kind, OpKind::Write | OpKind::Mkdir | OpKind::Symlink | OpKind::Meta))
+            .filter(|o| {
+                matches!(o.kind, OpKind::Write | OpKind::Mkdir | OpKind::Symlink | OpKind::Meta | OpKind::Rename)
+            })
             .count();
         rep.deletes = plan.ops.iter().filter(|o| o.kind == OpKind::Delete).count();
         rep.conflicts = plan.conflicts.len()
@@ -553,7 +628,7 @@ impl Engine {
                     add_need(*remote, *remote_size, p.clone(), &op.path);
                     reflog_remote.push((i, p));
                 }
-                Some(Source::File { .. }) | None => {}
+                Some(Source::File { .. }) | Some(Source::Rename { .. }) | None => {}
             }
         }
         for c in &plan.conflicts {
@@ -1062,4 +1137,57 @@ fn fetch_entries(
         }
     }
     Ok(out)
+}
+
+/// Pairs `(new, old)` where the peer renamed `old` to `new` and the two
+/// differ only in case or Unicode normalisation: the peer deleted `old`
+/// (which is live here) and created `new` (which is not live here).
+/// Ambiguous matches and entries of nested units are left alone.
+fn case_renames(
+    decisions: &[(String, Option<GitClass>, Decision)],
+    local: &HashMap<String, Stored>,
+    remote: &HashMap<String, Entry>,
+    nested: &[String],
+) -> Vec<(String, String)> {
+    let worktree = |c: &Option<GitClass>| c.is_none_or(|c| c == GitClass::Worktree);
+    let outside_nested = |p: &str| !nested.iter().any(|n| rpath::is_within(p, n));
+    let mut gone: HashMap<String, Vec<&str>> = HashMap::new();
+    for (p, c, d) in decisions {
+        let deleted_remotely = remote.get(p).is_some_and(|r| r.deleted);
+        let live_here = local.get(p).is_some_and(|l| !l.entry.deleted);
+        if matches!(d, Decision::TakeRemote(_)) && deleted_remotely && live_here && worktree(c) && outside_nested(p) {
+            gone.entry(rpath::case_key(p)).or_default().push(p);
+        }
+    }
+    let mut created: HashMap<String, Vec<&str>> = HashMap::new();
+    for (p, c, d) in decisions {
+        let live_remotely = remote.get(p).is_some_and(|r| !r.deleted);
+        let live_here = local.get(p).is_some_and(|l| !l.entry.deleted);
+        if matches!(d, Decision::TakeRemote(_)) && live_remotely && !live_here && worktree(c) && outside_nested(p) {
+            created.entry(rpath::case_key(p)).or_default().push(p);
+        }
+    }
+    let mut out = Vec::new();
+    for (k, news) in &created {
+        let Some(olds) = gone.get(k) else {
+            continue;
+        };
+        if let ([new], [old]) = (news.as_slice(), olds.as_slice()) {
+            if local[*old].entry.kind == remote[*new].kind {
+                out.push((new.to_string(), old.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Disk spelling of `new` given the disk spelling of `old`: components whose
+/// name changed take the new spelling, the others keep their disk spelling.
+fn respell_disk(old_disk: &str, old: &str, new: &str) -> String {
+    let (d, o, n): (Vec<&str>, Vec<&str>, Vec<&str>) =
+        (old_disk.split('/').collect(), old.split('/').collect(), new.split('/').collect());
+    if d.len() != n.len() || o.len() != n.len() {
+        return new.to_string();
+    }
+    (0..n.len()).map(|i| if o[i] == n[i] { d[i] } else { n[i] }).collect::<Vec<_>>().join("/")
 }

@@ -12,6 +12,7 @@
 mod apply;
 pub mod browse;
 mod capture;
+mod case;
 mod plan;
 mod pull;
 mod resolve;

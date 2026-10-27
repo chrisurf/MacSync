@@ -10,6 +10,23 @@
   wo Name und Grösse passen; iCloud-Platzhalter werden nicht geladen.
   Ausgabe als Text oder `--json`. Siehe [docs/duplicates.md](docs/duplicates.md)
 
+### Behoben
+- **Umbenennen nur der Gross-/Kleinschreibung** (`agent` → `Agent`) auf
+  APFS: kam beim anderen Mac als `case-collision`-Konflikt plus Löschen in
+  den Papierkorb an und wurde erst in einer weiteren Runde neu übertragen.
+  Jetzt wird die Datei bzw. der Ordner dort in einem Schritt umbenannt –
+  ohne Konflikt, ohne Löschen, ohne erneute Übertragung; Inhaltsänderungen
+  im selben Zug werden übernommen
+- **Hauptordner bzw. Repository umbenannt** (`obsidian` → `Obsidian`): Der
+  alte Name blieb als zweiter Ordner bestehen, der dieselben Dateien mit
+  eigenen Versionsvektoren erfasste – Hunderte Konflikte, im Manager
+  `obsidian` und `Obsidian` nebeneinander. Jetzt wird der Ordner
+  umbenannt (Historie bleibt), der andere Mac zieht die Schreibweise nach.
+  Solche Doppel aus älteren Versionen werden beim Start entfernt, ihre
+  Konflikte geschlossen; Dateien bleiben unberührt. Ist ein Ordner auf
+  beiden Macs unterschiedlich geschrieben, wartet MacSync, statt hin und
+  her umzubenennen – auf einem Mac angleichen genügt
+
 ## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 
 ### Umbenennung RepoSync → MacSync (ADR-0011)

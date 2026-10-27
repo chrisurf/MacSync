@@ -11,7 +11,7 @@ use macsync_core::{Kind, UnitKind};
 use macsync_fs::{meta, ops, scan};
 use macsync_store::{StatCache, Stored};
 
-use crate::plan::{Op, OpKind, Phase, Plan};
+use crate::plan::{Op, OpKind, Phase, Plan, Source};
 use crate::pull::RetryLater;
 use crate::Engine;
 
@@ -84,6 +84,20 @@ impl Engine {
         let e = &op.entry;
         match op.kind {
             OpKind::DbOnly => {}
+            OpKind::Rename => {
+                // Parents were renamed before (shallow first), so only the
+                // last component can still have the old spelling.
+                let Some(Source::Rename { from }) = &op.source else {
+                    return Ok(());
+                };
+                let old = macsync_core::path::file_name(from);
+                if Some(std::ffi::OsStr::new(old)) != target.file_name() {
+                    let src = target.with_file_name(old);
+                    if fs::symlink_metadata(&src).is_ok() {
+                        fs::rename(&src, &target)?;
+                    }
+                }
+            }
             OpKind::Mkdir => {
                 if fs::symlink_metadata(&target).is_ok_and(|m| !m.is_dir()) {
                     ops::move_to_trash(&target, trash, &trash_rel)?;
@@ -279,6 +293,7 @@ impl Engine {
                             let action = match op.kind {
                                 OpKind::Delete => "delete",
                                 OpKind::Meta => "meta",
+                                OpKind::Rename => "rename",
                                 _ => "write",
                             };
                             st.log(unit, action, &op.path, &op.reason, &op.entry.vv.display())?;

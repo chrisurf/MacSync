@@ -281,6 +281,11 @@ impl Store {
         Ok(())
     }
 
+    pub fn delete_kv(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM kv WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
     // ---- units ------------------------------------------------------------
 
     fn row_to_unit(r: &Row) -> rusqlite::Result<UnitRow> {
@@ -353,6 +358,38 @@ impl Store {
         self.conn.execute("DELETE FROM entries WHERE unit = ?1", [name])?;
         self.conn.execute("DELETE FROM units WHERE name = ?1", [name])?;
         Ok(())
+    }
+
+    /// Rename a unit and every unit nested below it (`old/…` → `new/…`),
+    /// keeping entries, version vectors and open conflicts. Used when only the
+    /// spelling of the directory changed (case or normalisation).
+    pub fn rename_unit(&self, old: &str, new: &str) -> Result<()> {
+        self.atomically(|st| {
+            for (table, col) in [("units", "name"), ("entries", "unit"), ("conflicts", "unit")] {
+                st.conn.execute(
+                    &format!(
+                        "UPDATE {table} SET {col} = ?2 || substr({col}, length(?1) + 1)
+                         WHERE {col} = ?1 OR substr({col}, 1, length(?1) + 1) = ?1 || '/'"
+                    ),
+                    params![old, new],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Drop a unit row that only duplicates another unit under a different
+    /// spelling. Its entries are forgotten without tombstones (the files
+    /// belong to the other unit) and its open conflicts are closed.
+    pub fn retire_unit(&self, name: &str) -> Result<usize> {
+        self.atomically(|st| {
+            let closed = st.conn.execute(
+                "UPDATE conflicts SET resolved_ms = ?2, resolution = 'superseded' WHERE unit = ?1 AND resolved_ms IS NULL",
+                params![name, now_ms()],
+            )?;
+            st.delete_unit(name)?;
+            Ok(closed)
+        })
     }
 
     // ---- entries ------------------------------------------------------------
@@ -763,6 +800,29 @@ mod tests {
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].id, id2);
         assert_eq!(s.conflict(id1).unwrap().unwrap().resolution.as_deref(), Some("superseded"));
+    }
+
+    #[test]
+    fn rename_and_retire_units() {
+        let s = Store::open_in_memory().unwrap();
+        for u in ["obsidian", "obsidian/verification", "obsidianx"] {
+            s.upsert_unit(u, UnitKind::Folder).unwrap();
+            s.put_entry(u, &stored("a.md", b"a")).unwrap();
+        }
+        let e = stored("a.md", b"a").entry;
+        s.add_conflict("obsidian/verification", "a.md", "case-collision", &[], &[e], "/c").unwrap();
+        s.rename_unit("obsidian", "Obsidian").unwrap();
+        let names: Vec<_> = s.units().unwrap().into_iter().map(|u| u.name).collect();
+        assert_eq!(names, vec!["Obsidian", "Obsidian/verification", "obsidianx"]);
+        assert_eq!(s.entries("Obsidian/verification").unwrap().len(), 1);
+        assert_eq!(s.open_conflict_count("Obsidian/verification").unwrap(), 1);
+        assert_eq!(s.retire_unit("Obsidian/verification").unwrap(), 1);
+        assert!(s.unit("Obsidian/verification").unwrap().is_none());
+        assert!(s.entries("Obsidian/verification").unwrap().is_empty());
+        assert_eq!(s.entries("obsidianx").unwrap().len(), 1, "prefix match is per component");
+        s.set_kv("k", "v").unwrap();
+        s.delete_kv("k").unwrap();
+        assert!(s.kv("k").unwrap().is_none());
     }
 
     #[test]
