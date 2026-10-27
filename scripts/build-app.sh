@@ -19,11 +19,14 @@ cargo build --release --locked -p macsync-cli --target "$TARGET"
 
 echo "==> MacSync (Swift)"
 swift build -c release --arch arm64 --package-path app
+# The output directory depends on the Swift version (.build/arm64-apple-macosx
+# or .build/out/Products): ask instead of guessing a stale copy.
+SWIFT_BIN=$(swift build -c release --arch arm64 --package-path app --show-bin-path)
 
 echo "==> $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
-cp app/.build/arm64-apple-macosx/release/MacSync "$APP/Contents/MacOS/MacSync"
+cp "$SWIFT_BIN/MacSync" "$APP/Contents/MacOS/MacSync"
 # Helpers: the place for bundled command line tools.
 cp "target/$TARGET/release/macsync" "$APP/Contents/Helpers/macsync"
 cp scripts/connect.sh "$APP/Contents/Resources/macsync-connect"

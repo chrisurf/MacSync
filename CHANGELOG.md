@@ -40,6 +40,9 @@
 - Echte Kollision der Schreibweise (`todo.md` und `TODO.md` unabhängig
   angelegt): „Version des anderen Macs übernehmen“ übernahm den Inhalt, aber
   nicht dessen Schreibweise. Jetzt wird auch umbenannt
+- `make app` packte mit neueren Swift-Versionen eine veraltete App ein
+  (Ausgabeordner `.build/out/Products` statt `.build/arm64-apple-macosx`);
+  der Pfad wird jetzt von `swift build --show-bin-path` erfragt
 
 ## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 
