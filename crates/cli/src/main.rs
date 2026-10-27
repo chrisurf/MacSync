@@ -126,9 +126,15 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Resolve a conflict.
+    /// Resolve conflicts (one or more ids, or --all).
     Resolve {
-        id: i64,
+        #[arg(required_unless_present = "all")]
+        ids: Vec<i64>,
+        /// All open conflicts (with --unit: of that unit and the units below it).
+        #[arg(long, conflicts_with = "ids")]
+        all: bool,
+        #[arg(long, requires = "all")]
+        unit: Option<String>,
         /// local | remote | both
         #[arg(long)]
         keep: String,
@@ -412,12 +418,41 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Resolve { id, keep } => {
-            let v = via_daemon(&cfg, IpcRequest::Resolve { id, choice: keep.clone() }, |n| {
-                let c = macsync_engine::Choice::parse(&keep).context("--keep must be local, remote or both")?;
-                Ok(json!(n.engine.resolve(id, c)?))
-            })?;
-            println!("{}", v.as_str().unwrap_or_default());
+        Cmd::Resolve { ids, all, unit, keep } => {
+            macsync_engine::Choice::parse(&keep).context("--keep must be local, remote or both")?;
+            let ids = if all {
+                let prefix = unit.as_ref().map(|u| format!("{u}/"));
+                open_store(&cfg)?
+                    .conflicts(false)?
+                    .into_iter()
+                    .filter(|c| match (&unit, &prefix) {
+                        (Some(u), Some(p)) => &c.unit == u || c.unit.starts_with(p.as_str()),
+                        _ => true,
+                    })
+                    .map(|c| c.id)
+                    .collect()
+            } else {
+                ids
+            };
+            if ids.is_empty() {
+                println!("no open conflicts");
+                return Ok(());
+            }
+            let req = IpcRequest::ResolveMany { ids: ids.clone(), choice: keep.clone() };
+            let v = via_daemon(&cfg, req, |n| ipc::resolve_many(&n.engine, &ids, &keep))?;
+            let mut failed = 0;
+            for r in v.as_array().into_iter().flatten() {
+                let msg = r["message"].as_str().unwrap_or_default();
+                if r["ok"].as_bool() == Some(true) {
+                    println!("{msg}");
+                } else {
+                    failed += 1;
+                    eprintln!("error: {msg}");
+                }
+            }
+            if failed > 0 {
+                bail!("{failed} of {} conflicts not resolved", ids.len());
+            }
             Ok(())
         }
         Cmd::Log { unit, since, limit, json } => {

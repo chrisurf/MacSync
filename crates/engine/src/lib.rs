@@ -21,7 +21,7 @@ mod serve;
 pub use capture::{ScanOptions, ScanReport};
 pub use plan::{ActionKind, PlannedAction};
 pub use pull::{Outcome, PullOptions, PullReport, RetryLater};
-pub use resolve::Choice;
+pub use resolve::{Choice, ConflictView, Side};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

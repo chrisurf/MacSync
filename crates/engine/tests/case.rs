@@ -264,3 +264,38 @@ fn diverging_spellings_never_rename_back_and_forth() {
     assert_eq!(read(&p.ra(), "Notes/a.md"), "a2");
     p.assert_identical();
 }
+
+/// Independently created `todo.md` / `TODO.md` is a real case collision.
+/// Taking the other Mac's version takes its spelling as well, and both Macs
+/// end up with one file.
+#[test]
+fn resolving_a_case_collision_takes_the_remote_spelling() {
+    let p = Pair::new();
+    if !case_insensitive(&p) {
+        return;
+    }
+    write(&p.ra(), "w/base.md", "x");
+    p.sync();
+    write(&p.ra(), "w/todo.md", "from A");
+    write(&p.rb(), "w/TODO.md", "from B");
+    p.sync();
+    let c = p.b.store().conflicts(false).unwrap();
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].class, "case-collision");
+
+    p.b.resolve(c[0].id, macsync_engine::Choice::Remote).unwrap();
+    p.sync();
+    p.sync();
+    for root in [p.ra(), p.rb()] {
+        let names: Vec<String> = fs::read_dir(root.join("w"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.to_lowercase() == "todo.md")
+            .collect();
+        assert_eq!(names, vec!["todo.md".to_string()], "in {}", root.display());
+        assert_eq!(read(&root, "w/todo.md"), "from A");
+    }
+    assert_eq!(open_conflicts(&p.a), 0);
+    assert_eq!(open_conflicts(&p.b), 0);
+}

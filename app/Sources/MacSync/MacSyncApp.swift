@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 @main
 struct MacSyncApp: App {
@@ -20,10 +21,11 @@ struct MacSyncApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var sigterm: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         // `pkill MacSync` (e.g. by the installer): stop the daemon cleanly.
         signal(SIGTERM, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
@@ -35,6 +37,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated { AppModel.shared.daemon.stop() }
+    }
+
+    /// Clicking the conflict notification opens the conflict view.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.identifier == "conflicts" {
+            DispatchQueue.main.async { MainActor.assumeIsolated { ConflictsWindow.shared.show() } }
+        }
+        completionHandler()
     }
 }
 
@@ -70,6 +81,9 @@ struct MenuContent: View {
         if model.isConfigured {
             Button("Synchronisations-Manager …") { ManagerWindow.shared.show() }
                 .keyboardShortcut("m")
+            let n = model.status?.conflicts ?? 0
+            Button(n > 0 ? "Konflikte (\(n)) …" : "Konflikte …") { ConflictsWindow.shared.show() }
+                .keyboardShortcut("k")
         }
         Divider()
         Button("Über MacSync") { About.show() }

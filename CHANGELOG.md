@@ -9,6 +9,17 @@
   Kopier-Zeitpunkt und Änderungen danach. Nur lesend; Inhalte per Hash, nur
   wo Name und Grösse passen; iCloud-Platzhalter werden nicht geladen.
   Ausgabe als Text oder `--json`. Siehe [docs/duplicates.md](docs/duplicates.md)
+- **Konfliktansicht** (Menü → Konflikte …, ⌘K; im Manager über die rote
+  Konflikt-Schaltfläche oder „Konflikt ansehen …“; Klick auf die Mitteilung;
+  `open -a MacSync --args --conflicts`): alle offenen Konflikte über alle
+  Ordner in einer Liste, nach Ordner und Art filterbar, mit Erklärung in
+  Klartext und beiden Fassungen nebeneinander (Größe, Änderungsdatum, „neuer“,
+  Öffnen, Im Finder zeigen, Vergleichen mit FileMerge). Lösen pro Konflikt
+  oder gesammelt für eine Auswahl (⌘A); „Erledigt“ zeigt die Historie.
+  Siehe [docs/sync-manager.md](docs/sync-manager.md#7-konflikte)
+- `macsync resolve` nimmt mehrere IDs oder `--all [--unit <Ordner>]`; jede
+  Einheit wird dabei nur einmal erfasst statt einmal pro Konflikt. IPC
+  `conflicts` und `resolve-many`
 
 ### Behoben
 - **Umbenennen nur der Gross-/Kleinschreibung** (`agent` → `Agent`) auf
@@ -26,6 +37,9 @@
   Konflikte geschlossen; Dateien bleiben unberührt. Ist ein Ordner auf
   beiden Macs unterschiedlich geschrieben, wartet MacSync, statt hin und
   her umzubenennen – auf einem Mac angleichen genügt
+- Echte Kollision der Schreibweise (`todo.md` und `TODO.md` unabhängig
+  angelegt): „Version des anderen Macs übernehmen“ übernahm den Inhalt, aber
+  nicht dessen Schreibweise. Jetzt wird auch umbenannt
 
 ## 0.3.0 – MacSync, Synchronisations-Manager (2026-10-26)
 

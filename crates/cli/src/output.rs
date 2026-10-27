@@ -132,7 +132,8 @@ pub fn conflicts(rows: &[ConflictRow]) {
         }
         println!("       stored: {}", c.stored);
     }
-    println!("\nresolve with: macsync resolve <id> --keep local|remote|both");
+    println!("\nresolve with: macsync resolve <id>... --keep local|remote|both");
+    println!("          or: macsync resolve --all [--unit <unit>] --keep local|remote");
 }
 
 pub fn journal(rows: &[LogRow]) {

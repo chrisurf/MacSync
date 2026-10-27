@@ -167,6 +167,10 @@ final class AppModel: ObservableObject {
             let path = args.indices.contains(i + 1) && !args[i + 1].hasPrefix("-") ? args[i + 1] : nil
             ManagerWindow.shared.show(path: path)
         }
+        // `open -a MacSync --args --conflicts [id]` opens the conflict view.
+        if isConfigured, let i = args.firstIndex(of: "--conflicts") {
+            ConflictsWindow.shared.show(select: args.indices.contains(i + 1) ? Int64(args[i + 1]) : nil)
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             Task { @MainActor in await AppModel.shared.refresh() }
         }
@@ -366,7 +370,8 @@ final class AppModel: ObservableObject {
         guard n > lastConflicts, UserDefaults.standard.object(forKey: "notifyConflicts") as? Bool ?? true else { return }
         let content = UNMutableNotificationContent()
         content.title = "MacSync: Konflikt"
-        content.body = n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert."
+        content.body = (n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert.")
+            + " Klicken zum Anzeigen und Lösen."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "conflicts", content: content, trigger: nil))
     }
 
