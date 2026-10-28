@@ -1,6 +1,6 @@
 # Synchronisations-Manager, Fortschritt und Status-Symbol
 
-Stand: umgesetzt in Version 0.3.0.
+Stand: umgesetzt in Version 0.3.0, Manager als Dateimanager seit 0.5.0.
 
 ## 1. Anforderungen
 
@@ -51,6 +51,14 @@ Ordner über seinen Inhalt) und pro Eintrag einen **Versionsvektor**.
 Damit ist auch bei 100 000 Dateien jede Ansicht schnell: es wird nur das
 geöffnete Verzeichnis verglichen.
 
+**Seit 0.5.0 wartet `browse` nie auf das Netz.** Anfrage
+`{"cmd":"browse","path":"chrisurf/macmailbox","local":true}`: `path` ist
+relativ zum Sync-Ordner (der Daemon ermittelt die Einheit selbst, auch
+verschachtelte Repositories). `local: true` liefert nur den Stand dieses
+Macs (schnell); `local: false` zusätzlich den des anderen Macs – aber nur
+über eine bereits offene Verbindung, nie mit Verbindungsaufbau. Die Antwort
+sagt mit `remote`, ob der Stand des anderen Macs enthalten ist.
+
 ## 4. Fortschritt und Restzeit
 
 - Der empfangende Mac kennt vor dem Übertragen die vollständige Liste der
@@ -62,6 +70,9 @@ geöffnete Verzeichnis verglichen.
   Rate** (gleitender Mittelwert) und die **Restzeit** = offene Bytes / Rate.
 - Der sendende Mac zählt die ausgelieferten Bytes (`served_bytes`) und zeigt
   „Sende an *Mac A* · 12 MB/s“.
+- Kommt 10 s lang kein Byte an, zeigen Menü und Manager „Übertragung
+  angehalten – anderer Mac antwortet nicht“ statt einer Restzeit (eine
+  abklingende Rate ergäbe sonst Werte wie „noch ca. 29'055 h“).
 - Anzeige: Menü („Empfange 42 % · noch ca. 2 Min.“) und Kopf des Managers
   (Fortschrittsbalken, „3 von 120 Dateien · 120 MB von 290 MB · 25 MB/s ·
   notes/video.mov“).
@@ -93,13 +104,32 @@ geöffnete Verzeichnis verglichen.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Verzeichnisbaum links** (wie im Finder): Ordner aufklappen, anklicken →
+- **Dateimanager zuerst, Status danach.** Die Liste kommt direkt vom
+  Dateisystem (Ordner zuerst, dann Dateien, mit Größe und Änderungsdatum)
+  und steht sofort – auch ohne laufenden Daemon und ohne Verbindung. Gezeigt
+  wird alles außer `.macsync`, `.DS_Store`, `Icon\r` und den
+  Systemordnern, die auch der Scanner überspringt (also z. B. `.claude`).
+  Danach füllt der Status die Spalten in zwei Schritten: erst dieser Mac
+  (`local: true`, Zeitlimit 5 s), dann der andere Mac (Zeitlimit 20 s).
+  Bis dahin steht „Status wird geladen …“ in der Spalte. Was der Daemon
+  kennt, aber nicht auf der Platte liegt (nur auf dem anderen Mac, hier
+  gelöscht), erscheint ausgegraut am Ende.
+- **Hinweise statt Fehlerbild:** Läuft die Synchronisation nicht, bleibt die
+  Liste benutzbar („Synchronisation läuft nicht“, Status „–“). Ist der andere
+  Mac nicht verbunden: Spalte „unbekannt“, Hinweis „… nicht erreichbar“.
+  Fehler (z. B. „Der Daemon antwortet nicht (Zeitüberschreitung)“) stehen in
+  einer schmalen Leiste über der Liste und ersetzen sie nie. Die Fußzeile
+  sagt „alles synchron“ nur, wenn der Stand des anderen Macs geladen ist.
+- Alle 3 s werden Platte und Status neu gelesen, ohne Flackern; Auswahl und
+  Scrollposition bleiben, eine laufende Anfrage wird nicht doppelt gestartet.
+- **Verzeichnisbaum links** (wie im Finder, ebenfalls vom Dateisystem): Ordner aufklappen, anklicken →
   rechts der Inhalt. Ein-/ausblenden mit dem Seitenleisten-Knopf oder ⌃⌘S,
   Breite per Trennlinie verstellbar (die Einstellung bleibt erhalten).
   Ordner mit offenen Änderungen tragen einen Punkt (blau = Änderungen,
   orange = Löschung, rot = Konflikt). Der Baum lädt jeden Ordner erst beim
   Aufklappen – auch große Verzeichnisse bleiben schnell.
-- Doppelklick: Ordner öffnen bzw. Datei öffnen; Pfadleiste oben zum Zurückspringen.
+- Doppelklick, ↩ oder ⌘↓: Ordner öffnen bzw. Datei mit dem Standardprogramm
+  öffnen; ⌘↑ oder Pfadleiste oben zum Zurückspringen.
 - Filter **Nicht synchron** zeigt nur, was noch offen ist.
 - Kontextmenü / Fußleiste pro Auswahl:
   - **Jetzt synchronisieren** – erfasst sofort und holt die betroffenen Einheiten.
@@ -107,7 +137,7 @@ geöffnete Verzeichnis verglichen.
   - **Konflikt ansehen …** – öffnet die Konfliktansicht (Abschnitt 7) mit
     diesem Konflikt.
   - **Konflikt lösen** – Meine Version / Version des anderen Macs / Beide behalten.
-  - **Im Finder zeigen**, **Öffnen**.
+  - **Öffnen**, **Im Finder zeigen**, **Pfad kopieren**.
   - **In den Papierkorb …** – mit Rückfrage; die Löschung wird auf dem anderen
     Mac nachgezogen (dort 14 Tage im MacSync-Papierkorb).
 

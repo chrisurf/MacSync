@@ -43,12 +43,18 @@ pub enum IpcRequest {
         unit: Option<String>,
     },
     Rescan,
-    /// One directory with the state of every item on both Macs.
+    /// One directory with the state of every item on both Macs. `path`
+    /// (relative to the sync root) replaces `unit`/`dir`. `local`: only this
+    /// Mac's state, never the network (fast, for the first paint).
     Browse {
         #[serde(default)]
         unit: Option<String>,
         #[serde(default)]
         dir: String,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        local: bool,
     },
     /// Conflicts with both versions side by side (the app's conflict view).
     Conflicts {
@@ -178,7 +184,13 @@ fn dispatch(req: IpcRequest, node: &Node, shared: &Shared) -> Result<Value> {
             Daemon::kick(shared);
             serde_json::to_value(r)?
         }
-        IpcRequest::Browse { unit, dir } => Daemon::ipc_browse(node, shared, unit.as_deref(), &dir)?,
+        IpcRequest::Browse { unit, dir, path, local } => {
+            let (unit, dir) = match path {
+                Some(p) => engine.split_path(&p)?,
+                None => (unit, dir),
+            };
+            Daemon::ipc_browse(node, shared, unit.as_deref(), &dir, local)?
+        }
         IpcRequest::Conflicts { all } => {
             let name = engine.store().peers()?.into_iter().last().map(|r| r.name);
             json!({ "peer": name, "conflicts": engine.conflict_views(all)? })

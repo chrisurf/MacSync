@@ -2,7 +2,27 @@
 
 ## 0.5.0 (in Arbeit)
 
+### Geändert
+- Synchronisations-Manager arbeitet wie ein Dateimanager: Liste und Baum
+  kommen direkt von der Platte und stehen sofort – auch ohne laufende
+  Synchronisation oder Verbindung, mit allen Ordnern und Dateien (auch
+  neuen, noch nicht erfassten). Der Status folgt in zwei Schritten (erst
+  dieser Mac, dann der andere) mit „Status wird geladen …“; nur dort
+  Vorhandenes erscheint ausgegraut. Hinweise und Fehler in einer schmalen
+  Leiste statt anstelle der Liste. Doppelklick/↩/⌘↓ öffnet Dateien mit dem
+  Standardprogramm, ⌘↑ geht nach oben, neu: „Pfad kopieren“
+- IPC `browse` mit `path` (relativ zum Sync-Ordner) und `local`; wartet nie
+  auf den anderen Mac
+
 ### Behoben
+- Synchronisations-Manager „hing“ und zeigte „0 Einträge · alles synchron“
+  mit „Die Daten konnten nicht geöffnet werden, da sie nicht das korrekte
+  Format haben“: eine Zeitüberschreitung der Daemon-Anfrage wurde als
+  kaputtes JSON gemeldet und ersetzte die Liste. Jetzt: „Der Daemon
+  antwortet nicht (Zeitüberschreitung)“, die Liste bleibt
+- Fortschritt: steht die Übertragung, heisst es „Übertragung angehalten –
+  anderer Mac antwortet nicht“ statt einer absurden Restzeit („noch ca.
+  29'055h 5min“)
 - Synchronisations-Manager: Git-Repositories direkt in einem Ordner (z. B.
   `chrisurf/MacSync`) fehlten in der Liste und im Baum; zu sehen waren nur
   die losen Dateien daneben, eine Ebene tiefer stimmte es. Synchronisiert

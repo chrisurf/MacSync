@@ -73,15 +73,21 @@ struct Activity: Equatable {
     var bytesTotal: Int64 = 0
     /// Bytes per second (smoothed).
     var rate: Double = 0
+    /// No byte arrived for a while: the other Mac does not answer.
+    var stalled = false
 
     var fraction: Double? {
         bytesTotal > 0 ? min(1, Double(bytesDone) / Double(bytesTotal)) : (filesTotal > 0 ? Double(filesDone) / Double(filesTotal) : nil)
     }
 
     var remaining: TimeInterval? {
-        guard direction == .receiving, rate > 0, bytesTotal > bytesDone else { return nil }
-        return Double(bytesTotal - bytesDone) / rate
+        guard direction == .receiving, !stalled, rate > 0, bytesTotal > bytesDone else { return nil }
+        let t = Double(bytesTotal - bytesDone) / rate
+        // A decaying rate yields absurd estimates ("noch ca. 29'055h").
+        return t < 100 * 3600 ? t : nil
     }
+
+    static let stalledText = "Übertragung angehalten – anderer Mac antwortet nicht"
 
     static func bytes(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
 
@@ -101,6 +107,7 @@ struct Activity: Equatable {
         case .receiving:
             var s = "Empfange"
             if let f = fraction { s += " \(Int(f * 100)) %" }
+            if stalled { return s + " · " + Activity.stalledText }
             if let r = remaining { s += " · noch ca. \(Activity.duration(r))" }
             return s
         }
@@ -136,6 +143,8 @@ final class AppModel: ObservableObject {
     private var spinTimer: Timer?
     private var lastSample: (bytes: Int64, served: Int64, at: Date)?
     private var rate: Double = 0
+    /// Last time the received byte count grew (stall detection).
+    private var progressAt: Date?
     @Published var lastError: String?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -232,8 +241,11 @@ final class AppModel: ObservableObject {
                 rate = elapsed > 0 ? Double(t.bytesDone) / elapsed : 0
             }
             a.rate = rate
+            if lastSample == nil || received != lastSample?.bytes { progressAt = now }
+            a.stalled = now.timeIntervalSince(progressAt ?? now) >= 10
             return a
         }
+        progressAt = nil
         // Sending: the other Mac fetched data from us within the last 3 s.
         if let ms = s?.servedMs, ms > 0, now.timeIntervalSince1970 - Double(ms) / 1000 < 3 {
             var a = Activity(direction: .sending)

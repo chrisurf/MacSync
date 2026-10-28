@@ -696,8 +696,17 @@ impl Daemon {
         Ok(v)
     }
 
-    pub(crate) fn ipc_browse(node: &Node, shared: &Shared, unit: Option<&str>, dir: &str) -> Result<Value> {
-        let p = peer(node, shared);
+    /// Never connects: the IPC answer must not wait for discovery or a
+    /// connect timeout. Only an existing connection is asked (the sync loop
+    /// keeps it up); `local` skips even that.
+    pub(crate) fn ipc_browse(
+        node: &Node,
+        shared: &Shared,
+        unit: Option<&str>,
+        dir: &str,
+        local: bool,
+    ) -> Result<Value> {
+        let p = if local { None } else { shared.peer.lock().unwrap_or_else(|e| e.into_inner()).clone() };
         let items = match &p {
             Some(peer_conn) => match node.engine.browse(Some(peer_conn.as_ref() as &dyn PeerApi), unit, dir) {
                 Ok(items) => items,
@@ -709,7 +718,16 @@ impl Daemon {
             None => node.engine.browse(None, unit, dir)?,
         };
         let name = node.engine.store().peers()?.into_iter().last().map(|r| r.name);
-        Ok(json!({ "online": p.is_some(), "peer": name, "items": items }))
+        let online = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner()).online;
+        Ok(json!({
+            "online": online,
+            "peer": name,
+            "unit": unit,
+            "dir": dir,
+            // Whether the items carry the other Mac's state.
+            "remote": p.is_some(),
+            "items": items,
+        }))
     }
 
     pub(crate) fn ipc_sync(node: &Node, shared: &Shared, units: Option<Vec<String>>, dry_run: bool) -> Result<Value> {

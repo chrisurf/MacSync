@@ -3,11 +3,17 @@ import Foundation
 enum IPCError: LocalizedError {
     case daemon(String)
     case protocolError(String)
+    /// No complete answer within the timeout.
+    case timeout
+    /// The daemon closed the connection before the answer was complete.
+    case incomplete
 
     var errorDescription: String? {
         switch self {
         case .daemon(let m): return m
         case .protocolError(let m): return "Ungültige Antwort: \(m)"
+        case .timeout: return "Der Daemon antwortet nicht (Zeitüberschreitung)."
+        case .incomplete: return "Der Daemon hat die Verbindung vor dem Ende der Antwort geschlossen."
         }
     }
 }
@@ -32,9 +38,17 @@ enum IPC {
         guard sent == data.count else { throw IPCError.protocolError("write failed") }
         var response = Data()
         var buf = [UInt8](repeating: 0, count: 65536)
+        // SO_RCVTIMEO: read returns -1 with EAGAIN once the timeout is over.
+        // A partial answer must never reach the JSON parser (misleading
+        // "nicht das korrekte Format" error).
         while true {
             let n = read(fd, &buf, buf.count)
-            if n <= 0 { break }
+            if n < 0 {
+                if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK { throw IPCError.timeout }
+                throw IPCError.incomplete
+            }
+            if n == 0 { throw IPCError.incomplete }
             response.append(buf, count: n)
             if buf[n - 1] == 0x0A { break }
         }

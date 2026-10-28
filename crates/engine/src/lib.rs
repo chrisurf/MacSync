@@ -278,6 +278,29 @@ impl Engine {
         Ok(t.root())
     }
 
+    /// Split a path relative to the sync root into its unit (the longest
+    /// known unit containing it, nested repositories included) and the
+    /// directory below that unit. `None`: the root itself.
+    pub fn split_path(&self, path: &str) -> Result<(Option<String>, String)> {
+        let path = path.trim_matches('/');
+        if path.is_empty() || path == "." {
+            return Ok((None, String::new()));
+        }
+        let mut units: Vec<String> = self.store().units()?.into_iter().map(|u| u.name).collect();
+        units.sort_by_key(|u| std::cmp::Reverse(u.len()));
+        for u in units {
+            if path == u {
+                return Ok((Some(u), String::new()));
+            }
+            if let Some(rest) = path.strip_prefix(&format!("{u}/")) {
+                return Ok((Some(u), rest.to_string()));
+            }
+        }
+        // Not a unit here (yet): the first component is the unit.
+        let (u, rest) = path.split_once('/').unwrap_or((path, ""));
+        Ok((Some(u.to_string()), rest.to_string()))
+    }
+
     /// Local roots of all known units.
     pub fn local_roots(&self) -> Result<Vec<UnitRoot>> {
         let units = self.store().units()?;

@@ -122,3 +122,19 @@ fn nested_repositories_are_listed_in_their_folder() {
         assert!(off.iter().any(|i| i.name == "app" && i.is_unit), "{off:#?}");
     }
 }
+
+#[test]
+fn paths_split_into_the_innermost_unit() {
+    let p = Pair::new();
+    fs::create_dir_all(p.ra().join("work/app/.git/refs/heads")).unwrap();
+    fs::write(p.ra().join("work/app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::create_dir_all(p.ra().join("work/app/src")).unwrap();
+    fs::write(p.ra().join("work/app/src/main.rs"), "fn main() {}").unwrap();
+    p.a.scan_all(false).unwrap();
+    let s = |path: &str| p.a.split_path(path).unwrap();
+    assert_eq!(s(""), (None, String::new()));
+    assert_eq!(s("work"), (Some("work".into()), String::new()));
+    assert_eq!(s("work/app"), (Some("work/app".into()), String::new()));
+    assert_eq!(s("/work/app/src/"), (Some("work/app".into()), "src".into()));
+    assert_eq!(s("new/sub"), (Some("new".into()), "sub".into()), "not scanned yet");
+}

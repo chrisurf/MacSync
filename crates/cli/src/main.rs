@@ -482,7 +482,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Browse { dir, json } => {
             let (unit, sub) = split_root_path(&cfg, &dir)?;
-            let req = IpcRequest::Browse { unit: unit.clone(), dir: sub.clone() };
+            let req = IpcRequest::Browse { unit: unit.clone(), dir: sub.clone(), path: None, local: false };
             let v = via_daemon(&cfg, req, |n| {
                 let p = n.connect_peer().ok();
                 let items =
