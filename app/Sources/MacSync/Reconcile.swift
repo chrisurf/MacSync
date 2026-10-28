@@ -333,6 +333,16 @@ enum PlanOp: String, Sendable {
     }
 }
 
+/// The two checkbox columns of the tree; the plan stays the source of truth.
+enum PlanColumn: Sendable {
+    case copy, move
+
+    var title: String { self == .copy ? "Kopieren" : "Verschieben" }
+}
+
+/// State of a column header: none, some or all visible rows checked.
+enum CheckState { case none, mixed, all }
+
 struct PlanItem: Sendable {
     let op: PlanOp
     let dir: Bool
@@ -928,6 +938,82 @@ final class ReconcileModel: ObservableObject {
         return PlanItem(op: op, dir: false, to: to, bytes: n.oldBytes ?? 0)
     }
 
+    // MARK: checkbox columns
+
+    /// What a checkbox in `column` plans for `n`, nil without one: „Kopieren“
+    /// takes over the ALT version where NEU has the file too.
+    func op(_ column: PlanColumn, for n: RNode) -> PlanOp? {
+        let ops = ops(for: n)
+        switch column {
+        case .copy: return ops.contains(.copy) ? .copy : ops.contains(.replace) ? .replace : nil
+        case .move: return ops.contains(.move) ? .move : nil
+        }
+    }
+
+    func isChecked(_ column: PlanColumn, _ n: RNode) -> Bool {
+        guard let p = plan[n.id] else { return false }
+        return column == .copy ? p.op == .copy || p.op == .replace : p.op == .move
+    }
+
+    /// Inside a folder checked in `column`: shown as a grey check.
+    func coveredBy(_ column: PlanColumn, _ n: RNode) -> Bool {
+        var p = n.parent
+        while let i = p {
+            if let it = plan[i], it.dir { return column == .copy ? it.op == .copy : it.op == .move }
+            p = nodes[i].parent
+        }
+        return false
+    }
+
+    /// Checking one column unchecks the other; checking it again removes the action.
+    func toggle(_ column: PlanColumn, _ n: RNode) {
+        if isChecked(column, n) {
+            unplan([n])
+        } else if let op = op(column, for: n) {
+            setPlan(op, [n])
+        }
+    }
+
+    /// The visible rows a header checkbox acts on (a closed folder is one row).
+    private func eligible(_ column: PlanColumn) -> [RNode] {
+        rows.filter { isChecked(column, $0) || op(column, for: $0) != nil }
+    }
+
+    func headerState(_ column: PlanColumn) -> CheckState {
+        let rows = eligible(column)
+        let on = rows.filter { isChecked(column, $0) }.count
+        return on == 0 ? .none : on == rows.count ? .all : .mixed
+    }
+
+    /// None or some → all visible rows; all → none.
+    func toggleAll(_ column: PlanColumn) {
+        let rows = eligible(column)
+        if headerState(column) == .all {
+            unplan(rows)
+        } else {
+            check(column, rows)
+        }
+    }
+
+    /// Space: „Kopieren“ for the selected rows, off when all are on.
+    func toggleCopySelected() {
+        let ns = selected.filter { isChecked(.copy, $0) || op(.copy, for: $0) != nil }
+        guard !ns.isEmpty else { return }
+        if ns.allSatisfy({ isChecked(.copy, $0) }) { unplan(ns) } else { check(.copy, ns) }
+    }
+
+    private func check(_ column: PlanColumn, _ ns: [RNode]) {
+        guard !applying else { return }
+        var p = plan
+        // In tree order: a folder checked first covers its files.
+        for n in ns.sorted(by: { $0.id < $1.id }) where !covered(n, in: p) {
+            guard let op = op(column, for: n) else { continue }
+            if n.isDir { removeBelow(n.id, from: &p) }
+            p[n.id] = item(op, n)
+        }
+        plan = p
+    }
+
     func setPlan(_ op: PlanOp, _ targets: [RNode]) {
         guard !applying else { return }
         var p = plan
@@ -1421,6 +1507,16 @@ final class ReconcileWindow: NSObject, NSWindowDelegate {
                     // Select once the table shows the new rows.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         if let p = env["MACSYNC_RECONCILE_SELECT"] { m?.select(path: p) }
+                        // Checkboxes: "copy:PATH,move:PATH,all:copy" (comma separated).
+                        for c in (env["MACSYNC_RECONCILE_CHECK"] ?? "").split(separator: ",") {
+                            let parts = c.split(separator: ":", maxSplits: 1).map(String.init)
+                            guard let m, parts.count == 2 else { continue }
+                            if parts[0] == "all" {
+                                m.toggleAll(parts[1] == "move" ? .move : .copy)
+                            } else if let n = m.nodes.first(where: { $0.path == parts[1] }) {
+                                m.toggle(parts[0] == "move" ? .move : .copy, n)
+                            }
+                        }
                         // Paths (comma separated) planned for „In ALT löschen“.
                         for p in (env["MACSYNC_RECONCILE_TRASHPLAN"] ?? "").split(separator: ",") {
                             if let m, let n = m.nodes.first(where: { $0.path == p }) { m.setPlan(.trashOld, [n]) }

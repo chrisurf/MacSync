@@ -86,6 +86,46 @@ struct ConfigFile {
         text = lines.joined(separator: "\n")
     }
 
+    /// Integer `key` in the table `[section]`.
+    func int(_ key: String, in section: String) -> Int? {
+        var inside = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let l = line.trimmingCharacters(in: .whitespaces)
+            if l.hasPrefix("[") { inside = l == "[\(section)]"; continue }
+            guard inside, let eq = l.firstIndex(of: "="), l[..<eq].trimmingCharacters(in: .whitespaces) == key else { continue }
+            let v = l[l.index(after: eq)...].split(separator: "#").first ?? ""
+            return Int(v.trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
+
+    /// Set the integer `key` in `[section]`, adding the line (or the table) if missing.
+    mutating func set(_ key: String, _ value: Int, in section: String) {
+        let newLine = "\(key) = \(value)"
+        var lines = text.components(separatedBy: "\n")
+        var header: Int?
+        for (i, line) in lines.enumerated() {
+            let l = line.trimmingCharacters(in: .whitespaces)
+            if l.hasPrefix("[") {
+                if header != nil { break } // end of our table
+                if l == "[\(section)]" { header = i }
+                continue
+            }
+            guard header != nil, let eq = l.firstIndex(of: "="),
+                  l[..<eq].trimmingCharacters(in: .whitespaces) == key else { continue }
+            lines[i] = newLine
+            text = lines.joined(separator: "\n")
+            return
+        }
+        if let h = header {
+            lines.insert(newLine, at: h + 1)
+        } else {
+            if lines.last?.isEmpty == false { lines.append("") }
+            lines.append(contentsOf: ["[\(section)]", newLine])
+        }
+        text = lines.joined(separator: "\n")
+    }
+
     func save() throws {
         try text.write(to: Paths.config, atomically: true, encoding: .utf8)
     }

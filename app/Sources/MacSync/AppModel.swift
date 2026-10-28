@@ -146,6 +146,10 @@ final class AppModel: ObservableObject {
     /// Last time the received byte count grew (stall detection).
     private var progressAt: Date?
     @Published var lastError: String?
+    /// Version of the bundled helper (what a (re)started daemon runs) and of
+    /// the running daemon, as `macsync --version` prints them.
+    @Published private(set) var helperVersion: String?
+    @Published private(set) var daemonVersion: String?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     let daemon = DaemonProcess()
@@ -156,6 +160,7 @@ final class AppModel: ObservableObject {
     var config: ConfigFile? { ConfigFile.load() }
 
     func launch() {
+        Task { helperVersion = await Task.detached { Version.helper(Paths.binary) }.value }
         CLI.migrate()
         if isConfigured {
             daemon.start()
@@ -217,6 +222,7 @@ final class AppModel: ObservableObject {
             s = try? Self.decoder.decode(Status.self, from: Data(out.utf8))
         }
         status = s
+        daemonVersion = fromDaemon != nil ? s?.version : nil
         activity = fromDaemon != nil ? measure(s) : nil
         state = Self.state(s, daemonRunning: fromDaemon != nil, starting: running, exit: daemon.lastExit)
         if state == .inSync || state == .offline, activity != nil { state = .syncing }
@@ -314,6 +320,40 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// "MacSync 0.5.0 (0309498)".
+    var versionLine: String {
+        "MacSync " + (helperVersion.map(Version.short) ?? Version.bundle() ?? "")
+    }
+
+    /// The running daemon is another build than the app's helper.
+    var daemonOutdated: String? {
+        guard let d = daemonVersion, let h = helperVersion, d != h else { return nil }
+        let (old, new) = Version.pair(d, h)
+        return "Synchronisation läuft noch mit \(old) (App \(new)) – neu starten"
+    }
+
+    /// The other Mac runs another build.
+    var peerOutdated: String? {
+        guard let p = status?.peerVersion, let d = daemonVersion, p != d else { return nil }
+        let (there, here) = Version.pair(p, d)
+        return "\(status?.peer?.name ?? "Der andere Mac") hat \(there), dieser Mac \(here) – bitte dort aktualisieren"
+    }
+
+    /// Replaces a daemon of another build with the app's helper – also one
+    /// not started by this app (an older copy, Terminal).
+    func restartOutdatedDaemon() {
+        if daemon.isRunning {
+            restartDaemon()
+            return
+        }
+        Task {
+            let stopped = await Task.detached { IPC.stopDaemon() }.value
+            if !stopped { lastError = "Die laufende Synchronisation ließ sich nicht beenden." }
+            daemon.start()
+            await refresh()
+        }
+    }
+
     func startSync() {
         daemon.start()
         Task { await refresh() }
@@ -330,6 +370,19 @@ final class AppModel: ObservableObject {
         c.set(key, value)
         do {
             try c.save()
+            restartDaemon()
+        } catch {
+            lastError = "Konfiguration nicht gespeichert: \(error.localizedDescription)"
+        }
+    }
+
+    /// Changes an integer in a config table (e.g. `[sync]`) and restarts the daemon.
+    func setConfig(_ key: String, _ value: Int, in section: String) {
+        guard var c = config else { return }
+        c.set(key, value, in: section)
+        do {
+            try c.save()
+            objectWillChange.send()
             restartDaemon()
         } catch {
             lastError = "Konfiguration nicht gespeichert: \(error.localizedDescription)"

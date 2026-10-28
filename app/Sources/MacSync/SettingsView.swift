@@ -51,6 +51,12 @@ private struct SyncTab: View {
 
     private var root: String { model.config?.string("root") ?? "–" }
     private var mode: String { model.config?.string("mode") ?? "two-way" }
+    /// Choices for the journal retention; a value set by hand is added.
+    private static let standardDays = [1, 3, 7, 14, 30, 90]
+    private static var journalDays: [Int] {
+        let current = ConfigFile.load()?.int("journal_retention_days", in: "sync") ?? 7
+        return Array(Set(standardDays + [current])).sorted()
+    }
 
     var body: some View {
         Form {
@@ -68,6 +74,14 @@ private struct SyncTab: View {
                 Text("Nur senden (dieser Mac gibt vor)").tag("mirror-send")
                 Text("Nur empfangen (anderer Mac gibt vor)").tag("mirror-receive")
             }
+            Picker("Protokoll aufbewahren", selection: Binding(
+                get: { model.config?.int("journal_retention_days", in: "sync") ?? 7 },
+                set: { model.setConfig("journal_retention_days", $0, in: "sync") })) {
+                ForEach(Self.journalDays, id: \.self) { d in
+                    Text(d == 1 ? "1 Tag" : "\(d) Tage").tag(d)
+                }
+            }
+            .help("Wie lange „Protokoll anzeigen“ zurückreicht. Ältere Einträge werden gelöscht, sobald die Änderung gilt.")
             LabeledContent("Zustand", value: model.state.title)
             if let units = model.status?.units, !units.isEmpty {
                 ForEach(units, id: \.name) { u in

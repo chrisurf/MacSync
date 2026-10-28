@@ -64,7 +64,7 @@ default_excludes = true       # .DS_Store, .Spotlight-V100, .Trashes, .fseventsd
 excludes = []                 # z. B. ["**/target", "Scratch/*.tmp"]
 tombstone_ttl_days = 30
 trash_retention_days = 14
-journal_retention_days = 90
+journal_retention_days = 7            # Protokoll (macsync log), auch in den Einstellungen
 ```
 
 Konfigurationsänderungen werden beim Neustart des Daemons übernommen.

@@ -79,7 +79,7 @@ impl Default for SyncConfig {
             excludes: Vec::new(),
             tombstone_ttl_days: 30,
             trash_retention_days: 14,
-            journal_retention_days: 90,
+            journal_retention_days: 7,
         }
     }
 }

@@ -27,6 +27,28 @@ enum IPC {
         return fd >= 0
     }
 
+    /// Stops the daemon behind the socket (also one this app did not start):
+    /// SIGINT to the peer process if it is a `macsync`, then waits up to 5 s.
+    /// Blocking. `true` once no daemon listens any more.
+    static func stopDaemon() -> Bool {
+        let fd = connectSocket(timeout: 1)
+        guard fd >= 0 else { return true }
+        var pid: pid_t = 0
+        var len = socklen_t(MemoryLayout<pid_t>.size)
+        let rc = getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &len)
+        close(fd)
+        guard rc == 0, pid > 0 else { return false }
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0,
+              URL(fileURLWithPath: String(cString: path)).lastPathComponent == "macsync" else { return false }
+        kill(pid, SIGINT)
+        for _ in 0..<50 {
+            if !isListening() { return true }
+            usleep(100_000)
+        }
+        return false
+    }
+
     /// Returns `nil` if no daemon is running.
     static func call(_ request: [String: Any], timeout: Int = 10) throws -> Any? {
         let fd = connectSocket(timeout: timeout)

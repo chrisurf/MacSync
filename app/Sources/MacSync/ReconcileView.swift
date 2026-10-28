@@ -399,23 +399,40 @@ private struct ReconcileResult: View {
 
 private struct ReconcileTable: View {
     @ObservedObject var model: ReconcileModel
+    /// Header clicks of the checkbox columns arrive as sort requests (SwiftUI
+    /// tables on macOS 14 only have text headers); nothing is sorted.
+    @State private var sort: [KeyPathComparator<RNode>] = []
 
     var body: some View {
-        Table(model.rows, selection: $model.selection) {
+        Table(model.rows, selection: $model.selection, sortOrder: $sort) {
             TableColumn("ALT") { n in NameCell(model: model, node: n, old: true) }
-                .width(min: 160, ideal: 250)
-            TableColumn("Größe") { n in size(n.inOld, n.oldBytes) }
+                .width(min: 160, ideal: 220)
+            TableColumn("Größe") { n in size(n.inOld, n.oldBytes, planned: model.plan[n.id] != nil) }
                 .width(min: 56, ideal: 66)
             TableColumn("Geändert") { n in Text(n.inOld ? date(n.oldMs) : "").foregroundStyle(.secondary) }
-                .width(min: 90, ideal: 118)
+                .width(min: 90, ideal: 104)
             TableColumn("") { n in StateCell(model: model, node: n) }
-                .width(min: 90, ideal: 150)
+                .width(min: 90, ideal: 120)
+            TableColumn(header(.copy), value: \RNode.copyColumn) { n in CheckCell(model: model, node: n, column: .copy) }
+                .width(min: 74, ideal: 84)
+            TableColumn(header(.move), value: \RNode.moveColumn) { n in CheckCell(model: model, node: n, column: .move) }
+                .width(min: 84, ideal: 96)
             TableColumn("NEU") { n in NameCell(model: model, node: n, old: false) }
-                .width(min: 160, ideal: 250)
+                .width(min: 160, ideal: 210)
             TableColumn("Größe") { n in size(n.inNew, n.newBytes) }
                 .width(min: 56, ideal: 66)
             TableColumn("Geändert") { n in Text(n.inNew ? date(n.newMs) : "").foregroundStyle(.secondary) }
-                .width(min: 90, ideal: 118)
+                .width(min: 90, ideal: 104)
+        }
+        .onChange(of: sort) { _, new in
+            guard let c = new.first else { return }
+            sort = []
+            if !model.applying { model.toggleAll(c.keyPath == \RNode.copyColumn ? .copy : .move) }
+        }
+        .onKeyPress(.space) {
+            guard !model.applying, !model.selection.isEmpty else { return .ignored }
+            model.toggleCopySelected()
+            return .handled
         }
         .contextMenu(forSelectionType: Int.self) { ids in
             ReconcileActions(model: model, targets: ids.sorted().map { model.nodes[$0] }, menu: true)
@@ -426,8 +443,64 @@ private struct ReconcileTable: View {
         }
     }
 
-    private func size(_ present: Bool, _ b: Int64?) -> some View {
-        Text(present ? b.map { Activity.bytes($0) } ?? "" : "").foregroundStyle(.secondary).monospacedDigit()
+    /// Header with the state of its checkboxes: ☐ none, ⊟ some, ☑ all visible rows.
+    private func header(_ column: PlanColumn) -> Text {
+        let glyph: String
+        switch model.headerState(column) {
+        case .none: glyph = "☐"
+        case .mixed: glyph = "⊟"
+        case .all: glyph = "☑"
+        }
+        return Text("\(glyph) \(column.title)")
+    }
+
+    /// Planned and from 1 GB on: orange, so a huge folder is not overlooked.
+    @ViewBuilder
+    private func size(_ present: Bool, _ b: Int64?, planned: Bool = false) -> some View {
+        if present, let b, planned, b >= ReconcileModel.largeBytes {
+            Text(Activity.bytes(b)).fontWeight(.semibold).foregroundStyle(.orange).monospacedDigit()
+        } else {
+            Text(present ? b.map { Activity.bytes($0) } ?? "" : "").foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+}
+
+private extension RNode {
+    /// Sort keys only to tell the checkbox column headers apart.
+    var copyColumn: Int { id }
+    var moveColumn: Int { id }
+}
+
+/// „Kopieren“ / „Verschieben“ checkbox of a row; empty where not possible.
+private struct CheckCell: View {
+    @ObservedObject var model: ReconcileModel
+    let node: RNode
+    let column: PlanColumn
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if model.coveredBy(column, node) {
+                Toggle("", isOn: .constant(true)).labelsHidden().disabled(true)
+                    .help("mit Ordner – den Ordner abwählen, um einzelne Dateien zu wählen")
+            } else if let op = model.op(column, for: node) {
+                Toggle("", isOn: Binding(get: { model.isChecked(column, node) }, set: { _ in model.toggle(column, node) }))
+                    .labelsHidden()
+                    .disabled(model.applying)
+                    .help(help(op))
+                if model.isChecked(column, node), let b = node.oldBytes, b >= ReconcileModel.largeBytes {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        .help("\(Activity.bytes(b)) – wirklich alles?")
+                }
+            }
+        }
+    }
+
+    private func help(_ op: PlanOp) -> String {
+        switch op {
+        case .replace: return "ALT-Fassung übernehmen – die NEU-Fassung kommt in den Papierkorb"
+        case .move: return "Nach NEU verschieben – die ALT-Quelle kommt nach bestätigter Kopie in den Papierkorb"
+        default: return "Nach NEU kopieren"
+        }
     }
 }
 
@@ -502,7 +575,8 @@ private struct StateCell: View {
             if let s = model.runState(node), let run = model.run {
                 RunBadge(state: s.state, op: run.ops[s.index], fraction: run.fraction(s.index),
                          cloud: run.codes[s.index] == "cloud_unavailable" ? model.cloudName : nil)
-            } else if let p = model.plan[node.id] {
+            } else if let p = model.plan[node.id], p.op == .keepBoth || p.op == .trashOld {
+                // Copy, move and replace show as checkboxes.
                 OpBadge(op: p.op)
             } else if model.covered(node) {
                 Text("mit Ordner").font(.caption).foregroundStyle(Color.accentColor)
@@ -569,7 +643,8 @@ private struct ReconcileActions: View {
     var body: some View {
         // While a plan runs it cannot be changed.
         let editable = model.applying ? [] : targets
-        let ops = PlanOp.all.compactMap { op -> (PlanOp, [RNode])? in
+        // Copy, move and replace are the checkbox columns.
+        let ops = [PlanOp.keepBoth, .trashOld].compactMap { op -> (PlanOp, [RNode])? in
             let ns = editable.filter { model.ops(for: $0).contains(op) }
             return ns.isEmpty ? nil : (op, ns)
         }

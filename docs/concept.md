@@ -384,7 +384,7 @@ Jede Entscheidung des Daemons ist nachvollziehbar: die Menüleiste zeigt den Zus
 
 **Journal**
 
-Jede Aktion wird als strukturierter Eintrag in SQLite gespeichert: Zeitpunkt, Repo, Pfade, Richtung, alter und neuer Hash, Grund (z. B. "Versionsvektor B neuer", "Drift repariert", "Konflikt: nebenläufige Änderung"). Einträge werden 90 Tage aufbewahrt und lassen sich als JSON exportieren.
+Jede Aktion wird als strukturierter Eintrag in SQLite gespeichert: Zeitpunkt, Repo, Pfade, Richtung, alter und neuer Hash, Grund (z. B. "Versionsvektor B neuer", "Drift repariert", "Konflikt: nebenläufige Änderung"). Einträge werden 7 Tage aufbewahrt (einstellbar) und lassen sich als JSON exportieren.
 
 **Konfiguration**
 

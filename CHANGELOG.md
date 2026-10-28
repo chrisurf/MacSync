@@ -13,6 +13,28 @@
   Standardprogramm, ⌘↑ geht nach oben, neu: „Pfad kopieren“
 - IPC `browse` mit `path` (relativ zum Sync-Ordner) und `local`; wartet nie
   auf den anderen Mac
+- Nur noch eine MacSync gleichzeitig: eine zweite Kopie holt die laufende
+  nach vorn und beendet sich. Liegt die gestartete App nicht in „Programme“,
+  fragt sie, ob die installierte geöffnet werden soll (mit beiden Versionen)
+- Versionen sichtbar: Menü und Manager-Fußzeile zeigen „MacSync 0.5.0
+  (0309498)“. Läuft die Synchronisation noch mit einer anderen Version als
+  die App, warnen Menü und Manager („Synchronisation läuft noch mit 0.3.0
+  (App 0.5.0)“) mit „Neu starten“; hat der andere Mac eine andere Version,
+  gibt es einen Hinweis
+- Manager: läuft die Synchronisation nicht, startet „Synchronisation
+  starten“ sie direkt aus der Hinweisleiste
+- Ordnerabgleich: statt Aktions-Markierung je Zeile zwei Spalten mit
+  Häkchen „Kopieren“ und „Verschieben“ (bei „in ALT neuer“/„unklar“ heißt
+  „Kopieren“: ALT-Fassung übernehmen). Das Häkchen im Spaltenkopf wählt alle
+  sichtbaren Zeilen (keine/einige/alle), Leertaste setzt „Kopieren“ für die
+  Auswahl. Dateien in einem gewählten Ordner zeigen „mit Ordner“, gewählte
+  Einträge ab 1 GB sind orange markiert
+
+- Protokoll (`macsync log`, „Protokoll anzeigen“) wird standardmässig 7
+  statt 90 Tage aufbewahrt; einstellbar unter Einstellungen →
+  Synchronisation → „Protokoll aufbewahren“ (gilt sofort, ältere Einträge
+  werden gelöscht). Bestehende Konfigurationen behalten ihren Wert
+  (`journal_retention_days` in `[sync]`)
 
 ### Behoben
 - Synchronisations-Manager „hing“ und zeigte „0 Einträge · alles synchron“

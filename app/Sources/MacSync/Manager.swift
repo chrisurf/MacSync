@@ -679,9 +679,19 @@ struct ManagerView: View {
         if let e = model.error {
             HintBar(text: e, symbol: "exclamationmark.triangle.fill", color: .orange)
         }
+        if let w = app.daemonOutdated {
+            HintBar(text: w, symbol: "arrow.triangle.2.circlepath", color: .orange,
+                    action: ("Neu starten", { app.restartOutdatedDaemon() }))
+        }
+        if let w = app.peerOutdated {
+            HintBar(text: w, symbol: "info.circle.fill", color: .blue)
+        }
         if model.phase == .noDaemon {
-            HintBar(text: "Synchronisation läuft nicht – Dateien ohne Status. „Synchronisation starten“ im Menü.",
-                    symbol: "pause.circle.fill", color: .secondary)
+            HintBar(text: "Synchronisation läuft nicht – Dateien ohne Status", symbol: "pause.circle.fill", color: .secondary,
+                    action: ("Synchronisation starten", {
+                        app.startSync()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { model.refresh() }
+                    }))
         } else if model.peerUnreachable {
             HintBar(text: "\(model.peerName) nicht erreichbar – Status des anderen Mac unbekannt",
                     symbol: "wifi.exclamationmark", color: .orange)
@@ -827,6 +837,7 @@ struct ManagerView: View {
                 ProgressView().controlSize(.small)
             }
             Spacer()
+            Text(app.versionLine).font(.caption).foregroundStyle(.tertiary)
             if sel.count == 1, let r = sel.first, r.isUnit {
                 Button(r.paused ? "Fortsetzen" : "Pausieren") { model.setPaused(r, !r.paused) }
             }
@@ -852,12 +863,16 @@ private struct HintBar: View {
     let text: String
     let symbol: String
     let color: Color
+    var action: (title: String, run: () -> Void)?
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: symbol).foregroundStyle(color)
             Text(text).foregroundStyle(.secondary).lineLimit(2)
             Spacer(minLength: 0)
+            if let action {
+                Button(action.title, action: action.run).controlSize(.small)
+            }
         }
         .font(.callout)
         .padding(.horizontal, 12)

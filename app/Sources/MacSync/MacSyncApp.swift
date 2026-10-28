@@ -32,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         src.setEventHandler { MainActor.assumeIsolated { AppModel.shared.quit() } }
         src.resume()
         sigterm = src
+        // Another MacSync runs, or the installed copy should be used instead.
+        guard MainActor.assumeIsolated({ Version.launchChecks() }) else { return }
         MainActor.assumeIsolated { AppModel.shared.launch() }
         // Test hook: MACSYNC_COMPARE="OLD|NEW" opens the file comparison.
         MainActor.assumeIsolated { FileCompare.launchHookIfRequested() }
@@ -68,6 +70,13 @@ struct MenuContent: View {
         if let e = model.lastError {
             Text("⚠︎ \(e)")
         }
+        if let w = model.daemonOutdated {
+            Text("⚠︎ \(w)")
+            Button("Neu starten") { model.restartOutdatedDaemon() }
+        }
+        if let w = model.peerOutdated {
+            Text("ⓘ \(w)")
+        }
         Divider()
         switch model.state {
         case .notConfigured:
@@ -90,6 +99,7 @@ struct MenuContent: View {
         Button("Ordnerabgleich …") { ReconcileWindow.shared.show() }
             .keyboardShortcut("o")
         Divider()
+        Text(model.versionLine)
         Button("Über MacSync") { About.show() }
         SettingsLink { Text("Einstellungen …") }
             .keyboardShortcut(",")
