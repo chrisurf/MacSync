@@ -81,6 +81,14 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Daemon antwortete nach dem Start mit großer Datenbank minutenlang nicht
+  („Der Daemon antwortet nicht“, „Startet …“): Jede Statusabfrage zählte
+  alle Einträge neu und hielt dabei die Datenbank fest; die App fragte jede
+  Sekunde nach und startete bei Zeitüberschreitung zusätzlich
+  `macsync status`, sodass sich Hunderte Anfragen stauten. Jetzt: Zählung
+  zwischengespeichert und im Hintergrund auf eigener Verbindung, höchstens
+  16 gleichzeitige Anfragen am Steuer-Socket (darüber sofort „busy“), die
+  App fragt erst nach, wenn die vorige Antwort da ist
 - Ersetzte der andere Mac einen Ordner durch einen Symlink, löschte MacSync
   die alten Dateien am Ziel des Symlinks, also außerhalb des Sync-Ordners
 - Git-Beispiel-Hooks (`*.sample`) erzeugen keine Protokollwarnungen mehr

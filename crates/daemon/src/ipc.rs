@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -115,15 +116,38 @@ pub(crate) fn serve(path: &Path, node: Arc<Node>, shared: Arc<Shared>) -> Result
     }
     let listener = UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let busy = Arc::new(AtomicUsize::new(0));
     std::thread::Builder::new().name("macsync-ipc".into()).spawn(move || {
         for conn in listener.incoming() {
             let Ok(stream) = conn else { continue };
-            let (n, s) = (node.clone(), shared.clone());
-            let _ = std::thread::Builder::new().name("macsync-ipc-conn".into()).spawn(move || {
+            // Clients give up after a few seconds and ask again; without a
+            // limit a slow request lets the waiting ones pile up without end.
+            if busy.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+                busy.fetch_sub(1, Ordering::SeqCst);
+                let _ = refuse_busy(&stream);
+                continue;
+            }
+            let (n, s, b) = (node.clone(), shared.clone(), busy.clone());
+            let spawned = std::thread::Builder::new().name("macsync-ipc-conn".into()).spawn(move || {
                 let _ = handle_conn(stream, &n, &s);
+                b.fetch_sub(1, Ordering::SeqCst);
             });
+            if spawned.is_err() {
+                busy.fetch_sub(1, Ordering::SeqCst);
+            }
         }
     })?;
+    Ok(())
+}
+
+/// Requests handled at the same time; more are refused at once.
+const MAX_IN_FLIGHT: usize = 16;
+
+fn refuse_busy(mut stream: &UnixStream) -> Result<()> {
+    let resp = IpcResponse { ok: false, data: Value::Null, error: Some("daemon busy, try again".into()) };
+    let mut out = serde_json::to_string(&resp)?;
+    out.push('\n');
+    stream.write_all(out.as_bytes())?;
     Ok(())
 }
 

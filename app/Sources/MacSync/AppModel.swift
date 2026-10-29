@@ -168,6 +168,7 @@ final class AppModel: ObservableObject {
 
     let daemon = DaemonProcess()
     private var timer: Timer?
+    private var refreshing = false
     private var lastConflicts = 0
 
     var isConfigured: Bool { FileManager.default.fileExists(atPath: Paths.config.path) }
@@ -227,12 +228,25 @@ final class AppModel: ObservableObject {
             state = .notConfigured
             return
         }
+        // The timer fires every second; a slow answer must not start a second
+        // request next to it (they would pile up in the daemon).
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         let running = daemon.isRunning
-        let fromDaemon: Any? = await Task.detached { try? IPC.call(["cmd": "status"]) }.value
+        let answer: Result<Any?, Error> = await Task.detached { Result { try IPC.call(["cmd": "status"]) } }.value
+        if case .failure = answer, status != nil {
+            // The daemon runs but is busy: keep the last status instead of
+            // asking again through the command line (that would wait for the
+            // same daemon).
+            return
+        }
+        let fromDaemon: Any? = try? answer.get()
         var s: Status?
         if let obj = fromDaemon {
             s = decode(obj)
-        } else if let out = try? await CLI.run(["status", "--json"]) {
+        } else if case .success = answer, let out = try? await CLI.run(["status", "--json"]) {
+            // No daemon socket: read the state directly.
             s = try? Self.decoder.decode(Status.self, from: Data(out.utf8))
         }
         status = s

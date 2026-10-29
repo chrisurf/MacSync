@@ -25,6 +25,22 @@ pub struct Node {
     pub cfg: Config,
     pub identity: Identity,
     pub engine: Arc<Engine>,
+    counts: Arc<Counts>,
+}
+
+/// `(root when counted, live, tombstones)`.
+type Counted = (Option<Hash>, u64, u64);
+
+/// Entry counts per unit for the status. Counting a large unit reads a big
+/// part of the database, so the result is kept while the unit's root stays
+/// the same; in the daemon it is computed in the background on a connection
+/// of its own and never holds up the status, sync or the manager.
+#[derive(Default)]
+struct Counts {
+    cache: Mutex<HashMap<String, Counted>>,
+    background: AtomicBool,
+    running: AtomicBool,
+    conn: Mutex<Option<macsync_store::Store>>,
 }
 
 impl Node {
@@ -32,7 +48,51 @@ impl Node {
         let state = cfg.state_dir();
         let identity = Identity::load_or_create(&state)?;
         let engine = Engine::open(cfg.engine_config(&identity.device_id())?)?;
-        Ok(Node { cfg, identity, engine: Arc::new(engine) })
+        Ok(Node { cfg, identity, engine: Arc::new(engine), counts: Arc::default() })
+    }
+
+    /// `(live, tombstones)` per unit; `None` while a background count runs.
+    fn entry_counts(
+        &self,
+        store: &macsync_store::Store,
+        units: &[macsync_store::UnitRow],
+    ) -> Result<HashMap<String, Option<(u64, u64)>>> {
+        let cache = self.counts.cache.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let fresh = |u: &macsync_store::UnitRow| {
+            cache.get(&u.name).filter(|c| c.0.is_some() && c.0 == u.root).map(|c| (c.1, c.2))
+        };
+        let missing: Vec<(String, Option<Hash>)> =
+            units.iter().filter(|u| fresh(u).is_none()).map(|u| (u.name.clone(), u.root)).collect();
+        if !self.counts.background.load(Ordering::SeqCst) {
+            // CLI without daemon: count right here.
+            let mut out = HashMap::new();
+            for u in units {
+                out.insert(u.name.clone(), Some(store.entry_count(&u.name)?));
+            }
+            return Ok(out);
+        }
+        if !missing.is_empty() && !self.counts.running.swap(true, Ordering::SeqCst) {
+            let counts = self.counts.clone();
+            let db = macsync_store::db_path(&self.cfg.state_dir())?;
+            std::thread::Builder::new().name("macsync-counts".into()).spawn(move || {
+                let mut conn = counts.conn.lock().unwrap_or_else(|e| e.into_inner());
+                if conn.is_none() {
+                    *conn = macsync_store::Store::open(&db)
+                        .map_err(|e| tracing::warn!(error = %format!("{e:#}"), "count connection"))
+                        .ok();
+                }
+                if let Some(c) = conn.as_ref() {
+                    for (unit, root) in missing {
+                        if let Ok((live, tombs)) = c.entry_count(&unit) {
+                            counts.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(unit, (root, live, tombs));
+                        }
+                    }
+                }
+                counts.running.store(false, Ordering::SeqCst);
+            })?;
+        }
+        // Stale numbers are better than none while the new ones are counted.
+        Ok(units.iter().map(|u| (u.name.clone(), cache.get(&u.name).map(|c| (c.1, c.2)))).collect())
     }
 
     pub fn hello(&self) -> HelloInfo {
@@ -91,9 +151,14 @@ impl Node {
     /// Status of all units as JSON (shared by the CLI and the IPC socket).
     pub fn status(&self, remote: Option<&HashMap<String, Hash>>, dirty: &BTreeSet<String>) -> Result<Value> {
         let store = self.engine.store();
+        let rows = store.units()?;
+        let counts = self.entry_counts(&store, &rows)?;
         let mut units = Vec::new();
-        for u in store.units()? {
-            let (live, tombs) = store.entry_count(&u.name)?;
+        for u in rows {
+            let (live, tombs) = match counts.get(&u.name).copied().flatten() {
+                Some((l, t)) => (Some(l), Some(t)),
+                None => (None, None),
+            };
             let conflicts = store.open_conflict_count(&u.name)?;
             let remote_root = remote.and_then(|m| m.get(&u.name));
             let state = if u.paused {
@@ -283,6 +348,7 @@ extern "C" fn on_signal(_: libc::c_int) {
 impl Daemon {
     /// Start all threads. Returns once the daemon is running.
     pub fn start(node: Node) -> Result<Daemon> {
+        node.counts.background.store(true, Ordering::SeqCst);
         let node = Arc::new(node);
         let shared = Arc::new(Shared {
             dirty: Mutex::new(HashMap::new()),
@@ -1044,6 +1110,80 @@ mod tests {
         assert!(daemon.server_addr().is_some(), "not listening after trusting the network");
         let status = Daemon::status_json(&daemon.node, &daemon.shared).unwrap();
         assert_eq!(status["network"], json!({"known": true, "hidden": false, "hide_unknown": true}));
+        daemon.stop();
+    }
+}
+
+#[cfg(test)]
+mod status_load {
+    use super::*;
+    use macsync_core::{Entry, Kind, UnitKind};
+    use macsync_store::Stored;
+
+    /// Many entries and many status requests at once (the app polls; each
+    /// waiting client asks again): the daemon keeps answering, counts arrive
+    /// in the background, and a burst never piles up without end.
+    #[test]
+    fn status_stays_fast_with_many_entries_and_requests() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            root: d.path().join("root"),
+            state_dir: Some(d.path().join("state")),
+            listen: "127.0.0.1:0".parse().unwrap(),
+            peer: crate::config::PeerConfig {
+                address: Some("127.0.0.1:9".into()),
+                discovery: false,
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        std::fs::create_dir_all(cfg.root().join("big")).unwrap();
+        let node = Node::open(cfg).unwrap();
+        {
+            let st = node.engine.store();
+            st.upsert_unit("big", UnitKind::Folder).unwrap();
+            st.atomically(|st| {
+                for i in 0..300_000 {
+                    let entry = Entry::tombstone(&format!("d{}/f{i}", i % 100), Kind::File, Default::default());
+                    st.put_entry("big", &Stored { entry, disk: String::new(), stat: Default::default(), changed_ms: 0 })?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        }
+        let state = node.cfg.state_dir();
+        let daemon = Daemon::start(node).unwrap();
+
+        let t = Instant::now();
+        let threads: Vec<_> = (0..64)
+            .map(|_| {
+                let state = state.clone();
+                std::thread::spawn(move || {
+                    let t = Instant::now();
+                    let r = crate::ipc::call(&state, &crate::ipc::IpcRequest::Status);
+                    (t.elapsed(), r.map(|v| v.is_some()).unwrap_or_else(|e| e.to_string().contains("busy")))
+                })
+            })
+            .collect();
+        for th in threads {
+            let (took, ok) = th.join().unwrap();
+            assert!(ok, "status failed");
+            assert!(took < Duration::from_secs(10), "a status request took {took:?}");
+        }
+        eprintln!("64 status requests in {:?}", t.elapsed());
+
+        // The counts arrive in the background.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let tombs = loop {
+            let v = crate::ipc::call(&state, &crate::ipc::IpcRequest::Status).unwrap().unwrap();
+            let big = v["units"].as_array().unwrap().iter().find(|u| u["name"] == "big").cloned().unwrap();
+            if let Some(n) = big["tombstones"].as_u64() {
+                break n;
+            }
+            assert!(Instant::now() < deadline, "counts never arrived");
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert_eq!(tombs, 300_000);
         daemon.stop();
     }
 }
