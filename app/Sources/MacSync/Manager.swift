@@ -699,6 +699,15 @@ struct ManagerView: View {
                         app.startSync()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { model.refresh() }
                     }))
+        } else if app.status?.network?.hidden == true {
+            // Hidden in an unknown network: the peer can't reach this Mac,
+            // so say why and offer the fix right here.
+            HintBar(text: "Unbekanntes Netz – MacSync ist hier unsichtbar, die Macs finden sich nicht. Vertraust du diesem Netz?",
+                    symbol: "lock.shield", color: .orange,
+                    action: ("Diesem Netz vertrauen", {
+                        app.trustNetwork()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { model.refresh() }
+                    }))
         } else if model.peerUnreachable {
             HintBar(text: "\(model.peerName) nicht erreichbar – Status des anderen Mac unbekannt",
                     symbol: "wifi.exclamationmark", color: .orange)
