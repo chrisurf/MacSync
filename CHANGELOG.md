@@ -86,6 +86,12 @@ mit 0.5 verbinden sich nicht miteinander.
   Dateien, gelöschte Einträge nur Pfad für Pfad. Eine Änderung in einem
   Ordner mit 400 000 gelöschten Einträgen: Scan 0,8 → 0,2 s, Übernahme auf
   dem anderen Mac 1,3 → 0,35 s
+- Sender blockierte minutenlang: tauchte ein Ordner (z. B. `target`) nur auf
+  einem Mac auf, tauschten beide den ganzen Teilbaum samt Hunderttausender
+  gelöschter Einträge aus und hielten dabei die Datenbank gesperrt – der
+  andere Mac bekam keine Antwort („too many connections“), die App keinen
+  Status. Jetzt werden nur einzelne Pfade abgeglichen (gleiches Protokoll):
+  2,1 s → 0,11 s im Test mit 400 000 gelöschten Einträgen
 - Nach einem Update hing die alte Synchronisation teils minutenlang weiter
   („Daemon antwortet nicht“, „läuft noch mit …“): sie beendet sich jetzt nach
   höchstens 2 s; eine unterbrochene Übernahme wird beim nächsten Start

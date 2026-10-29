@@ -70,3 +70,37 @@ fn deleted_and_recreated_file_follows_its_tombstone() {
     assert!(p.b.store().conflicts(false).unwrap().is_empty());
     p.assert_identical();
 }
+
+/// A build directory that exists on one Mac only, below which hundreds of
+/// thousands of earlier files were deleted: the pull must not exchange all
+/// those tombstones.
+#[test]
+#[ignore]
+fn new_build_directory_above_many_tombstones() {
+    let p = Pair::new();
+    write(&p.ra(), "w/src/main.rs", "fn main() {}");
+    p.sync();
+    for e in [&p.a, &p.b] {
+        e.store()
+            .atomically(|st| {
+                for i in 0..400_000 {
+                    let entry =
+                        Entry::tombstone(&format!("target/debug/t{}/f{i}", i % 1000), Kind::File, Default::default());
+                    st.put_entry("w", &Stored { entry, disk: String::new(), stat: Default::default(), changed_ms: 0 })?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        e.scan_unit("w", &Default::default()).unwrap();
+    }
+    write(&p.ra(), "w/target/debug/app", "binary");
+    p.a.scan_unit("w", &Default::default()).unwrap();
+    let t = Instant::now();
+    let r = p.b.sync_from(&p.a, Some(&["w".to_string()]), Default::default()).unwrap();
+    eprintln!(
+        "pull of a new build directory: {:?} {:?}",
+        t.elapsed(),
+        r.iter().map(|r| &r.timings_ms).collect::<Vec<_>>()
+    );
+    assert_eq!(read(&p.rb(), "w/target/debug/app"), "binary");
+}

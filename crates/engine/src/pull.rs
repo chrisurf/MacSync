@@ -266,24 +266,21 @@ impl Engine {
 
         // 1. Merkle descent and entry exchange.
         let mut t = std::time::Instant::now();
-        let (paths, prefixes) = descend(peer, unit, &tree, remote.root)?;
-        let mut remote_entries = fetch_entries(peer, unit, &paths, &prefixes)?;
+        let paths = descend(peer, unit, &tree, remote.root)?;
+        let mut remote_entries = fetch_entries(peer, unit, &paths)?;
         for p in drop_below_symlinks(&mut remote_entries) {
             if !opts.dry_run {
                 let _ = self.store().log(unit, "warning", &p, "ignored: the peer sent it below a symbolic link", "");
             }
         }
         let mut local: HashMap<String, Stored> = HashMap::new();
-        {
+        let wanted: Vec<&String> = paths.iter().collect();
+        for chunk in wanted.chunks(limits::ENTRY_BATCH) {
+            // In chunks: status and the peer's requests need the store too.
             let store = self.store();
-            for p in &paths {
+            for p in chunk {
                 if let Some(s) = store.entry(unit, p)? {
-                    local.insert(p.clone(), s);
-                }
-            }
-            for p in &prefixes {
-                for s in store.entries_under(unit, p)? {
-                    local.insert(s.entry.path.clone(), s);
+                    local.insert((*p).clone(), s);
                 }
             }
         }
@@ -1196,18 +1193,16 @@ fn copy_rest(dests: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// Merkle descent: returns the exact paths and the prefixes (whole subtrees)
-/// whose entries must be compared.
-fn descend(
-    peer: &dyn PeerApi,
-    unit: &str,
-    local: &Tree,
-    remote_root: Hash,
-) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+/// Merkle descent: returns the exact paths whose entries must be compared.
+///
+/// A directory that exists on one side only is followed down its tree
+/// (remote) or listed from the local tree, never fetched as a whole subtree:
+/// below a build directory can lie hundreds of thousands of tombstones that
+/// only matter where the other side still has a file.
+fn descend(peer: &dyn PeerApi, unit: &str, local: &Tree, remote_root: Hash) -> Result<BTreeSet<String>> {
     let mut paths = BTreeSet::new();
-    let mut prefixes = BTreeSet::new();
     if local.root() == remote_root {
-        return Ok((paths, prefixes));
+        return Ok(paths);
     }
     paths.insert(String::new());
     let mut queue: Vec<String> = vec![String::new()];
@@ -1220,7 +1215,8 @@ fn descend(
                 continue;
             }
             let Some(rc) = l.children else {
-                prefixes.insert(l.dir.clone());
+                // Not a directory there (any more): our files below it.
+                local_subtree(local, &l.dir, &mut paths);
                 continue;
             };
             let lc = local.children(&l.dir).unwrap_or(&[]);
@@ -1247,27 +1243,38 @@ fn descend(
                     }
                     (a, b) => {
                         paths.insert(path.clone());
-                        if a.is_some_and(|c| c.kind == Kind::Dir) || b.is_some_and(|c| c.kind == Kind::Dir) {
-                            prefixes.insert(path);
+                        if a.is_some_and(|c| c.kind == Kind::Dir) {
+                            local_subtree(local, &path, &mut paths);
+                        }
+                        if b.is_some_and(|c| c.kind == Kind::Dir) {
+                            queue.push(path);
                         }
                     }
                 }
             }
         }
     }
-    Ok((paths, prefixes))
+    Ok(paths)
 }
 
-fn fetch_entries(
-    peer: &dyn PeerApi,
-    unit: &str,
-    paths: &BTreeSet<String>,
-    prefixes: &BTreeSet<String>,
-) -> Result<HashMap<String, Entry>> {
+/// All live paths below `dir` in the local tree.
+fn local_subtree(local: &Tree, dir: &str, paths: &mut BTreeSet<String>) {
+    let mut todo = vec![dir.to_string()];
+    while let Some(d) = todo.pop() {
+        for c in local.children(&d).unwrap_or(&[]) {
+            let p = rpath::join(&d, &c.name);
+            if c.kind == Kind::Dir {
+                todo.push(p.clone());
+            }
+            paths.insert(p);
+        }
+    }
+}
+
+fn fetch_entries(peer: &dyn PeerApi, unit: &str, paths: &BTreeSet<String>) -> Result<HashMap<String, Entry>> {
     let mut out = HashMap::new();
     let wanted = paths;
     let paths: Vec<String> = paths.iter().cloned().collect();
-    let prefixes: Vec<String> = prefixes.iter().cloned().collect();
     let mut accept = |e: Entry| {
         if rpath::validate(&e.path).is_ok() {
             out.insert(e.path.clone(), e);
@@ -1277,13 +1284,6 @@ fn fetch_entries(
         // Only what was asked for: a peer must not slip in other paths.
         for e in peer.entries(unit, chunk, &[])? {
             if wanted.contains(&e.path) {
-                accept(e);
-            }
-        }
-    }
-    for chunk in prefixes.chunks(64) {
-        for e in peer.entries(unit, &[], chunk)? {
-            if chunk.iter().any(|p| rpath::is_within(&e.path, p)) {
                 accept(e);
             }
         }
