@@ -46,6 +46,10 @@ pub enum IpcRequest {
     /// Remember the current network, so the daemon listens here even with
     /// `hide_in_unknown_networks`.
     TrustNetwork,
+    /// Synchronise the unit(s) behind `path` next (relative to the root).
+    Prioritize {
+        path: String,
+    },
     /// One directory with the state of every item on both Macs. `path`
     /// (relative to the sync root) replaces `unit`/`dir`. `local`: only this
     /// Mac's state, never the network (fast, for the first paint).
@@ -188,6 +192,7 @@ fn dispatch(req: IpcRequest, node: &Arc<Node>, shared: &Arc<Shared>) -> Result<V
             serde_json::to_value(r)?
         }
         IpcRequest::TrustNetwork => Daemon::trust_network(node, shared)?,
+        IpcRequest::Prioritize { path } => Daemon::ipc_prioritize(node, shared, &path)?,
         IpcRequest::Browse { unit, dir, path, local } => {
             let (unit, dir) = match path {
                 Some(p) => engine.split_path(&p)?,

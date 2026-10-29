@@ -140,3 +140,100 @@ fn connection_flood_does_not_lock_out_the_peer() {
     p.ping().unwrap();
     server.stop();
 }
+
+/// A slow transfer on one connection (as over Wi-Fi) does not hold up
+/// requests on a sibling connection; on the same connection they wait.
+#[test]
+fn sibling_connection_does_not_wait_behind_a_transfer() {
+    use macsync_core::proto::{Request, Response};
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (a, ida) = start(dir.path(), "a");
+    let (_b, idb) = start(dir.path(), "b");
+    let hello = HelloInfo::local(&ida, "srv", "/");
+    let slow = Arc::new(move |_peer: &_, req: Request| {
+        if matches!(req, Request::Blobs { .. }) {
+            std::thread::sleep(Duration::from_millis(1500));
+            return Response::Blobs(Vec::new());
+        }
+        a.handle(req)
+    });
+    let server = Server::start("127.0.0.1:0".parse().unwrap(), ida.clone(), hello, idb.public.clone(), slow).unwrap();
+    let main = Arc::new(NetPeer::new(
+        server.local_addr(),
+        idb.clone(),
+        ida.public.clone(),
+        HelloInfo::local(&idb, "b", "/"),
+    ));
+    main.ping().unwrap();
+    let side = main.sibling();
+    side.ping().unwrap();
+
+    let timed = |p: &NetPeer| {
+        let m = main.clone();
+        let t = std::thread::spawn(move || m.blobs(&[macsync_core::Hash::ZERO]).unwrap());
+        std::thread::sleep(Duration::from_millis(200));
+        let start = Instant::now();
+        p.roots().unwrap();
+        let d = start.elapsed();
+        t.join().unwrap();
+        d
+    };
+    let on_side = timed(&side);
+    assert!(on_side < Duration::from_millis(500), "sibling waited {on_side:?}");
+    let on_main = timed(&main);
+    assert!(on_main > Duration::from_millis(1000), "same connection did not wait ({on_main:?})");
+    server.stop();
+}
+
+/// A large transfer uses several connections at once and still arrives
+/// bit for bit.
+#[test]
+fn large_transfer_runs_over_several_connections() {
+    use macsync_core::proto::Request;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (a, ida) = start(dir.path(), "a");
+    let (b, idb) = start(dir.path(), "b");
+    std::fs::create_dir_all(a.root().join("big/small")).unwrap();
+    let large: Vec<u8> = (0..120_000_000u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+    std::fs::write(a.root().join("big/large.bin"), &large).unwrap();
+    for i in 0..400 {
+        let data: Vec<u8> = (0..200_000u32).map(|j| (j ^ i) as u8).collect();
+        std::fs::write(a.root().join(format!("big/small/f{i}.bin")), data).unwrap();
+    }
+    a.scan_all(false).unwrap();
+    b.scan_all(false).unwrap();
+
+    let busy = Arc::new(AtomicUsize::new(0));
+    let most = Arc::new(AtomicUsize::new(0));
+    let (busy2, most2, a2) = (busy.clone(), most.clone(), a.clone());
+    let handler = Arc::new(move |_peer: &_, req: Request| {
+        let content = matches!(req, Request::Blobs { .. } | Request::BlobRange { .. });
+        if content {
+            let n = busy2.fetch_add(1, Ordering::SeqCst) + 1;
+            most2.fetch_max(n, Ordering::SeqCst);
+            // Like Wi-Fi: each answer takes a moment.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let r = a2.handle(req);
+        if content {
+            busy2.fetch_sub(1, Ordering::SeqCst);
+        }
+        r
+    });
+    let hello = HelloInfo::local(&ida, "srv", "/");
+    let server = Server::start("127.0.0.1:0".parse().unwrap(), ida.clone(), hello, idb.public.clone(), handler).unwrap();
+    let peer = NetPeer::new(server.local_addr(), idb.clone(), ida.public.clone(), HelloInfo::local(&idb, "b", "/"));
+    let reports = b.sync_from(&peer, None, PullOptions::default()).unwrap();
+    let r = reports.iter().find(|r| r.unit == "big").unwrap();
+    assert!(r.converged, "{r:?}");
+    assert_eq!(std::fs::read(b.root().join("big/large.bin")).unwrap(), large);
+    assert_eq!(a.local_roots().unwrap(), b.local_roots().unwrap());
+    let most = most.load(Ordering::SeqCst);
+    assert!(most >= 3, "at most {most} content requests at once");
+    server.stop();
+}

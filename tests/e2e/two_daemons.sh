@@ -195,6 +195,39 @@ ra resolve "$ID" --keep remote >/dev/null
 wait_until 30 converged || fail "not converged after resolution"
 [ "$(cat "$A/shared/doc.txt")" = "edit B" ] || fail "resolution not applied"
 
+log "put first: a queued folder is pulled before the others"
+rb pause >/dev/null
+for u in q1 q2 q3 q4; do mkdir -p "$A/$u"; head -c 200000 /dev/urandom > "$A/$u/data.bin"; done
+wait_until 30 sh -c "\"$BIN\" --config \"$WORK/a.toml\" status --json | grep -q '\"q4\"'" || fail "q-units not captured on A"
+rb first q4 | grep -q "next: q4" || fail "first q4 not accepted"
+rb status --json | python3 -c 'import json,sys; q=json.load(sys.stdin)["priority"]; assert [p["unit"] for p in q]==["q4"], q' \
+  || fail "q4 not in the priority list"
+rb resume >/dev/null
+wait_until 30 test -f "$B/q1/data.bin" -a -f "$B/q4/data.bin" || fail "q-units not synced"
+# Without colour codes; `applied unit=…` lines in the order of the pulls.
+ORDER=$(sed $'s/\x1b\\[[0-9;]*m//g' "$WORK/b.log" | grep -o 'applied unit=q[1-4]' | sed 's/applied unit=//' | tr '\n' ' ' || true)
+[ "${ORDER%% *}" = q4 ] || fail "q4 was not first: $ORDER"
+log "pull order on B: $ORDER"
+wait_until 30 converged || fail "not converged after put first"
+
+log "status of the other Mac during a large transfer"
+mkdir -p "$A/big"
+head -c 600000000 /dev/urandom > "$A/big/large.bin"
+transferring() { rb status --json | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("transfer") else 1)'; }
+wait_until 60 transferring || log "transfer not seen (finished already?)"
+SLOW=0; N=0
+while [ "$N" -lt 5 ] && ! cmp -s "$A/big/large.bin" "$B/big/large.bin"; do
+  T=$(now_ms)
+  rb browse --json > "$WORK/browse.json" || fail "browse during transfer failed"
+  D=$(( $(now_ms) - T )); N=$((N + 1))
+  log "browse during transfer: ${D} ms"
+  [ "$D" -lt 3000 ] || SLOW=$((SLOW + 1))
+done
+[ "$SLOW" = 0 ] || fail "browse waited behind the transfer"
+wait_until 120 converged || fail "large file not converged"
+rm -rf "$A/big"
+wait_until 60 test ! -e "$B/big" || fail "large file not removed"
+
 log "verify"
 ra verify --json > "$WORK/verify.json"
 SILENT=$(python3 -c 'import json; print(sum(r["silent_changes"] for r in json.load(open("'"$WORK"'/verify.json"))))')

@@ -116,7 +116,7 @@ impl Engine {
                     Response::BlobRange(self.serve_blob_range(&hash, offset, len)?)
                 }
                 Request::Ping => Response::Pong,
-                Request::Hello { .. } | Request::Changed { .. } => Response::Ok,
+                Request::Hello { .. } | Request::Changed { .. } | Request::Prioritize { .. } => Response::Ok,
             })
         })();
         r.unwrap_or_else(|e| Response::Error(e.to_string()))

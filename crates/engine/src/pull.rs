@@ -1,8 +1,10 @@
 //! Pulling a unit from a peer: Merkle descent, decisions, Git coherence,
 //! staging with hash verification, pre-apply checks.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use macsync_core::proto::{limits, UnitRoot};
@@ -21,6 +23,23 @@ use crate::{Engine, Mode, PeerApi};
 pub struct PullOptions {
     /// Compute and report the plan without changing anything.
     pub dry_run: bool,
+}
+
+/// Units the user wants first (the daemon's priority queue).
+pub trait PullQueue {
+    /// The next unit to pull ahead of the rest, skipping `done`.
+    fn next(&self, done: &BTreeSet<String>) -> Option<String>;
+    /// `unit` was pulled (or does not exist on the peer).
+    fn done(&self, unit: &str);
+}
+
+struct NoQueue;
+
+impl PullQueue for NoQueue {
+    fn next(&self, _: &BTreeSet<String>) -> Option<String> {
+        None
+    }
+    fn done(&self, _: &str) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -114,6 +133,19 @@ impl Drop for TransferGuard<'_> {
 impl Engine {
     /// Pull every unit that differs from the peer (or only `only`).
     pub fn sync_from(&self, peer: &dyn PeerApi, only: Option<&[String]>, opts: PullOptions) -> Result<Vec<PullReport>> {
+        self.sync_from_queue(peer, only, opts, &NoQueue)
+    }
+
+    /// Like [`Engine::sync_from`], but before each unit `queue` may put a
+    /// unit first (also one outside `only`). The running unit always
+    /// finishes; units are never pulled twice in one call.
+    pub fn sync_from_queue(
+        &self,
+        peer: &dyn PeerApi,
+        only: Option<&[String]>,
+        opts: PullOptions,
+        queue: &dyn PullQueue,
+    ) -> Result<Vec<PullReport>> {
         if self.cfg.mode == Mode::MirrorSend {
             return Ok(Vec::new());
         }
@@ -121,11 +153,27 @@ impl Engine {
         remote.retain(|r| crate::validate_unit_name(&r.name).is_ok());
         remote.sort_by(|a, b| a.name.cmp(&b.name));
         let names: BTreeSet<String> = remote.iter().map(|r| r.name.clone()).collect();
+        let mut todo: VecDeque<&UnitRoot> =
+            remote.iter().filter(|r| only.is_none_or(|o| o.contains(&r.name))).collect();
+        let mut done: BTreeSet<String> = BTreeSet::new();
         let mut reports = Vec::new();
-        for r in &remote {
-            if only.is_some_and(|o| !o.contains(&r.name)) {
+        loop {
+            if let Some(first) = queue.next(&done) {
+                done.insert(first.clone());
+                todo.retain(|r| r.name != first);
+                // Fresh root: the list above may be old after a long round.
+                let fresh = peer.roots()?.into_iter().find(|r| r.name == first);
+                if let Some(r) = fresh.filter(|r| crate::validate_unit_name(&r.name).is_ok()) {
+                    let rep = self.pull_with_names(peer, &r, &names, opts);
+                    queue.done(&first);
+                    reports.push(rep);
+                } else {
+                    queue.done(&first);
+                }
                 continue;
             }
+            let Some(r) = todo.pop_front() else { break };
+            done.insert(r.name.clone());
             reports.push(self.pull_with_names(peer, r, &names, opts));
         }
         Ok(reports)
@@ -796,7 +844,15 @@ impl Engine {
                 remote_large.push(*hash);
             }
         }
+        // More data, more connections (up to MAX_LANES in all).
+        let remote_bytes: u64 = remote_small.iter().chain(&remote_large).map(|h| needs[h].size).sum();
+        let lanes = peer.lanes(lane_count(remote_bytes));
+        if !lanes.is_empty() {
+            tracing::debug!(unit = %rep.unit, extra = lanes.len(), bytes = remote_bytes, "parallel transfer");
+        }
+        let fetched = AtomicU64::new(0);
         // Bundles of small files, written by a thread pool.
+        let mut bundles: Vec<&[Hash]> = Vec::new();
         let mut i = 0;
         while i < remote_small.len() {
             let mut bytes = 0u64;
@@ -805,31 +861,34 @@ impl Engine {
                 bytes += needs[&remote_small[j]].size;
                 j += 1;
             }
-            let batch = &remote_small[i..j];
+            bundles.push(&remote_small[i..j]);
+            i = j;
+        }
+        run_lanes(peer, &lanes, &bundles, &|p: &dyn PeerApi, batch: &&[Hash]| {
             progress(0, 0, &needs[&batch[0]].label);
-            let mut blobs = peer.blobs(batch)?;
+            let mut blobs = p.blobs(batch)?;
             blobs.resize(batch.len(), None);
             let mut items: Vec<(&Need, Vec<u8>)> = Vec::with_capacity(batch.len());
             for (h, b) in batch.iter().zip(blobs) {
                 let data = match b {
                     Some(d) if Hash::of(&d) == *h => d,
-                    _ => self.refetch_small(peer, h)?,
+                    _ => self.refetch_small(p, h)?,
                 };
-                rep.bytes_fetched += data.len() as u64;
                 items.push((&needs[h], data));
             }
             write_parallel(&items)?;
+            fetched.fetch_add(items.iter().map(|(_, d)| d.len() as u64).sum(), Ordering::Relaxed);
             progress(batch.len() as u64, items.iter().map(|(n, _)| n.size).sum(), "");
-            i = j;
-        }
-        // Large files in ranges.
+            Ok(())
+        })?;
+        // Large files in ranges, the ranges of one file over all connections.
         for h in remote_large {
             let need = &needs[&h];
             progress(0, 0, &need.label);
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match self.fetch_large(peer, &h, need, rep)? {
+                match self.fetch_large(peer, &lanes, &h, need, &fetched)? {
                     true => break,
                     false if attempt < 3 => continue,
                     false => anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short()),
@@ -838,6 +897,7 @@ impl Engine {
             copy_rest(&need.dests)?;
             progress(1, 0, "");
         }
+        rep.bytes_fetched += fetched.into_inner();
         // One bundled flush for everything staged (instead of one per file).
         let all: Vec<PathBuf> = needs.values().flat_map(|n| n.dests.iter().cloned()).collect();
         ops::sync_paths(&all)?;
@@ -855,31 +915,46 @@ impl Engine {
         anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short())
     }
 
-    fn fetch_large(&self, peer: &dyn PeerApi, h: &Hash, need: &Need, rep: &mut PullReport) -> Result<bool> {
-        use std::io::Write;
+    /// One large file: its ranges are fetched over `peer` and `lanes` at
+    /// once and written in place; true if the result has the right hash.
+    fn fetch_large(
+        &self,
+        peer: &dyn PeerApi,
+        lanes: &[Box<dyn PeerApi + Send + Sync>],
+        h: &Hash,
+        need: &Need,
+        fetched: &AtomicU64,
+    ) -> Result<bool> {
+        use std::os::unix::fs::FileExt;
         let dest = &need.dests[0];
-        let mut f = std::fs::File::create(dest)?;
-        let mut hasher = blake3::Hasher::new();
-        let mut off = 0u64;
-        while off < need.size {
-            let len = (need.size - off).min(limits::RANGE_CHUNK);
-            let Some(chunk) = peer.blob_range(h, off, len)? else {
-                return retry(format!("blob {} changed on peer during transfer", h.short()));
-            };
-            if chunk.is_empty() {
-                return retry(format!("blob {} shorter than expected", h.short()));
-            }
-            hasher.update(&chunk);
-            f.write_all(&chunk)?;
-            off += chunk.len() as u64;
-            rep.bytes_fetched += chunk.len() as u64;
-            self.update_transfer(|t| {
-                if let Some(t) = t {
-                    t.bytes_done += chunk.len() as u64;
+        let f = std::fs::File::create(dest)?;
+        f.set_len(need.size)?;
+        let ranges: Vec<(u64, u64)> = (0..need.size)
+            .step_by(limits::RANGE_CHUNK as usize)
+            .map(|off| (off, (need.size - off).min(limits::RANGE_CHUNK)))
+            .collect();
+        run_lanes(peer, lanes, &ranges, &|p: &dyn PeerApi, &(start, len): &(u64, u64)| {
+            let mut off = start;
+            while off < start + len {
+                let Some(chunk) = p.blob_range(h, off, start + len - off)? else {
+                    return retry(format!("blob {} changed on peer during transfer", h.short()));
+                };
+                if chunk.is_empty() {
+                    return retry(format!("blob {} shorter than expected", h.short()));
                 }
-            });
-        }
-        Ok(Hash::from_blake3(hasher.finalize()) == *h)
+                f.write_all_at(&chunk, off)?;
+                off += chunk.len() as u64;
+                fetched.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                self.update_transfer(|t| {
+                    if let Some(t) = t {
+                        t.bytes_done += chunk.len() as u64;
+                    }
+                });
+            }
+            Ok(())
+        })?;
+        drop(f);
+        Ok(ops::hash_file(dest)? == *h)
     }
 
     /// Try to materialise a blob from a local copy (copy-on-write clone where
@@ -1025,6 +1100,67 @@ fn db_op(path: &str, disk: &str, entry: Entry, reason: &str) -> Op {
 
 /// Paralleles Schreiben (concept): staging files are written by a small
 /// thread pool; durability follows with one bundled flush.
+/// All connections of one transfer, including the main one.
+const MAX_LANES: usize = 4;
+/// Outstanding bytes per connection before another one is opened.
+const LANE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Extra connections for a transfer of `bytes`.
+fn lane_count(bytes: u64) -> usize {
+    ((bytes / LANE_BYTES) as usize).min(MAX_LANES - 1)
+}
+
+/// Run `work` for every job, spread over `peer` (this thread) and one thread
+/// per lane. A failing lane gives its job back and stops; errors on `peer`
+/// abort the transfer.
+fn run_lanes<J: Sync>(
+    peer: &dyn PeerApi,
+    lanes: &[Box<dyn PeerApi + Send + Sync>],
+    jobs: &[J],
+    work: &(dyn Fn(&dyn PeerApi, &J) -> Result<()> + Sync),
+) -> Result<()> {
+    if lanes.is_empty() || jobs.len() < 2 {
+        return jobs.iter().try_for_each(|j| work(peer, j));
+    }
+    let next = AtomicUsize::new(0);
+    let back: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    let stop = AtomicBool::new(false);
+    let take = || -> Option<usize> {
+        if stop.load(Ordering::SeqCst) {
+            return None;
+        }
+        if let Some(i) = back.lock().unwrap_or_else(|e| e.into_inner()).pop() {
+            return Some(i);
+        }
+        let i = next.fetch_add(1, Ordering::SeqCst);
+        (i < jobs.len()).then_some(i)
+    };
+    std::thread::scope(|s| {
+        for lane in lanes {
+            let (take, back) = (&take, &back);
+            s.spawn(move || {
+                while let Some(i) = take() {
+                    if let Err(e) = work(lane.as_ref(), &jobs[i]) {
+                        tracing::debug!(error = %format!("{e:#}"), "transfer connection dropped");
+                        back.lock().unwrap_or_else(|e| e.into_inner()).push(i);
+                        return;
+                    }
+                }
+            });
+        }
+        while let Some(i) = take() {
+            if let Err(e) = work(peer, &jobs[i]) {
+                stop.store(true, Ordering::SeqCst);
+                return Err(e);
+            }
+        }
+        Ok(())
+    })?;
+    // Jobs a lane gave back after this thread ran out of work.
+    let rest = std::mem::take(&mut *back.lock().unwrap_or_else(|e| e.into_inner()));
+    rest.into_iter().try_for_each(|i| work(peer, &jobs[i]))
+}
+
 fn write_parallel(items: &[(&Need, Vec<u8>)]) -> Result<()> {
     const THREADS: usize = 8;
     if items.len() < 64 {

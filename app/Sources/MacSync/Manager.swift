@@ -405,6 +405,13 @@ final class ManagerModel: ObservableObject {
         }
     }
 
+    /// Synchronise these next, ahead of everything else (both directions).
+    func putFirst(_ rows: [ManagerRow]) {
+        for r in rows {
+            send(["cmd": "prioritize", "path": r.path])
+        }
+    }
+
     func setPaused(_ row: ManagerRow, _ paused: Bool) {
         send(["cmd": paused ? "pause" : "resume", "unit": row.unit])
     }
@@ -737,7 +744,9 @@ struct ManagerView: View {
             .width(min: 90, ideal: 110)
             TableColumn(model.peerName) { row in remoteCell(row) }
                 .width(min: 90, ideal: 130)
-            TableColumn("Status") { row in StateCell(row: row, phase: model.phase, peer: model.peerName) }
+            TableColumn("Status") { row in
+                StateCell(row: row, phase: model.phase, peer: model.peerName, first: isFirst(row))
+            }
                 .width(min: 150, ideal: 190)
             TableColumn("Größe") { row in
                 Text(row.size.map { Activity.bytes($0) } ?? "–").foregroundStyle(.secondary).monospacedDigit()
@@ -798,6 +807,13 @@ struct ManagerView: View {
         }
     }
 
+    /// Put first by the user and not synchronised yet: the chosen path, a
+    /// queued unit, or a folder holding one.
+    private func isFirst(_ row: ManagerRow) -> Bool {
+        guard let q = app.status?.priority, !q.isEmpty else { return false }
+        return q.contains { $0.path == row.path || $0.unit == row.path || $0.unit.hasPrefix(row.path + "/") }
+    }
+
     @ViewBuilder
     private func menu(for rows: [ManagerRow]) -> some View {
         if rows.count == 1, let r = rows.first {
@@ -823,6 +839,8 @@ struct ManagerView: View {
         }
         if !rows.isEmpty {
             Button("Jetzt synchronisieren") { model.syncNow(rows) }
+            Button("Als Nächstes synchronisieren") { model.putFirst(rows) }
+                .help("Kommt direkt nach dem Ordner, der gerade übertragen wird – auf beiden Macs")
             Divider()
             Button("In den Papierkorb …", role: .destructive) { model.trash(rows) }
                 .disabled(!rows.contains(where: \.onDisk))
@@ -956,10 +974,15 @@ private struct StateCell: View {
     let row: ManagerRow
     let phase: ManagerModel.Phase
     let peer: String
+    var first = false
 
     var body: some View {
         if let d = describe() {
             HStack(spacing: 6) {
+                if first {
+                    Image(systemName: "arrow.up.to.line.circle.fill").foregroundStyle(.blue)
+                        .help("Vorgezogen: wird als Nächstes synchronisiert")
+                }
                 Label(d.text, systemImage: d.symbol).foregroundStyle(d.color).lineLimit(1)
                     .help(longText ?? d.text)
                 if let n = row.item?.gitNotice {

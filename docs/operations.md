@@ -78,6 +78,7 @@ Konfigurationsänderungen werden beim Neustart des Daemons übernommen.
 | `macsync status [unit] [--json]` | Zustand, Root-Hashes beider Seiten, Konflikte |
 | `macsync diff [unit]` | Trockenlauf: abweichende Pfade und geplante Aktion mit Grund |
 | `macsync sync [units…] [--dry-run]` | sofort synchronisieren |
+| `macsync first <pfad>` | Ordner/Datei als Nächstes synchronisieren (beide Macs; braucht den Daemon) |
 | `macsync verify [unit]` | vollständiges Neu-Hashen, meldet „stille“ Änderungen |
 | `macsync conflicts [--all]` | Konflikte inkl. Speicherort der fremden Version |
 | `macsync resolve <id> --keep local\|remote\|both` | Konflikt lösen |

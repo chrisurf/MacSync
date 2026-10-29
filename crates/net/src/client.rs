@@ -82,6 +82,14 @@ impl NetPeer {
         }
     }
 
+    /// A second, independent connection to the same peer (requests on one
+    /// never wait for the other).
+    pub fn sibling(&self) -> NetPeer {
+        let mut p = NetPeer::new(self.addr, self.identity.clone(), self.expected.clone(), self.hello.clone());
+        p.timeout = self.timeout;
+        p
+    }
+
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -178,6 +186,11 @@ impl NetPeer {
         Ok(())
     }
 
+    pub fn prioritize(&self, units: Vec<String>) -> Result<()> {
+        self.call(&Request::Prioritize { units })?;
+        Ok(())
+    }
+
     pub fn disconnect(&self) {
         *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -224,5 +237,8 @@ impl PeerApi for NetPeer {
             Response::BlobRange(b) => Ok(b),
             r => unexpected(r),
         }
+    }
+    fn lanes(&self, n: usize) -> Vec<Box<dyn PeerApi + Send + Sync>> {
+        (0..n).map(|_| Box::new(self.sibling()) as Box<dyn PeerApi + Send + Sync>).collect()
     }
 }

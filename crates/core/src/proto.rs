@@ -62,6 +62,11 @@ pub enum Request {
         units: Vec<String>,
     },
     Ping,
+    /// Notification: the user wants these units synchronised next (both
+    /// directions). Appended last to keep the variant indices stable.
+    Prioritize {
+        units: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

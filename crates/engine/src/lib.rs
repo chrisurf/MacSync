@@ -20,7 +20,7 @@ mod serve;
 
 pub use capture::{ScanOptions, ScanReport};
 pub use plan::{ActionKind, PlannedAction};
-pub use pull::{Outcome, PullOptions, PullReport, RetryLater};
+pub use pull::{Outcome, PullOptions, PullQueue, PullReport, RetryLater};
 pub use resolve::{Choice, ConflictView, Side};
 
 use std::collections::HashMap;
@@ -108,6 +108,11 @@ pub trait PeerApi {
     fn entries(&self, unit: &str, paths: &[String], prefixes: &[String]) -> Result<Vec<Entry>>;
     fn blobs(&self, hashes: &[Hash]) -> Result<Vec<Option<Vec<u8>>>>;
     fn blob_range(&self, hash: &Hash, offset: u64, len: u64) -> Result<Option<Vec<u8>>>;
+    /// Up to `n` additional connections to the same peer for a large
+    /// content transfer; dropped when the transfer ends. Default: none.
+    fn lanes(&self, _n: usize) -> Vec<Box<dyn PeerApi + Send + Sync>> {
+        Vec::new()
+    }
 }
 
 /// Error raised by the fault injection used in crash tests.

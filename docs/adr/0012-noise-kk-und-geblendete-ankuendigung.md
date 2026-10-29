@@ -21,7 +21,8 @@ verfolgbar. Jede TCP-Verbindung kostete zudem einen Thread.
   wird die *älteste* geschlossen, nicht die neue: Ein echter Handshake dauert
   Millisekunden, so verdrängt eine Flut stummer Verbindungen sich selbst und
   nicht den gekoppelten Mac. 3 s Handshake, 5 Fehlschläge je Adresse → 60 s
-  Sperre, höchstens 4 gekoppelte Verbindungen.
+  Sperre, höchstens 8 gekoppelte Verbindungen (Synchronisation, Status des
+  Managers, bis zu 3 zusätzliche für große Übertragungen, Reserve).
 - **Geblendete Ankündigung:** `K = derive_key("macsync-mdns-v1 key",
   X25519(eigener privater, Peer-öffentlicher Schlüssel))`; angekündigt wird
   `BLAKE3-keyed(K, "macsync-mdns-v1" ‖ eigener Public Key ‖ Stunde)[..8]` als

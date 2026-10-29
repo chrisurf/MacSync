@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use macsync_core::proto::Request;
 use macsync_core::Hash;
-use macsync_engine::{Engine, Outcome, PeerApi, PullOptions, PullReport, ScanOptions};
+use macsync_engine::{Engine, Outcome, PeerApi, PullOptions, PullQueue, PullReport, ScanOptions};
 use macsync_net::client::HelloInfo;
 use macsync_net::{discovery, Identity, NetPeer, Server};
 use macsync_store::PeerRow;
@@ -169,6 +169,11 @@ pub(crate) struct Shared {
     paused: AtomicBool,
     units: RwLock<Vec<String>>,
     peer: Mutex<Option<Arc<NetPeer>>>,
+    /// A second connection for the manager's status requests, so they never
+    /// wait behind a transfer on `peer`.
+    browse_peer: Mutex<Option<Arc<NetPeer>>>,
+    /// Units the user wants synchronised next, with the path they chose.
+    priority: Mutex<Vec<Priority>>,
     peer_state: Mutex<PeerState>,
     force_ae: AtomicBool,
     /// Listening port and Bonjour announcement; only while a peer is paired.
@@ -184,6 +189,25 @@ struct NetworkState {
     checked: Option<Instant>,
     known: bool,
     hidden: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Priority {
+    unit: String,
+    path: String,
+}
+
+/// [`Shared::priority`] as the engine's pull queue.
+struct SharedQueue<'a>(&'a Shared);
+
+impl PullQueue for SharedQueue<'_> {
+    fn next(&self, done: &BTreeSet<String>) -> Option<String> {
+        let q = self.0.priority.lock().unwrap_or_else(|e| e.into_inner());
+        q.iter().find(|p| !done.contains(&p.unit)).map(|p| p.unit.clone())
+    }
+    fn done(&self, unit: &str) {
+        self.0.priority.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| p.unit != unit);
+    }
 }
 
 /// What the daemon shows to the network.
@@ -218,6 +242,18 @@ impl Shared {
         if e.window_events > 200 {
             e.burst = true;
         }
+    }
+
+    /// Put `units` at the front of the queue (`path`: what the user chose).
+    fn prioritize(&self, units: &[String], path: &str) {
+        let mut q = self.priority.lock().unwrap_or_else(|e| e.into_inner());
+        q.retain(|p| !units.contains(&p.unit));
+        for (i, u) in units.iter().enumerate() {
+            q.insert(i, Priority { unit: u.clone(), path: path.to_string() });
+        }
+        q.truncate(256);
+        drop(q);
+        self.notify();
     }
 
     fn dirty_gen(&self, unit: &str) -> Option<u64> {
@@ -256,6 +292,8 @@ impl Daemon {
             paused: AtomicBool::new(node.engine.store().kv("paused_all")?.as_deref() == Some("1")),
             units: RwLock::new(Vec::new()),
             peer: Mutex::new(None),
+            browse_peer: Mutex::new(None),
+            priority: Mutex::new(Vec::new()),
             peer_state: Mutex::new(PeerState::default()),
             force_ae: AtomicBool::new(true),
             exposure: Mutex::new(None),
@@ -378,6 +416,12 @@ fn open_exposure(node: &Arc<Node>, shared: &Arc<Shared>, peer_key: Vec<u8>) -> R
             ps.online = true;
             ps.last_contact_ms = macsync_fs::time::now_ms();
         }
+        if let Request::Prioritize { units } = &req {
+            tracing::info!(peer = %peer.device, ?units, "peer puts units first");
+            let units: Vec<String> =
+                units.iter().filter(|u| macsync_engine::validate_unit_name(u).is_ok()).take(64).cloned().collect();
+            s3.prioritize(&units, "");
+        }
         if let Request::Changed { units } = &req {
             tracing::debug!(peer = %peer.device, ?units, "peer reports changes");
             let mut p = s3.pending.lock().unwrap_or_else(|e| e.into_inner());
@@ -499,9 +543,21 @@ fn peer(node: &Node, shared: &Shared) -> Option<Arc<NetPeer>> {
     }
 }
 
+/// The manager's own connection, opened next to the sync connection while
+/// the peer is online (never a connect attempt of its own otherwise).
+fn browse_peer(shared: &Shared) -> Option<Arc<NetPeer>> {
+    let main = shared.peer.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let mut b = shared.browse_peer.lock().unwrap_or_else(|e| e.into_inner());
+    if b.as_ref().is_none_or(|p| p.addr() != main.addr()) {
+        *b = Some(Arc::new(main.sibling()));
+    }
+    b.clone()
+}
+
 fn peer_failed(shared: &Shared, e: &anyhow::Error) {
     tracing::warn!(error = %format!("{e:#}"), "peer request failed");
     *shared.peer.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *shared.browse_peer.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let mut ps = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner());
     ps.online = false;
     ps.last_error = format!("{e:#}");
@@ -591,7 +647,19 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
             }
         }
 
-        // 2. Pull units the peer reported as changed (once they are not dirty here).
+        // 2. Units the user put first (rounds below also check the queue
+        // between units, so this only starts them when nothing else runs).
+        let queued = !shared.priority.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+        // Only over an open connection: offline, the next anti-entropy round
+        // reconnects and takes the queue first.
+        let open = shared.peer.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let (true, Some(p)) = (queued, open) {
+            if let Err(e) = pull(&node, &shared, &p, Some(&[])) {
+                peer_failed(&shared, &e);
+            }
+        }
+
+        // 3. Pull units the peer reported as changed (once they are not dirty here).
         let due: Vec<String> = {
             let dirty = shared.dirty_set();
             let mut p = shared.pending.lock().unwrap_or_else(|e| e.into_inner());
@@ -675,7 +743,7 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
 }
 
 fn pull(node: &Node, shared: &Shared, peer: &NetPeer, units: Option<&[String]>) -> Result<()> {
-    let reports = node.engine.sync_from(peer, units, PullOptions::default())?;
+    let reports = node.engine.sync_from_queue(peer, units, PullOptions::default(), &SharedQueue(shared))?;
     let mut applied = Vec::new();
     for r in &reports {
         match &r.outcome {
@@ -766,11 +834,44 @@ impl Daemon {
             "hide_unknown": node.cfg.peer.hide_in_unknown_networks,
         });
         drop(net);
+        let q = shared.priority.lock().unwrap_or_else(|e| e.into_inner());
+        v["priority"] = json!(q.iter().map(|p| json!({ "unit": p.unit, "path": p.path })).collect::<Vec<_>>());
+        drop(q);
         v["transfer"] = json!(node.engine.transfer());
         let (served, served_ms) = node.engine.served();
         v["served_bytes"] = json!(served);
         v["served_ms"] = json!(served_ms);
         Ok(v)
+    }
+
+    /// Put the units behind `path` first: the unit containing it and every
+    /// unit below it. The peer is told too, so both directions go first.
+    pub(crate) fn ipc_prioritize(node: &Node, shared: &Shared, path: &str) -> Result<Value> {
+        let path = macsync_core::path::nfc(path.trim_matches('/'));
+        let (unit, _) = node.engine.split_path(&path)?;
+        let prefix = format!("{path}/");
+        let mut units: Vec<String> = unit.into_iter().collect();
+        let mut below: Vec<String> =
+            node.engine.store().units()?.into_iter().map(|u| u.name).filter(|n| n.starts_with(&prefix)).collect();
+        below.sort();
+        for u in below {
+            if !units.contains(&u) {
+                units.push(u);
+            }
+        }
+        if units.is_empty() {
+            // The sync root itself: every unit is "first", nothing to reorder.
+            return Ok(json!({ "units": [] }));
+        }
+        tracing::info!(%path, ?units, "put first");
+        shared.prioritize(&units, &path);
+        if let Some(p) = browse_peer(shared) {
+            if let Err(e) = p.prioritize(units.clone()) {
+                tracing::debug!(error = %format!("{e:#}"), "peer not told about the priority");
+                *shared.browse_peer.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+        }
+        Ok(json!({ "units": units }))
     }
 
     /// Never connects: the IPC answer must not wait for discovery or a
@@ -783,12 +884,14 @@ impl Daemon {
         dir: &str,
         local: bool,
     ) -> Result<Value> {
-        let p = if local { None } else { shared.peer.lock().unwrap_or_else(|e| e.into_inner()).clone() };
+        let p = if local { None } else { browse_peer(shared) };
         let items = match &p {
             Some(peer_conn) => match node.engine.browse(Some(peer_conn.as_ref() as &dyn PeerApi), unit, dir) {
                 Ok(items) => items,
                 Err(e) => {
-                    peer_failed(shared, &e);
+                    // Only this connection: the sync loop notices a lost peer.
+                    tracing::debug!(error = %format!("{e:#}"), "browse request failed");
+                    *shared.browse_peer.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     node.engine.browse(None, unit, dir)?
                 }
             },

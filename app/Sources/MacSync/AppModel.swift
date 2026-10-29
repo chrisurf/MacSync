@@ -38,6 +38,13 @@ struct Status: Decodable {
     }
 
     var network: Network?
+    /// Units the user put first, with the path chosen in the manager.
+    struct Priority: Decodable {
+        var unit: String
+        var path: String
+    }
+
+    var priority: [Priority]?
     struct Transfer: Decodable {
         var unit: String
         var filesTotal: Int64

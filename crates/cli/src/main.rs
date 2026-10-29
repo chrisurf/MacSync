@@ -103,6 +103,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Synchronise this folder or file next, ahead of the rest (needs the
+    /// running daemon).
+    First {
+        /// Path relative to the sync root, e.g. `chrisurf/macmailbox`.
+        path: String,
+    },
     /// Synchronise now.
     Sync {
         units: Vec<String>,
@@ -513,6 +519,17 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 output::browse(&v);
+            }
+            Ok(())
+        }
+        Cmd::First { path } => {
+            let v = ipc::call(&cfg.state_dir(), &IpcRequest::Prioritize { path })?
+                .context("the daemon does not run: start it with `macsync daemon` or the app")?;
+            let units: Vec<&str> = v["units"].as_array().into_iter().flatten().filter_map(|u| u.as_str()).collect();
+            if units.is_empty() {
+                println!("nothing to put first");
+            } else {
+                println!("next: {}", units.join(", "));
             }
             Ok(())
         }

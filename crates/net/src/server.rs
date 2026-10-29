@@ -33,8 +33,9 @@ pub type Handler = Arc<dyn Fn(&PeerInfo, Request) -> Response + Send + Sync>;
 
 /// Connections in their handshake at the same time.
 pub const MAX_HANDSHAKES: usize = 4;
-/// Authenticated connections at the same time.
-pub const MAX_PAIRED: usize = 4;
+/// Authenticated connections at the same time: sync, the manager's status
+/// and up to three extra transfer connections, with room to spare.
+pub const MAX_PAIRED: usize = 8;
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 

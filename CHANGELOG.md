@@ -12,7 +12,7 @@ mit 0.5 verbinden sich nicht miteinander.
   Kopplung. Der Port ist nur offen, solange ein Mac gekoppelt ist
 - Verbindungsflut begrenzt: höchstens 4 Verbindungen im Handshake (die
   älteste weicht, damit der eigene Mac durchkommt), 3 s Handshake, nach
-  5 Fehlschlägen 60 s Sperre je Adresse, höchstens 4 gekoppelte Verbindungen
+  5 Fehlschlägen 60 s Sperre je Adresse, höchstens 8 gekoppelte Verbindungen
 - Bonjour zeigt keine feste Geräte-ID mehr, sondern eine stündlich
   wechselnde, die nur der gekoppelte Mac zuordnen kann; Hostname neutral
 - Kopplung: Daten (Name, Pfad, Version) verschlüsselt statt nur
@@ -67,6 +67,18 @@ mit 0.5 verbinden sich nicht miteinander.
   Synchronisation → „Protokoll aufbewahren“ (gilt sofort, ältere Einträge
   werden gelöscht). Bestehende Konfigurationen behalten ihren Wert
   (`journal_retention_days` in `[sync]`)
+- Manager: der Status des anderen Mac kommt über eine eigene Verbindung und
+  wartet nicht mehr hinter einer laufenden Übertragung („Status wird
+  geladen …“ hing im WLAN oft lange)
+- Neu: Rechtsklick → „Als Nächstes synchronisieren“ zieht Ordner oder
+  Dateien vor; ihr Repository kommt direkt nach dem, das gerade übertragen
+  wird, auf beiden Macs. Ein blauer Pfeil markiert, was vorgezogen ist.
+  Auf der Befehlszeile: `macsync first <pfad>`
+- Große Übertragungen laufen über bis zu 4 Verbindungen gleichzeitig (je
+  32 MB ausstehend eine weitere); kleine bleiben bei einer. Bricht eine
+  zusätzliche Verbindung ab, übernehmen die anderen ihren Teil
+- Manager: In einem unbekannten Netz erklärt die Hinweisleiste, warum die
+  Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
 - Ersetzte der andere Mac einen Ordner durch einen Symlink, löschte MacSync
