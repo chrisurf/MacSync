@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod discovery;
+pub mod guard;
 pub mod identity;
 pub mod lan;
 pub mod pairing;
@@ -17,8 +18,10 @@ pub use server::{PeerInfo, Server};
 /// Default TCP port.
 pub const DEFAULT_PORT: u16 = 47123;
 
-/// Noise protocol pattern.
-pub const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
+/// Noise protocol pattern. KK: both sides know each other's static key from
+/// pairing, so a stranger cannot build a valid first message and gets no
+/// answer (ADR-0012).
+pub const NOISE_PARAMS: &str = "Noise_KK_25519_ChaChaPoly_BLAKE2s";
 
 /// Noise prologue: binds the handshake to MacSync and the protocol version.
 pub fn prologue() -> Vec<u8> {

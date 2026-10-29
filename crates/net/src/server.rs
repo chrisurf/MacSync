@@ -1,7 +1,13 @@
-//! Protocol server: accepts Noise connections from paired peers only.
+//! Protocol server: accepts Noise connections from the paired peer only.
+//!
+//! Anyone on the network can open a TCP connection, so the server bounds what
+//! that costs: at most [`MAX_HANDSHAKES`] connections in their handshake
+//! (the oldest gives way), [`HANDSHAKE_TIMEOUT`], a short ban for addresses
+//! whose handshakes keep failing, and at most [`MAX_PAIRED`] authenticated
+//! connections.
 
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -11,6 +17,7 @@ use macsync_core::proto::{Request, Response};
 use macsync_core::PROTOCOL_VERSION;
 
 use crate::client::HelloInfo;
+use crate::guard::{Bans, Handshakes};
 use crate::identity::Identity;
 use crate::secure::SecureStream;
 
@@ -23,8 +30,13 @@ pub struct PeerInfo {
 }
 
 pub type Handler = Arc<dyn Fn(&PeerInfo, Request) -> Response + Send + Sync>;
-/// Returns true if the given static public key belongs to a paired peer.
-pub type Authorizer = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// Connections in their handshake at the same time.
+pub const MAX_HANDSHAKES: usize = 4;
+/// Authenticated connections at the same time.
+pub const MAX_PAIRED: usize = 4;
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub struct Server {
     local: SocketAddr,
@@ -32,30 +44,71 @@ pub struct Server {
     thread: Option<JoinHandle<()>>,
 }
 
-const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+struct Limits {
+    handshakes: Handshakes,
+    bans: Bans,
+    paired: AtomicUsize,
+}
+
+/// Decrements the paired-connection count on drop.
+struct PairedSlot<'a>(&'a AtomicUsize);
+
+impl Drop for PairedSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 impl Server {
+    /// Listen for the peer with the static key `peer` (from pairing).
     pub fn start(
         listen: SocketAddr,
         identity: Identity,
         hello: HelloInfo,
-        authorize: Authorizer,
+        peer: Vec<u8>,
         handler: Handler,
     ) -> Result<Server> {
         let listener = TcpListener::bind(listen).with_context(|| format!("bind {listen}"))?;
         let local = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
+        let limits =
+            Arc::new(Limits { handshakes: Handshakes::new(MAX_HANDSHAKES), bans: Bans::default(), paired: 0.into() });
+        let peer: Arc<[u8]> = peer.into();
         let thread = std::thread::Builder::new().name("macsync-server".into()).spawn(move || {
             for conn in listener.incoming() {
                 if stop2.load(Ordering::SeqCst) {
                     break;
                 }
                 let Ok(stream) = conn else { continue };
-                let (identity, hello, authorize, handler) =
-                    (identity.clone(), hello.clone(), authorize.clone(), handler.clone());
+                let Ok(addr) = stream.peer_addr() else { continue };
+                if !crate::lan::is_local(&addr.ip()) || limits.bans.banned(addr.ip()) {
+                    continue; // dropped: closed without a word
+                }
+                let Ok(slot) = limits.handshakes.admit(&stream) else { continue };
+                let (identity, hello, peer, handler, limits) =
+                    (identity.clone(), hello.clone(), peer.clone(), handler.clone(), limits.clone());
                 let _ = std::thread::Builder::new().name("macsync-conn".into()).spawn(move || {
-                    if let Err(e) = serve_conn(stream, &identity, &hello, &authorize, &handler) {
+                    let s = SecureStream::accept(stream, &identity, &peer, HANDSHAKE_TIMEOUT);
+                    drop(slot);
+                    let s = match s {
+                        Ok(s) => s,
+                        Err(e) => {
+                            if limits.bans.fail(addr.ip()) {
+                                tracing::warn!(%addr, "too many failed handshakes; ignoring this address for a minute");
+                            }
+                            tracing::debug!(%addr, error = %format!("{e:#}"), "handshake failed");
+                            return;
+                        }
+                    };
+                    limits.bans.succeed(addr.ip());
+                    if limits.paired.fetch_add(1, Ordering::SeqCst) >= MAX_PAIRED {
+                        limits.paired.fetch_sub(1, Ordering::SeqCst);
+                        tracing::warn!(%addr, "too many connections from the peer");
+                        return;
+                    }
+                    let _paired = PairedSlot(&limits.paired);
+                    if let Err(e) = serve_conn(s, addr, &hello, &handler) {
                         tracing::debug!(error = %format!("{e:#}"), "connection closed");
                     }
                 });
@@ -95,23 +148,8 @@ impl Drop for Server {
     }
 }
 
-fn serve_conn(
-    stream: TcpStream,
-    identity: &Identity,
-    hello: &HelloInfo,
-    authorize: &Authorizer,
-    handler: &Handler,
-) -> Result<()> {
-    let addr = stream.peer_addr()?;
-    if !crate::lan::is_local(&addr.ip()) {
-        bail!("refusing non-local peer {addr}");
-    }
-    let mut s = SecureStream::accept(stream, identity, Duration::from_secs(10))?;
+fn serve_conn(mut s: SecureStream, addr: SocketAddr, hello: &HelloInfo, handler: &Handler) -> Result<()> {
     let pubkey = s.remote_static().to_vec();
-    if !authorize(&pubkey) {
-        tracing::warn!(%addr, device = %crate::device_id(&pubkey), "rejected unpaired peer");
-        bail!("unpaired peer");
-    }
     s.set_timeout(IDLE_TIMEOUT)?;
     // The first message must be Hello.
     let first: Request = macsync_core::codec::decode(&s.recv()?)?;

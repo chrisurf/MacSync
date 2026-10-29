@@ -170,6 +170,15 @@ pub(crate) struct Shared {
     peer: Mutex<Option<Arc<NetPeer>>>,
     peer_state: Mutex<PeerState>,
     force_ae: AtomicBool,
+    /// Listening port and Bonjour announcement; only while a peer is paired.
+    exposure: Mutex<Option<Exposure>>,
+}
+
+/// What the daemon shows to the network.
+struct Exposure {
+    peer_key: Vec<u8>,
+    server: Server,
+    _advertiser: Option<discovery::Advertiser>,
 }
 
 impl Shared {
@@ -212,9 +221,7 @@ impl Shared {
 pub struct Daemon {
     node: Arc<Node>,
     shared: Arc<Shared>,
-    _server: Server,
     _watcher: notify::RecommendedWatcher,
-    _advertiser: Option<discovery::Advertiser>,
     scheduler: Option<std::thread::JoinHandle<()>>,
     socket: PathBuf,
 }
@@ -239,6 +246,7 @@ impl Daemon {
             peer: Mutex::new(None),
             peer_state: Mutex::new(PeerState::default()),
             force_ae: AtomicBool::new(true),
+            exposure: Mutex::new(None),
         });
 
         // Startup capture replaces the FSEvents event-id replay (ADR-0004).
@@ -246,38 +254,8 @@ impl Daemon {
         node.engine.scan_all(false)?;
         refresh_units(&node, &shared);
 
-        // Protocol server: only the paired key may connect.
-        let n2 = node.clone();
-        let authorize: macsync_net::server::Authorizer = Arc::new(move |key: &[u8]| {
-            n2.engine.store().peers().map(|p| p.iter().any(|p| p.pubkey == key)).unwrap_or(false)
-        });
-        let (n3, s3) = (node.clone(), shared.clone());
-        let handler: macsync_net::server::Handler = Arc::new(move |peer, req| {
-            {
-                let mut ps = s3.peer_state.lock().unwrap_or_else(|e| e.into_inner());
-                ps.online = true;
-                ps.last_contact_ms = macsync_fs::time::now_ms();
-            }
-            if let Request::Changed { units } = &req {
-                tracing::debug!(peer = %peer.device, ?units, "peer reports changes");
-                let mut p = s3.pending.lock().unwrap_or_else(|e| e.into_inner());
-                for u in units {
-                    p.insert(u.clone(), Instant::now());
-                }
-                drop(p);
-                s3.notify();
-            }
-            n3.engine.handle(req)
-        });
-        let server = Server::start(node.cfg.listen, node.identity.clone(), node.hello(), authorize, handler)?;
-        tracing::info!(addr = %server.local_addr(), "listening");
-        let advertiser = if node.cfg.peer.discovery {
-            discovery::Advertiser::start(&node.identity.device_id(), server.local_addr().port())
-                .map_err(|e| tracing::warn!(error = %e, "mDNS advertisement unavailable"))
-                .ok()
-        } else {
-            None
-        };
+        // Protocol server: only while paired, and only for the paired key.
+        update_exposure(&node, &shared);
 
         let watcher = start_watcher(&node, &shared)?;
 
@@ -288,23 +266,16 @@ impl Daemon {
         let scheduler =
             std::thread::Builder::new().name("macsync-scheduler".into()).spawn(move || scheduler(n4, s4))?;
 
-        Ok(Daemon {
-            node,
-            shared,
-            _server: server,
-            _watcher: watcher,
-            _advertiser: advertiser,
-            scheduler: Some(scheduler),
-            socket,
-        })
+        Ok(Daemon { node, shared, _watcher: watcher, scheduler: Some(scheduler), socket })
     }
 
     pub fn node(&self) -> &Arc<Node> {
         &self.node
     }
 
-    pub fn server_addr(&self) -> SocketAddr {
-        self._server.local_addr()
+    /// Listening address; `None` while no peer is paired.
+    pub fn server_addr(&self) -> Option<SocketAddr> {
+        self.shared.exposure.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|x| x.server.local_addr())
     }
 
     /// Block until SIGINT/SIGTERM.
@@ -334,8 +305,62 @@ impl Daemon {
         if let Some(t) = self.scheduler.take() {
             let _ = t.join();
         }
+        // The server's handler holds `shared`: drop it explicitly.
+        self.shared.exposure.lock().unwrap_or_else(|e| e.into_inner()).take();
         let _ = std::fs::remove_file(&self.socket);
     }
+}
+
+/// Open the port (and the Bonjour announcement) for the paired peer, close it
+/// when there is none, and restart it after a new pairing.
+fn update_exposure(node: &Arc<Node>, shared: &Arc<Shared>) {
+    let key = node.peer_row().ok().flatten().map(|r| r.pubkey);
+    let mut exp = shared.exposure.lock().unwrap_or_else(|e| e.into_inner());
+    if exp.as_ref().map(|x| &x.peer_key) == key.as_ref() {
+        return;
+    }
+    if exp.take().is_some() {
+        tracing::info!("stopped listening");
+    }
+    let Some(key) = key else {
+        tracing::info!("not paired: not listening");
+        return;
+    };
+    match open_exposure(node, shared, key) {
+        Ok(x) => *exp = Some(x),
+        Err(e) => tracing::warn!(error = %format!("{e:#}"), "cannot listen"),
+    }
+}
+
+fn open_exposure(node: &Arc<Node>, shared: &Arc<Shared>, peer_key: Vec<u8>) -> Result<Exposure> {
+    let (n3, s3) = (node.clone(), shared.clone());
+    let handler: macsync_net::server::Handler = Arc::new(move |peer, req| {
+        {
+            let mut ps = s3.peer_state.lock().unwrap_or_else(|e| e.into_inner());
+            ps.online = true;
+            ps.last_contact_ms = macsync_fs::time::now_ms();
+        }
+        if let Request::Changed { units } = &req {
+            tracing::debug!(peer = %peer.device, ?units, "peer reports changes");
+            let mut p = s3.pending.lock().unwrap_or_else(|e| e.into_inner());
+            for u in units {
+                p.insert(u.clone(), Instant::now());
+            }
+            drop(p);
+            s3.notify();
+        }
+        n3.engine.handle(req)
+    });
+    let server = Server::start(node.cfg.listen, node.identity.clone(), node.hello(), peer_key.clone(), handler)?;
+    tracing::info!(addr = %server.local_addr(), "listening");
+    let advertiser = if node.cfg.peer.discovery {
+        discovery::Advertiser::start(&node.identity.device_id(), server.local_addr().port())
+            .map_err(|e| tracing::warn!(error = %e, "mDNS advertisement unavailable"))
+            .ok()
+    } else {
+        None
+    };
+    Ok(Exposure { peer_key, server, _advertiser: advertiser })
 }
 
 fn refresh_units(node: &Node, shared: &Shared) {
@@ -449,6 +474,7 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
     let mut last_verify = Instant::now();
     let mut last_rescan = Instant::now();
     let mut last_housekeeping: Option<Instant> = None;
+    let mut last_exposure = Instant::now();
     let tick = Duration::from_millis(100);
     while !shared.stop.load(Ordering::SeqCst) {
         {
@@ -459,6 +485,11 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
                 woke = g;
             }
             *woke = false;
+        }
+        // Pairing (`macsync pair`) changes the peer behind our back.
+        if last_exposure.elapsed() >= Duration::from_secs(2) {
+            last_exposure = Instant::now();
+            update_exposure(&node, &shared);
         }
         if shared.paused.load(Ordering::SeqCst) {
             continue;
@@ -777,5 +808,42 @@ mod tests {
         assert_eq!(m("newdir").as_deref(), Some("newdir"));
         assert_eq!(m("other/x").as_deref(), Some("other"));
         assert_eq!(m(".macsync/staging/x"), None);
+    }
+
+    /// No port is open before pairing; it opens once a peer is stored.
+    #[test]
+    fn listens_only_while_paired() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            root: d.path().join("root"),
+            state_dir: Some(d.path().join("state")),
+            listen: "127.0.0.1:0".parse().unwrap(),
+            peer: crate::config::PeerConfig { address: Some("127.0.0.1:9".into()), discovery: false },
+            ..Config::default()
+        };
+        std::fs::create_dir_all(cfg.root()).unwrap();
+        let daemon = Daemon::start(Node::open(cfg).unwrap()).unwrap();
+        assert_eq!(daemon.server_addr(), None);
+        let peer = Identity::generate().unwrap();
+        daemon
+            .node()
+            .engine
+            .store()
+            .add_peer(&PeerRow {
+                device: peer.device_id(),
+                name: "Peer".into(),
+                pubkey: peer.public.clone(),
+                addr: String::new(),
+                paired_ms: 0,
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while daemon.server_addr().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let addr = daemon.server_addr().expect("listening after pairing");
+        assert!(std::net::TcpStream::connect(addr).is_ok());
+        daemon.stop();
+        assert!(std::net::TcpStream::connect(addr).is_err(), "port still open after stop");
     }
 }

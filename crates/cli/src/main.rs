@@ -448,7 +448,10 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Daemon => {
             let node = Node::open(cfg)?;
             let d = Daemon::start(node)?;
-            eprintln!("macsync daemon running on {} (Ctrl-C to stop)", d.server_addr());
+            match d.server_addr() {
+                Some(a) => eprintln!("macsync daemon running on {a} (Ctrl-C to stop)"),
+                None => eprintln!("macsync daemon running, not listening until paired (Ctrl-C to stop)"),
+            }
             d.run_until_signal()
         }
         Cmd::Status { unit, json } => {

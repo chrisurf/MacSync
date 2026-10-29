@@ -27,4 +27,4 @@ pub type DeviceId = String;
 
 /// Protocol version spoken on the wire. Peers with a different major version
 /// refuse to talk to each other.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;

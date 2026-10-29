@@ -4,7 +4,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use macsync_core::proto::{DirListing, Request, Response, UnitRoot};
 use macsync_core::{Entry, Hash, PROTOCOL_VERSION};
 use macsync_engine::PeerApi;
@@ -105,10 +105,13 @@ impl NetPeer {
             };
             anyhow!("connect {}: {e}{hint}", self.addr)
         })?;
-        let mut s = SecureStream::connect(tcp, &self.identity, self.timeout)?;
-        if s.remote_static() != self.expected.as_slice() {
-            bail!("peer at {} presented an unknown key (device {})", self.addr, crate::device_id(s.remote_static()));
-        }
+        let mut s = SecureStream::connect(tcp, &self.identity, &self.expected, self.timeout).with_context(|| {
+            format!(
+                "peer at {} did not complete the handshake: another device, not paired with this Mac, \
+                 or an older MacSync (update both Macs to the same version)",
+                self.addr
+            )
+        })?;
         s.send(&macsync_core::codec::encode(&self.hello.request())?)?;
         match macsync_core::codec::decode::<Response>(&s.recv()?)? {
             Response::Hello { device, name, protocol, arch, root, version } => {

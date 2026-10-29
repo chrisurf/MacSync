@@ -13,15 +13,13 @@ fn start(dir: &std::path::Path, name: &str) -> (Arc<Engine>, Identity) {
 }
 
 fn serve(engine: Arc<Engine>, id: &Identity, allowed: Vec<u8>) -> Server {
+    serve_on("127.0.0.1:0", engine, id, allowed)
+}
+
+fn serve_on(listen: &str, engine: Arc<Engine>, id: &Identity, allowed: Vec<u8>) -> Server {
     let hello = HelloInfo::local(id, "srv", "/");
-    Server::start(
-        "127.0.0.1:0".parse().unwrap(),
-        id.clone(),
-        hello,
-        Arc::new(move |k| k == allowed.as_slice()),
-        Arc::new(move |_peer, req| engine.handle(req)),
-    )
-    .unwrap()
+    Server::start(listen.parse().unwrap(), id.clone(), hello, allowed, Arc::new(move |_peer, req| engine.handle(req)))
+        .unwrap()
 }
 
 #[test]
@@ -73,8 +71,8 @@ fn unpaired_and_impostor_keys_are_rejected() {
     let (c, _) = start(dir.path(), "c");
     let fake = serve(c, &impostor, idb.public.clone());
     let p = NetPeer::new(fake.local_addr(), idb.clone(), ida.public.clone(), HelloInfo::local(&idb, "b", "/"));
-    let err = p.ping().unwrap_err().to_string();
-    assert!(err.contains("unknown key"), "{err}");
+    let err = format!("{:#}", p.ping().unwrap_err());
+    assert!(err.contains("did not complete the handshake"), "{err}");
 
     // The genuine pairing works.
     let p = NetPeer::new(server.local_addr(), idb.clone(), ida.public.clone(), HelloInfo::local(&idb, "b", "/"));
@@ -87,4 +85,58 @@ fn public_addresses_are_refused() {
     let p = NetPeer::new("8.8.8.8:47123".parse().unwrap(), id.clone(), id.public.clone(), HelloInfo::default());
     let err = p.ping().unwrap_err().to_string();
     assert!(err.contains("non-local"), "{err}");
+}
+
+/// This machine's LAN address (no packet is sent), so a test can connect
+/// from an address other than the loopback one.
+fn lan_ip() -> Option<std::net::IpAddr> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.168.0.1:9").ok()?;
+    Some(s.local_addr().ok()?.ip()).filter(|ip| !ip.is_unspecified() && !ip.is_loopback())
+}
+
+/// 200 idle or junk connections at once (from the LAN address) neither stop
+/// the server nor keep the paired Mac (on loopback) out, and none of them
+/// gets a single byte back.
+#[test]
+fn connection_flood_does_not_lock_out_the_peer() {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (a, ida) = start(dir.path(), "a");
+    let (_b, idb) = start(dir.path(), "b");
+    let server = serve_on("0.0.0.0:0", a, &ida, idb.public.clone());
+    let port = server.local_addr().port();
+    let Some(attacker) = lan_ip() else {
+        eprintln!("no LAN address; skipping");
+        return;
+    };
+    let addr = SocketAddr::new(attacker, port);
+    let threads: Vec<_> = (0..200)
+        .map(|i| {
+            std::thread::spawn(move || {
+                let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else { return 0 };
+                if i % 2 == 0 {
+                    // A junk handshake frame.
+                    let _ = s.write_all(&[0, 48]).and_then(|_| s.write_all(&[7u8; 48]));
+                }
+                s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut answer = Vec::new();
+                let _ = s.read_to_end(&mut answer);
+                answer.len()
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let p = NetPeer::new(addr, idb.clone(), ida.public.clone(), HelloInfo::local(&idb, "b", "/"));
+    p.ping().unwrap();
+    for t in threads {
+        assert_eq!(t.join().unwrap(), 0, "a stranger got an answer");
+    }
+    p.disconnect();
+    p.ping().unwrap();
+    server.stop();
 }

@@ -48,43 +48,52 @@ fn configure(stream: &TcpStream, timeout: Duration) -> Result<()> {
     Ok(())
 }
 
-fn builder(identity: &Identity) -> Result<snow::Builder<'_>> {
-    Ok(snow::Builder::new(crate::NOISE_PARAMS.parse()?).local_private_key(&identity.private)?)
+fn builder<'a>(identity: &'a Identity, remote: &'a [u8]) -> Result<snow::Builder<'a>> {
+    Ok(snow::Builder::new(crate::NOISE_PARAMS.parse()?)
+        .local_private_key(&identity.private)?
+        .remote_public_key(remote)?)
 }
 
 impl SecureStream {
-    /// Run the XX handshake as initiator.
-    pub fn connect(mut stream: TcpStream, identity: &Identity, timeout: Duration) -> Result<SecureStream> {
+    /// Run the KK handshake as initiator with the pinned key `remote`.
+    pub fn connect(
+        mut stream: TcpStream,
+        identity: &Identity,
+        remote: &[u8],
+        timeout: Duration,
+    ) -> Result<SecureStream> {
         configure(&stream, timeout)?;
         let prologue = crate::prologue();
-        let mut hs = builder(identity)?.prologue(&prologue)?.build_initiator()?;
+        let mut hs = builder(identity, remote)?.prologue(&prologue)?.build_initiator()?;
         let mut buf = vec![0u8; NOISE_MAX];
         let mut payload = vec![0u8; NOISE_MAX];
-        let n = hs.write_message(&[], &mut buf)?; // -> e
+        let n = hs.write_message(&[], &mut buf)?; // -> e, es, ss
         write_frame(&mut stream, &buf[..n])?;
-        let msg = read_frame(&mut stream).context("handshake: no response")?; // <- e, ee, s, es
+        // A peer that does not hold `remote`'s key, or does not know ours,
+        // closes without an answer.
+        let msg = read_frame(&mut stream).context("handshake: no response (not paired with this Mac?)")?; // <- e, ee, se
         hs.read_message(&msg, &mut payload).context("handshake failed")?;
-        let n = hs.write_message(&[], &mut buf)?; // -> s, se
-        write_frame(&mut stream, &buf[..n])?;
-        let remote_static = hs.get_remote_static().context("no remote static key")?.to_vec();
-        Ok(SecureStream { stream, noise: hs.into_transport_mode()?, remote_static })
+        Ok(SecureStream { stream, noise: hs.into_transport_mode()?, remote_static: remote.to_vec() })
     }
 
-    /// Run the XX handshake as responder.
-    pub fn accept(mut stream: TcpStream, identity: &Identity, timeout: Duration) -> Result<SecureStream> {
+    /// Run the KK handshake as responder, accepting only `remote`. If the
+    /// first message was not made for this key pair, nothing is sent back.
+    pub fn accept(
+        mut stream: TcpStream,
+        identity: &Identity,
+        remote: &[u8],
+        timeout: Duration,
+    ) -> Result<SecureStream> {
         configure(&stream, timeout)?;
         let prologue = crate::prologue();
-        let mut hs = builder(identity)?.prologue(&prologue)?.build_responder()?;
+        let mut hs = builder(identity, remote)?.prologue(&prologue)?.build_responder()?;
         let mut buf = vec![0u8; NOISE_MAX];
         let mut payload = vec![0u8; NOISE_MAX];
         let msg = read_frame(&mut stream)?;
         hs.read_message(&msg, &mut payload).context("handshake failed")?;
         let n = hs.write_message(&[], &mut buf)?;
         write_frame(&mut stream, &buf[..n])?;
-        let msg = read_frame(&mut stream)?;
-        hs.read_message(&msg, &mut payload).context("handshake failed")?;
-        let remote_static = hs.get_remote_static().context("no remote static key")?.to_vec();
-        Ok(SecureStream { stream, noise: hs.into_transport_mode()?, remote_static })
+        Ok(SecureStream { stream, noise: hs.into_transport_mode()?, remote_static: remote.to_vec() })
     }
 
     pub fn remote_static(&self) -> &[u8] {
@@ -180,15 +189,20 @@ mod tests {
         let cpub = client_id.public.clone();
         let t = std::thread::spawn(move || {
             let (s, _) = l.accept().unwrap();
-            let mut ss = SecureStream::accept(s, &sid, Duration::from_secs(5)).unwrap();
+            let mut ss = SecureStream::accept(s, &sid, &cpub, Duration::from_secs(5)).unwrap();
             assert_eq!(ss.remote_static(), &cpub[..]);
             for _ in 0..3 {
                 let m = ss.recv().unwrap();
                 ss.send(&m).unwrap();
             }
         });
-        let mut c =
-            SecureStream::connect(TcpStream::connect(addr).unwrap(), &client_id, Duration::from_secs(5)).unwrap();
+        let mut c = SecureStream::connect(
+            TcpStream::connect(addr).unwrap(),
+            &client_id,
+            &server_id.public,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(c.remote_static(), &server_id.public[..]);
         let random: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
         for m in [b"hi".to_vec(), vec![7u8; 1_000_000], random] {
@@ -196,5 +210,39 @@ mod tests {
             assert_eq!(c.recv().unwrap(), m);
         }
         t.join().unwrap();
+    }
+
+    /// The responder answers only a client that holds the expected key and
+    /// knows the responder's key; everyone else gets no byte back.
+    #[test]
+    fn strangers_get_no_answer() {
+        let server_id = Identity::generate().unwrap();
+        let paired = Identity::generate().unwrap();
+        let stranger = Identity::generate().unwrap();
+        let wrong_server_key = Identity::generate().unwrap();
+        let cases = [
+            ("unknown client key", stranger.clone(), server_id.public.clone()),
+            ("server key not known", paired.clone(), wrong_server_key.public.clone()),
+        ];
+        for (what, client, server_key) in cases {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = l.local_addr().unwrap();
+            let (sid, ppub) = (server_id.clone(), paired.public.clone());
+            let t = std::thread::spawn(move || {
+                let (s, _) = l.accept().unwrap();
+                SecureStream::accept(s, &sid, &ppub, Duration::from_secs(5)).is_err()
+            });
+            let mut tcp = TcpStream::connect(addr).unwrap();
+            tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let prologue = crate::prologue();
+            let mut hs = builder(&client, &server_key).unwrap().prologue(&prologue).unwrap().build_initiator().unwrap();
+            let mut buf = vec![0u8; NOISE_MAX];
+            let n = hs.write_message(&[], &mut buf).unwrap();
+            write_frame(&mut tcp, &buf[..n]).unwrap();
+            let mut answer = Vec::new();
+            let _ = tcp.read_to_end(&mut answer);
+            assert!(answer.is_empty(), "{what}: server answered {} bytes", answer.len());
+            assert!(t.join().unwrap(), "{what}: handshake accepted");
+        }
     }
 }
