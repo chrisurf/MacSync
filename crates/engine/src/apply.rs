@@ -82,6 +82,9 @@ impl Engine {
         let target = macsync_fs::abs_path(&self.cfg.root, unit, &op.disk);
         let trash_rel = macsync_fs::root_rel(unit, &op.disk);
         let e = &op.entry;
+        if op.kind != OpKind::DbOnly && self.behind_symlink(unit, &op.disk) {
+            return Ok(()); // skipped; `commit` records why
+        }
         match op.kind {
             OpKind::DbOnly => {}
             OpKind::Rename => {
@@ -189,6 +192,12 @@ impl Engine {
         Ok(())
     }
 
+    /// True if a directory above `disk` is a symbolic link, so the path would
+    /// lead out of the sync root. Such operations are skipped.
+    fn behind_symlink(&self, unit: &str, disk: &str) -> bool {
+        macsync_fs::ensure_no_symlink_ancestor(&self.cfg.root, &macsync_fs::root_rel(unit, disk)).is_err()
+    }
+
     fn set_meta(&self, path: &Path, e: &macsync_core::Entry) -> Result<()> {
         meta::set_mode(path, e.kind, e.mode)?;
         meta::write_xattrs(path, &e.xattrs, self.cfg.strip_quarantine)?;
@@ -239,9 +248,22 @@ impl Engine {
         let now = macsync_fs::time::now_ms();
         let unit = plan.unit.as_str();
         let mut rows: Vec<(Option<Stored>, &Op)> = Vec::with_capacity(plan.ops.len());
+        let mut skipped: Vec<&Op> = Vec::new();
         for op in &plan.ops {
             let target = macsync_fs::abs_path(&self.cfg.root, unit, &op.disk);
+            let behind_symlink = op.kind != OpKind::DbOnly && self.behind_symlink(unit, &op.disk);
+            if behind_symlink && op.kind != OpKind::Delete {
+                skipped.push(op);
+                continue;
+            }
             let row = match op.kind {
+                // A parent was replaced by a link: the path is gone already.
+                OpKind::Delete if behind_symlink => Some(Stored {
+                    entry: op.entry.clone(),
+                    disk: op.disk.clone(),
+                    stat: StatCache::default(),
+                    changed_ms: now,
+                }),
                 OpKind::Delete => {
                     if fs::symlink_metadata(&target).is_ok() {
                         None // kept (contains unsynced files)
@@ -301,6 +323,9 @@ impl Engine {
                     }
                     None => st.log(unit, "keep", &op.path, "directory contains unsynced files; not deleted", "")?,
                 }
+            }
+            for op in &skipped {
+                st.log(unit, "warning", &op.path, "skipped: a parent folder is a symbolic link", "")?;
             }
             for c in &plan.conflicts {
                 let remote = c.remotes.first().map(|r| r.vv.display()).unwrap_or_default();

@@ -91,7 +91,49 @@ pub fn spelling_on_disk(root: &Path, rel: &str) -> Option<String> {
     Some(out)
 }
 
+/// Fails if a directory between `base` and `rel` (exclusive) is a symbolic
+/// link. Writing or deleting `base/rel` through such a link would reach a
+/// place outside the sync root. Missing components are fine (they are
+/// created as directories).
+pub fn ensure_no_symlink_ancestor(base: &Path, rel: &str) -> std::io::Result<()> {
+    let mut dir = base.to_path_buf();
+    let mut parts = rel.split('/').filter(|c| !c.is_empty()).peekable();
+    while let Some(comp) = parts.next() {
+        if parts.peek().is_none() {
+            break; // the target itself may be a link
+        }
+        dir.push(comp);
+        match std::fs::symlink_metadata(&dir) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(std::io::Error::other(format!("{} is a symbolic link", dir.display())));
+            }
+            Ok(_) => {}
+            Err(_) => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
 /// True if a directory is a Git working tree (has a `.git` dir or file).
 pub fn is_git_dir(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir.join(".git")).is_ok_and(|m| m.is_dir() || m.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn symlinked_ancestors_are_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("a/b")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), d.path().join("a/link")).unwrap();
+        assert!(ensure_no_symlink_ancestor(d.path(), "a/b/file").is_ok());
+        assert!(ensure_no_symlink_ancestor(d.path(), "a/link").is_ok(), "the target itself may be a link");
+        assert!(ensure_no_symlink_ancestor(d.path(), "a/link/file").is_err());
+        assert!(ensure_no_symlink_ancestor(d.path(), "a/link/x/y").is_err());
+        assert!(ensure_no_symlink_ancestor(d.path(), "missing/x/y").is_ok());
+        assert!(ensure_no_symlink_ancestor(d.path(), "").is_ok());
+    }
 }

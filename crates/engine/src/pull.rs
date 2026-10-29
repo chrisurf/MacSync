@@ -219,7 +219,12 @@ impl Engine {
         // 1. Merkle descent and entry exchange.
         let mut t = std::time::Instant::now();
         let (paths, prefixes) = descend(peer, unit, &tree, remote.root)?;
-        let remote_entries = fetch_entries(peer, unit, &paths, &prefixes)?;
+        let mut remote_entries = fetch_entries(peer, unit, &paths, &prefixes)?;
+        for p in drop_below_symlinks(&mut remote_entries) {
+            if !opts.dry_run {
+                let _ = self.store().log(unit, "warning", &p, "ignored: the peer sent it below a symbolic link", "");
+            }
+        }
         let mut local: HashMap<String, Stored> = HashMap::new();
         {
             let store = self.store();
@@ -1125,6 +1130,7 @@ fn fetch_entries(
     prefixes: &BTreeSet<String>,
 ) -> Result<HashMap<String, Entry>> {
     let mut out = HashMap::new();
+    let wanted = paths;
     let paths: Vec<String> = paths.iter().cloned().collect();
     let prefixes: Vec<String> = prefixes.iter().cloned().collect();
     let mut accept = |e: Entry| {
@@ -1133,8 +1139,11 @@ fn fetch_entries(
         }
     };
     for chunk in paths.chunks(limits::ENTRY_BATCH) {
+        // Only what was asked for: a peer must not slip in other paths.
         for e in peer.entries(unit, chunk, &[])? {
-            accept(e);
+            if wanted.contains(&e.path) {
+                accept(e);
+            }
         }
     }
     for chunk in prefixes.chunks(64) {
@@ -1145,6 +1154,25 @@ fn fetch_entries(
         }
     }
     Ok(out)
+}
+
+/// Remove live entries below a path that the same delivery declares a
+/// symbolic link (`x → /elsewhere` plus `x/file`): writing them would follow
+/// the link out of the sync root. Returns the removed paths.
+fn drop_below_symlinks(entries: &mut HashMap<String, Entry>) -> Vec<String> {
+    let links: Vec<String> =
+        entries.values().filter(|e| e.kind == Kind::Symlink && !e.deleted).map(|e| e.path.clone()).collect();
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let below = |p: &str| links.iter().any(|l| p != l && rpath::is_within(p, l));
+    let mut dropped: Vec<String> =
+        entries.values().filter(|e| !e.deleted && below(&e.path)).map(|e| e.path.clone()).collect();
+    for p in &dropped {
+        entries.remove(p);
+    }
+    dropped.sort();
+    dropped
 }
 
 /// Pairs `(new, old)` where the peer renamed `old` to `new` and the two
