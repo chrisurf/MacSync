@@ -64,6 +64,15 @@ fsck_after_apply = true
 strip_quarantine = false      # com.apple.quarantine beim Empfang entfernen
 default_excludes = true       # .DS_Store, .Spotlight-V100, .Trashes, .fseventsd …
 excludes = []                 # z. B. ["**/target", "Scratch/*.tmp"]
+# Build- und Paketordner je Sprache (App: Einstellungen → Ordner).
+# false (Standard) = nicht abgleichen; vorhandene Kopien bleiben erhalten.
+sync_build_node = false       # node_modules, .next, .nuxt, .svelte-kit, .turbo, .parcel-cache
+sync_build_python = false     # .venv, venv/env mit pyvenv.cfg, __pycache__, .mypy_cache, …
+sync_build_rust = false       # target neben Cargo.toml
+sync_build_swift = false      # .build neben Package.swift, DerivedData, Pods neben Podfile
+sync_build_go = false         # vendor neben go.mod
+sync_build_terraform = false  # .terraform, .terragrunt-cache (Lock- und State-Dateien bleiben)
+sync_git = true               # .git-Ordner (aus: nur der Arbeitsbereich)
 tombstone_ttl_days = 30
 trash_retention_days = 14
 journal_retention_days = 7            # Protokoll (macsync log), auch in den Einstellungen

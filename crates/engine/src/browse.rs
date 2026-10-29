@@ -115,7 +115,7 @@ impl Engine {
             Some(u) => format!("{}/", rpath::join(u, dir)),
         };
         let names: BTreeSet<&String> = local_roots.keys().chain(remote_roots.iter().flat_map(|r| r.keys())).collect();
-        for name in names {
+        for &name in &names {
             if name == ROOT_UNIT {
                 continue;
             }
@@ -169,6 +169,23 @@ impl Engine {
             };
             items.extend(self.browse_unit(remote_peer, remote_has_unit.is_some(), u, d, paused.contains(u))?);
         }
+        // A folder or unit that holds units (`chrisurf` with its
+        // repositories, a repository with nested worktrees) is only as
+        // synchronous as the units below it: its own root can be equal on
+        // both Macs while a repository inside differs.
+        if let Some(remote) = &remote_roots {
+            let differs = |n: &String| local_roots.get(n) != remote.get(n);
+            for i in items.iter_mut().filter(|i| i.kind == "dir" && i.state == ItemState::Synced) {
+                let below = match (i.is_unit, i.unit == ROOT_UNIT) {
+                    (true, _) => format!("{}/", i.unit),
+                    (false, true) => format!("{}/", i.path),
+                    (false, false) => format!("{}/{}/", i.unit, i.path),
+                };
+                if names.iter().any(|n| n.starts_with(&below) && differs(n)) {
+                    i.state = ItemState::Differs;
+                }
+            }
+        }
         items.sort_by_key(|i| (i.kind != "dir", i.name.to_lowercase()));
         Ok(items)
     }
@@ -201,6 +218,15 @@ impl Engine {
         for c in remote_children.iter().flatten() {
             by_name.entry(c.name.as_str()).or_default().1 = Some(c);
         }
+        // Folders excluded here (build and package folders switched off)
+        // are not synchronised: not listed, even if the other Mac has them.
+        let has: BTreeSet<&str> = by_name.keys().copied().collect();
+        let listed = |m: &macsync_fs::Marker| matches!(m, macsync_fs::Marker::Sibling(f) if has.contains(f));
+        by_name.retain(|name, _| {
+            let root_rel = macsync_fs::root_rel(unit, &rpath::join(dir, name));
+            !self.cfg.excludes.is_excluded_with(&root_rel, name, &listed)
+                && !self.cfg.excludes.is_excluded(&root_rel, name)
+        });
 
         // Entries are needed for sizes (local) and for the direction of
         // differing items (both sides); fetch the remote ones in one request.

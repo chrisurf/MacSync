@@ -65,9 +65,36 @@ pub struct SyncConfig {
     pub default_excludes: bool,
     /// Globs relative to the root, e.g. `"**/target"`.
     pub excludes: Vec<String>,
+    /// Synchronise the build and package folders of an ecosystem (see
+    /// `macsync_fs::ECOSYSTEMS`), e.g. `node_modules` or `target`. They can
+    /// be installed or built again on each Mac. Default: no.
+    pub sync_build_node: bool,
+    pub sync_build_python: bool,
+    pub sync_build_rust: bool,
+    pub sync_build_swift: bool,
+    pub sync_build_go: bool,
+    pub sync_build_terraform: bool,
+    /// Synchronise Git's own folders (`.git`). Default: yes.
+    pub sync_git: bool,
     pub tombstone_ttl_days: u64,
     pub trash_retention_days: u64,
     pub journal_retention_days: u64,
+}
+
+impl SyncConfig {
+    /// Keys of the ecosystems whose build and package folders are not
+    /// synchronised.
+    pub fn skipped_ecosystems(&self) -> Vec<String> {
+        let on = [
+            ("node", self.sync_build_node),
+            ("python", self.sync_build_python),
+            ("rust", self.sync_build_rust),
+            ("swift", self.sync_build_swift),
+            ("go", self.sync_build_go),
+            ("terraform", self.sync_build_terraform),
+        ];
+        on.iter().filter(|(_, sync)| !sync).map(|(k, _)| k.to_string()).collect()
+    }
 }
 
 impl Default for SyncConfig {
@@ -83,6 +110,13 @@ impl Default for SyncConfig {
             strip_quarantine: false,
             default_excludes: true,
             excludes: Vec::new(),
+            sync_build_node: false,
+            sync_build_python: false,
+            sync_build_rust: false,
+            sync_build_swift: false,
+            sync_build_go: false,
+            sync_build_terraform: false,
+            sync_git: true,
             tombstone_ttl_days: 30,
             trash_retention_days: 14,
             journal_retention_days: 7,
@@ -174,6 +208,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         Mode::parse(&self.mode).with_context(|| format!("unknown mode {:?}", self.mode))?;
         macsync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes).context("invalid exclude glob")?;
+
         if !macsync_net::lan::is_local(&self.listen.ip()) && !self.listen.ip().is_unspecified() {
             anyhow::bail!("listen address {} is not a local address", self.listen);
         }
@@ -209,7 +244,11 @@ impl Config {
     pub fn engine_config(&self, device: &str) -> Result<EngineConfig> {
         let mut e = EngineConfig::new(self.root(), self.state_dir(), device);
         e.mode = self.mode();
-        e.excludes = macsync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes)?;
+        e.excludes = macsync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes)?.with_ecosystems(
+            &self.root(),
+            &self.sync.skipped_ecosystems(),
+            self.sync.sync_git,
+        );
         e.strip_quarantine = self.sync.strip_quarantine;
         e.fsck_after_apply = self.sync.fsck_after_apply;
         e.tombstone_ttl_days = self.sync.tombstone_ttl_days;

@@ -72,6 +72,9 @@ pub struct PullReport {
     pub converged: bool,
     /// Wall-clock milliseconds per phase (diagnostics).
     pub timings_ms: Vec<(String, u64)>,
+    /// Files left out because they changed on the peer during the transfer;
+    /// the rest was applied, these follow in the next round.
+    pub skipped: usize,
 }
 
 impl PullReport {
@@ -94,6 +97,7 @@ impl PullReport {
             remote_root,
             converged: false,
             timings_ms: Vec::new(),
+            skipped: 0,
         }
     }
 }
@@ -299,8 +303,11 @@ impl Engine {
 
         // 1. Merkle descent and entry exchange.
         let mut t = std::time::Instant::now();
-        let paths = descend(peer, unit, &tree, remote.root)?;
+        let paths = descend(peer, unit, &tree, remote.root, &self.cfg.excludes)?;
         let mut remote_entries = fetch_entries(peer, unit, &paths)?;
+        // Excluded here (a build folder switched off): never fetched, even
+        // if the other Mac still synchronises it.
+        remote_entries.retain(|p, _| !self.cfg.excludes.is_excluded_path(&macsync_fs::root_rel(unit, p)));
         for p in drop_below_symlinks(&mut remote_entries) {
             if !opts.dry_run {
                 let _ = self.store().log(unit, "warning", &p, "ignored: the peer sent it below a symbolic link", "");
@@ -692,6 +699,9 @@ impl Engine {
         self.post_apply(&plan, &mut rep)?;
         rep.lap("post-apply", &mut t);
         rep.outcome = Outcome::Applied;
+        if rep.skipped == 0 {
+            self.churn.lock().unwrap_or_else(|e| e.into_inner()).remove(&plan.unit);
+        }
         Ok(rep)
     }
 
@@ -741,8 +751,11 @@ impl Engine {
             }
         }
         let mut t = std::time::Instant::now();
-        self.fetch(peer, &needs, rep, staging)?;
+        let gone = self.fetch(peer, &needs, rep, staging)?;
         rep.lap("fetch", &mut t);
+        if !gone.is_empty() {
+            self.leave_out_changed(plan, &gone, rep)?;
+        }
 
         // Materialise conflict-store symlinks/dirs.
         for c in &plan.conflicts {
@@ -826,13 +839,60 @@ impl Engine {
         r
     }
 
+    /// Files changed on the peer during the transfer. A unit is applied as
+    /// one snapshot (ADR-0005), so first the whole unit is retried. If that
+    /// keeps happening (a build rewriting its output), the changing files
+    /// are left out and the rest is applied instead of starting over and
+    /// over – but never for Git's own files or conflicts, which stay
+    /// together.
+    fn leave_out_changed(&self, plan: &mut Plan, gone: &HashSet<Hash>, rep: &mut PullReport) -> Result<()> {
+        let short = gone.iter().next().map(|h| h.short()).unwrap_or_default();
+        let tries = {
+            let mut c = self.churn.lock().unwrap_or_else(|e| e.into_inner());
+            let n = c.entry(plan.unit.clone()).or_default();
+            *n += 1;
+            *n
+        };
+        if tries < CHURN_TRIES {
+            return retry(format!("blob {short} no longer available on peer"));
+        }
+        let source_gone = |op: &Op| match &op.source {
+            Some(Source::Blob { hash, .. }) => gone.contains(hash),
+            Some(Source::Reflog { remote, .. }) => gone.contains(remote),
+            _ => false,
+        };
+        let conflict_needs = plan
+            .conflicts
+            .iter()
+            .flat_map(|c| &c.remotes)
+            .any(|r| r.blob.is_some_and(|b| gone.contains(&b)) && !r.deleted);
+        let git = plan.ops.iter().any(|op| source_gone(op) && class_of(plan.unit_kind, &op.path).is_some());
+        if conflict_needs || git {
+            return retry(format!("blob {short} no longer available on peer"));
+        }
+        let dropped: HashSet<String> = plan.ops.iter().filter(|op| source_gone(op)).map(|op| op.path.clone()).collect();
+        plan.ops
+            .retain(|op| !dropped.contains(&op.path) && !op.entry.link.as_ref().is_some_and(|l| dropped.contains(l)));
+        rep.skipped = dropped.len();
+        self.churn.lock().unwrap_or_else(|e| e.into_inner()).remove(&plan.unit);
+        tracing::debug!(unit = %plan.unit, skipped = dropped.len(), "files changed on the peer during transfer; left for the next round");
+        crate::telemetry::event(
+            "pull-skipped",
+            serde_json::json!({"unit": plan.unit, "files": dropped.len(), "example": dropped.iter().next()}),
+        );
+        Ok(())
+    }
+
+    /// Fetch everything in `needs` into staging. Returns the blobs the peer
+    /// no longer has (the file changed there during the transfer).
     fn fetch(
         &self,
         peer: &dyn PeerApi,
         needs: &BTreeMap<Hash, Need>,
         rep: &mut PullReport,
         staging: &Path,
-    ) -> Result<()> {
+    ) -> Result<HashSet<Hash>> {
+        let gone: Mutex<HashSet<Hash>> = Mutex::new(HashSet::new());
         let mut remote_small: Vec<Hash> = Vec::new();
         let mut remote_large: Vec<Hash> = Vec::new();
         let _guard = TransferGuard(self);
@@ -900,7 +960,13 @@ impl Engine {
             for (h, b) in batch.iter().zip(blobs) {
                 let data = match b {
                     Some(d) if Hash::of(&d) == *h => d,
-                    _ => self.refetch_small(p, h)?,
+                    _ => match self.refetch_small(p, h)? {
+                        Some(d) => d,
+                        None => {
+                            gone.lock().unwrap_or_else(|e| e.into_inner()).insert(*h);
+                            continue;
+                        }
+                    },
                 };
                 items.push((&needs[h], data));
             }
@@ -914,30 +980,43 @@ impl Engine {
             let need = &needs[&h];
             progress(0, 0, &need.label);
             let mut attempt = 0;
-            loop {
+            let ok = loop {
                 attempt += 1;
-                match self.fetch_large(peer, &lanes, &h, need, &fetched)? {
-                    true => break,
-                    false if attempt < 3 => continue,
-                    false => anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short()),
+                match self.fetch_large(peer, &lanes, &h, need, &fetched) {
+                    Ok(true) => break true,
+                    Ok(false) if attempt < 3 => continue,
+                    Ok(false) => anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short()),
+                    Err(e) if e.downcast_ref::<RetryLater>().is_some() => break false,
+                    Err(e) => return Err(e),
                 }
+            };
+            if !ok {
+                gone.lock().unwrap_or_else(|e| e.into_inner()).insert(h);
+                continue;
             }
             copy_rest(&need.dests)?;
             progress(1, 0, "");
         }
         rep.bytes_fetched += fetched.into_inner();
+        let gone = gone.into_inner().unwrap_or_else(|e| e.into_inner());
         // One bundled flush for everything staged (instead of one per file).
-        let all: Vec<PathBuf> = needs.values().flat_map(|n| n.dests.iter().cloned()).collect();
+        let all: Vec<PathBuf> = needs
+            .iter()
+            .filter(|(h, _)| !gone.contains(*h))
+            .flat_map(|(_, n)| n.dests.iter().cloned())
+            .filter(|p| p.exists())
+            .collect();
         ops::sync_paths(&all)?;
-        Ok(())
+        Ok(gone)
     }
 
-    fn refetch_small(&self, peer: &dyn PeerApi, h: &Hash) -> Result<Vec<u8>> {
+    /// `None`: the peer no longer has this content.
+    fn refetch_small(&self, peer: &dyn PeerApi, h: &Hash) -> Result<Option<Vec<u8>>> {
         for _ in 0..2 {
             match peer.blobs(std::slice::from_ref(h))?.into_iter().next().flatten() {
-                Some(d) if Hash::of(&d) == *h => return Ok(d),
+                Some(d) if Hash::of(&d) == *h => return Ok(Some(d)),
                 Some(_) => continue,
-                None => return retry(format!("blob {} no longer available on peer", h.short())),
+                None => return Ok(None),
             }
         }
         anyhow::bail!("hash mismatch for blob {} after 3 attempts", h.short())
@@ -1129,6 +1208,8 @@ fn db_op(path: &str, disk: &str, entry: Entry, reason: &str) -> Op {
 /// Paralleles Schreiben (concept): staging files are written by a small
 /// thread pool; durability follows with one bundled flush.
 /// All connections of one transfer, including the main one.
+/// Snapshot retries before files changing during the transfer are left out.
+const CHURN_TRIES: u32 = 3;
 const MAX_LANES: usize = 4;
 /// Outstanding bytes per connection before another one is opened.
 const LANE_BYTES: u64 = 32 * 1024 * 1024;
@@ -1232,7 +1313,13 @@ fn copy_rest(dests: &[PathBuf]) -> Result<()> {
 /// (remote) or listed from the local tree, never fetched as a whole subtree:
 /// below a build directory can lie hundreds of thousands of tombstones that
 /// only matter where the other side still has a file.
-fn descend(peer: &dyn PeerApi, unit: &str, local: &Tree, remote_root: Hash) -> Result<BTreeSet<String>> {
+fn descend(
+    peer: &dyn PeerApi,
+    unit: &str,
+    local: &Tree,
+    remote_root: Hash,
+    excludes: &macsync_fs::Excludes,
+) -> Result<BTreeSet<String>> {
     let mut paths = BTreeSet::new();
     if local.root() == remote_root {
         return Ok(paths);
@@ -1249,7 +1336,7 @@ fn descend(peer: &dyn PeerApi, unit: &str, local: &Tree, remote_root: Hash) -> R
             }
             let Some(rc) = l.children else {
                 // Not a directory there (any more): our files below it.
-                local_subtree(local, &l.dir, &mut paths);
+                local_subtree(local, unit, &l.dir, excludes, &mut paths);
                 continue;
             };
             let lc = local.children(&l.dir).unwrap_or(&[]);
@@ -1263,9 +1350,20 @@ fn descend(peer: &dyn PeerApi, unit: &str, local: &Tree, remote_root: Hash) -> R
             for c in lc {
                 names.entry(c.name.as_str()).or_default().0 = Some(c);
             }
-            for (name, (lc, rc)) in names {
+            // Project files of this directory on either side (`Cargo.toml`
+            // marks `target` as a build folder before it exists here).
+            let has = |f: &str| names.contains_key(f);
+            for (&name, &(lc, rc)) in &names {
                 let path = rpath::join(&l.dir, name);
                 if rpath::validate(&path).is_err() {
+                    continue;
+                }
+                let root_rel = macsync_fs::root_rel(unit, &path);
+                let listed = |m: &macsync_fs::Marker| match m {
+                    macsync_fs::Marker::Sibling(f) => has(f),
+                    _ => false,
+                };
+                if excludes.is_excluded_with(&root_rel, name, &listed) || excludes.is_excluded(&root_rel, name) {
                     continue;
                 }
                 match (lc, rc) {
@@ -1277,7 +1375,7 @@ fn descend(peer: &dyn PeerApi, unit: &str, local: &Tree, remote_root: Hash) -> R
                     (a, b) => {
                         paths.insert(path.clone());
                         if a.is_some_and(|c| c.kind == Kind::Dir) {
-                            local_subtree(local, &path, &mut paths);
+                            local_subtree(local, unit, &path, excludes, &mut paths);
                         }
                         if b.is_some_and(|c| c.kind == Kind::Dir) {
                             queue.push(path);
@@ -1290,12 +1388,15 @@ fn descend(peer: &dyn PeerApi, unit: &str, local: &Tree, remote_root: Hash) -> R
     Ok(paths)
 }
 
-/// All live paths below `dir` in the local tree.
-fn local_subtree(local: &Tree, dir: &str, paths: &mut BTreeSet<String>) {
+/// All live paths below `dir` in the local tree (excluded folders left out).
+fn local_subtree(local: &Tree, unit: &str, dir: &str, excludes: &macsync_fs::Excludes, paths: &mut BTreeSet<String>) {
     let mut todo = vec![dir.to_string()];
     while let Some(d) = todo.pop() {
         for c in local.children(&d).unwrap_or(&[]) {
             let p = rpath::join(&d, &c.name);
+            if excludes.is_excluded(&macsync_fs::root_rel(unit, &p), &c.name) {
+                continue;
+            }
             if c.kind == Kind::Dir {
                 todo.push(p.clone());
             }

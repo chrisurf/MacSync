@@ -117,6 +117,9 @@ pub trait PeerApi {
     }
 }
 
+/// Rows per store access when reading or writing a whole unit.
+pub(crate) const STORE_PAGE: usize = 5_000;
+
 /// Store access that takes longer than this is recorded (telemetry).
 const SLOW_STORE: std::time::Duration = std::time::Duration::from_millis(250);
 
@@ -169,6 +172,9 @@ pub struct Engine {
     gate: Gate,
     unit_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     trees: Mutex<HashMap<String, Arc<Tree>>>,
+    /// Pulls per unit deferred in a row because files changed on the peer
+    /// during the transfer (see `leave_out_changed`).
+    churn: Mutex<HashMap<String, u32>>,
     case_insensitive: bool,
     /// Fault injection: abort the apply after this many file operations
     /// (negative = disabled).
@@ -237,6 +243,7 @@ impl Engine {
             gate: Gate::new(),
             unit_locks: Mutex::new(HashMap::new()),
             trees: Mutex::new(HashMap::new()),
+            churn: Mutex::new(HashMap::new()),
             case_insensitive,
             fault_after_ops: AtomicI64::new(-1),
             transfer: Mutex::new(None),
@@ -322,10 +329,25 @@ impl Engine {
             return Ok(t.clone());
         }
         // Tombstones are not part of the tree.
-        let entries = self.store().live_entries(unit)?;
+        let entries = self.live_entries(unit)?;
         let t = Arc::new(Tree::build(entries.iter().map(|s| &s.entry)));
         self.trees.lock().unwrap_or_else(|e| e.into_inner()).insert(unit.to_string(), t.clone());
         Ok(t)
+    }
+
+    /// All live entries of `unit`, read in pages: the store is free for
+    /// status and peer requests in between (a unit can hold 500 000 entries).
+    pub(crate) fn live_entries(&self, unit: &str) -> Result<Vec<macsync_store::Stored>> {
+        let mut out: Vec<macsync_store::Stored> = Vec::new();
+        loop {
+            let after = out.last().map(|s| s.entry.path.clone());
+            let page = self.store().live_entries_after(unit, after.as_deref(), STORE_PAGE)?;
+            let n = page.len();
+            out.extend(page);
+            if n < STORE_PAGE {
+                return Ok(out);
+            }
+        }
     }
 
     fn invalidate_tree(&self, unit: &str) -> Result<Hash> {

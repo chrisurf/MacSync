@@ -7,7 +7,7 @@ pub mod ops;
 pub mod scan;
 pub mod time;
 
-pub use exclude::Excludes;
+pub use exclude::{Ecosystem, Excludes, Marker, ECOSYSTEMS};
 pub use scan::{scan_unit, ScanResult, Scanned};
 
 use std::path::{Path, PathBuf};

@@ -101,7 +101,7 @@ impl Engine {
         // Live entries in bulk; tombstones only for paths that exist again
         // (a unit can hold hundreds of thousands of them).
         let mut prev: HashMap<String, Stored> =
-            self.store().live_entries(unit)?.into_iter().map(|s| (s.entry.path.clone(), s)).collect();
+            self.live_entries(unit)?.into_iter().map(|s| (s.entry.path.clone(), s)).collect();
         {
             let store = self.store();
             let new: Vec<&String> =
@@ -191,7 +191,9 @@ impl Engine {
             if seen.contains(p.as_str()) || o.entry.deleted {
                 continue;
             }
-            let excluded = self.cfg.excludes.is_excluded(&macsync_fs::root_rel(unit, p), rpath::file_name(p))
+            // The whole path: a file below a folder excluded since the last
+            // scan is forgotten, never turned into a deletion for the peer.
+            let excluded = self.cfg.excludes.is_excluded_path(&macsync_fs::root_rel(unit, p))
                 || (kind == UnitKind::Git && gitpath::is_excluded(p));
             if excluded || in_nested(p) {
                 forget.push(p.clone());
@@ -223,15 +225,31 @@ impl Engine {
             }
         }
 
+        // In pages: a scan after a build writes tens of thousands of rows,
+        // and status and peer requests must not wait for all of them. Each
+        // row is the state on disk, so a crash between pages loses nothing
+        // (the next scan writes the rest).
+        for chunk in writes.chunks(crate::STORE_PAGE) {
+            self.store().atomically(|st| {
+                for w in chunk {
+                    st.put_entry(unit, w)?;
+                }
+                Ok(())
+            })?;
+        }
+        // Forgetting is paged too: switching off build folders drops tens of
+        // thousands of rows at once.
+        for chunk in forget.chunks(crate::STORE_PAGE) {
+            self.store().atomically(|st| {
+                for p in chunk {
+                    st.remove_entry(unit, p)?;
+                }
+                Ok(())
+            })?;
+        }
         {
             let store = self.store();
             store.atomically(|st| {
-                for w in &writes {
-                    st.put_entry(unit, w)?;
-                }
-                for p in &forget {
-                    st.remove_entry(unit, p)?;
-                }
                 if report.changed > 0 {
                     st.log(unit, "capture", "", "local change", &format!("{} entries changed", report.changed))?;
                 }
@@ -279,7 +297,10 @@ impl Engine {
         let now = macsync_fs::time::now_ms();
         let me = self.cfg.device.as_str();
         let mut writes: Vec<Stored> = Vec::new();
-        let unique: BTreeSet<&String> = paths.iter().collect();
+        let unique: BTreeSet<&String> = paths
+            .iter()
+            .filter(|p| p.is_empty() || !self.cfg.excludes.is_excluded_path(&macsync_fs::root_rel(unit, p)))
+            .collect();
         for p in unique {
             let old = self.store().entry(unit, p)?;
             if p.is_empty() || old.as_ref().is_some_and(|o| o.entry.kind == Kind::Dir && !o.entry.deleted) {

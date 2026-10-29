@@ -409,6 +409,19 @@ impl Store {
         Ok(rows)
     }
 
+    /// Up to `limit` live entries in path order, starting after `after`
+    /// (`None`: from the start, including the unit's own entry `""`).
+    /// Pages through a large unit without holding the store for long.
+    pub fn live_entries_after(&self, unit: &str, after: Option<&str>, limit: usize) -> Result<Vec<Stored>> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {ENTRY_COLS} FROM entries WHERE unit = ?1 AND (?2 IS NULL OR path > ?2) AND deleted = 0
+             ORDER BY path LIMIT ?3"
+        ))?;
+        let rows =
+            st.query_map(params![unit, after, limit as i64], row_to_stored)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn entry(&self, unit: &str, path: &str) -> Result<Option<Stored>> {
         let mut st =
             self.conn.prepare_cached(&format!("SELECT {ENTRY_COLS} FROM entries WHERE unit = ?1 AND path = ?2"))?;

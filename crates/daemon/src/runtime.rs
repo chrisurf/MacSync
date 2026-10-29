@@ -375,15 +375,17 @@ impl Daemon {
             "daemon-start",
             json!({"version": macsync_net::build_version(), "pid": std::process::id(), "device": node.cfg.device_name}),
         );
+        // Protocol server: only while paired, and only for the paired key.
+        // Before the startup scan, which can take a minute with many
+        // changes: the peer reaches us at once and gets the index as it was.
+        update_exposure(&node, &shared);
+
         // Startup capture replaces the FSEvents event-id replay (ADR-0004).
         tracing::info!(root = %node.cfg.root().display(), "initial scan");
         let t = Instant::now();
         node.engine.scan_all(false)?;
         telemetry::event("initial-scan", json!({"ms": telemetry::ms(t.elapsed())}));
         refresh_units(&node, &shared);
-
-        // Protocol server: only while paired, and only for the paired key.
-        update_exposure(&node, &shared);
 
         let watcher = start_watcher(&node, &shared)?;
 
@@ -666,9 +668,11 @@ impl Daemon {
             let peer = match browse_peer(shared) {
                 None => json!({"name": "peer", "error": "not connected"}),
                 Some(p) => {
-                    let name = p.remote_hello().map(|h| h.name).unwrap_or_else(|| "peer".into());
                     // Asked in the peer's clock: a minute of slack covers drift.
-                    match p.diag(since_ms - 60_000, DIAG_MAX) {
+                    let r = p.diag(since_ms - 60_000, DIAG_MAX);
+                    // Known once the connection is up (after the call).
+                    let name = p.remote_hello().map(|h| h.name).unwrap_or_else(|| "peer".into());
+                    match r {
                         Ok((offset, events)) => json!({
                             "name": name,
                             "version": p.remote_hello().map(|h| h.version),
@@ -941,6 +945,14 @@ fn pull(node: &Node, shared: &Shared, peer: &NetPeer, units: Option<&[String]>) 
                     fetched = r.bytes_fetched, deduped = r.bytes_deduped, converged = r.converged, "applied"
                 );
                 applied.push(r.unit.clone());
+                if r.skipped > 0 {
+                    // Files that changed on the peer during the transfer.
+                    shared
+                        .pending
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(r.unit.clone(), Instant::now() + Duration::from_secs(2));
+                }
             }
             Outcome::Deferred(why) => {
                 tracing::debug!(unit = %r.unit, %why, "pull deferred");

@@ -35,6 +35,24 @@ mit 0.5 verbinden sich nicht miteinander.
   Schlüssel werden im Speicher genullt
 
 ### Geändert
+- Einstellungen → Ordner: Build- und Paketordner je Sprache abschaltbar
+  (Node.js, Python, Rust, Swift/Xcode, Go, Terraform), Standard: nicht
+  synchronisiert – sie lassen sich auf jedem Mac neu installieren oder bauen.
+  Mehrdeutige Namen nur mit Projektdatei (`target` neben `Cargo.toml`,
+  `vendor` neben `go.mod`). Git-Ordner eigener Schalter, Standard an.
+  Ausschließen löscht nie: die Dateien bleiben auf beiden Macs, sie werden
+  nur nicht mehr abgeglichen, auch nicht von einem Mac, der sie noch
+  synchronisiert
+- Manager: Ordner über Repositorys zeigen deren Änderungen (vorher
+  „Synchron“ oben, „Änderungen“ eine Ebene tiefer)
+- Ändert sich eine Datei auf dem anderen Mac während der Übertragung (Build
+  schreibt neu), wird nur sie ausgelassen und der Rest übernommen; sie folgt
+  2 s später. In `.git` bleibt das Repository zusammen
+- Index-Zugriffe in Abschnitten von 5 000 Einträgen: Status und Anfragen
+  des anderen Macs warten nicht mehr auf große Scans
+- Daemon öffnet den Port vor dem Start-Scan (vorher bis zu einer Minute
+  unerreichbar); Bonjour bevorzugt IPv4 (verschenkte ~10 s mit
+  „No route to host“ auf IPv6-Link-Local)
 - Diagnose für beide Macs: jeder Daemon schreibt Ereignisse mit Dauer
   (Scan, Übernahme mit Phasen, langsame Anfragen von App und anderem Mac,
   Wartezeit und Haltezeit der Index-Sperre mit Codestelle, Verbindungen und
@@ -89,6 +107,9 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Ausschluss per Muster (`excludes = ["**/target"]`) wertete die Dateien im
+  ausgeschlossenen Ordner beim nächsten Scan als gelöscht und hätte sie auf
+  dem anderen Mac gelöscht; jetzt werden sie nur vergessen
 - Träge Synchronisation in Ordnern mit sehr vielen gelöschten Dateien (z. B.
   nach `cargo clean`): Scan, Prüfbaum und Planung laden nur noch vorhandene
   Dateien, gelöschte Einträge nur Pfad für Pfad. Eine Änderung in einem

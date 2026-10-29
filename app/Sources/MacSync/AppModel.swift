@@ -414,6 +414,13 @@ final class AppModel: ObservableObject {
     /// hides in unknown networks.
     func trustNetwork() { send(["cmd": "trust-network"]) }
 
+    /// Several booleans of `[sync]` at once, one daemon restart.
+    func setSyncFlags(_ flags: [String: Bool]) {
+        guard var c = config else { return }
+        for (k, v) in flags { c.set(k, v, in: "sync") }
+        saveAndRestart(c)
+    }
+
     private func saveAndRestart(_ c: ConfigFile) {
         do {
             try c.save()

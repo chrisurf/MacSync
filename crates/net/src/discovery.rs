@@ -190,13 +190,17 @@ impl Drop for Advertiser {
     }
 }
 
-/// Look for the paired peer by its blinded id; returns its first local address.
+/// How long `find` waits for an IPv4 address after an IPv6-only answer.
+const IPV4_GRACE: Duration = Duration::from_millis(700);
+
+/// Look for the paired peer by its blinded id; returns its first local
+/// address, preferably IPv4.
 pub fn find(blinding: &Blinding, timeout: Duration) -> Result<Option<SocketAddr>> {
     let ids = blinding.peer_ids(current_hour());
     let daemon = ServiceDaemon::new()?;
     let rx = daemon.browse(SERVICE)?;
-    let deadline = Instant::now() + timeout;
-    let mut found = None;
+    let mut deadline = Instant::now() + timeout;
+    let mut found: Option<SocketAddr> = None;
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         let Ok(ev) = rx.recv_timeout(left) else { break };
         if let ServiceEvent::ServiceResolved(info) = ev {
@@ -204,9 +208,16 @@ pub fn find(blinding: &Blinding, timeout: Duration) -> Result<Option<SocketAddr>
             if !ids.iter().any(|id| id == instance) {
                 continue;
             }
-            if let Some(ip) = best_ip(info.addresses.iter().map(|a| a.to_ip_addr())) {
+            let addrs = info.addresses.iter().map(|a| a.to_ip_addr()).chain(found.map(|f| f.ip()));
+            if let Some(ip) = best_ip(addrs) {
                 found = Some(SocketAddr::new(ip, info.port));
-                break;
+                if ip.is_ipv4() {
+                    break;
+                }
+                // Only link-local IPv6 so far: those often fail with "No
+                // route to host" on macOS. The IPv4 address usually follows
+                // in the next resolution; wait a moment for it.
+                deadline = deadline.min(Instant::now() + IPV4_GRACE);
             }
         }
     }

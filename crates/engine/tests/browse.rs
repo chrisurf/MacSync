@@ -138,3 +138,32 @@ fn paths_split_into_the_innermost_unit() {
     assert_eq!(s("/work/app/src/"), (Some("work/app".into()), "src".into()));
     assert_eq!(s("new/sub"), (Some("new".into()), "sub".into()), "not scanned yet");
 }
+
+/// A folder whose own files are in sync but which holds a repository that
+/// differs shows the difference too (`chrisurf` above `chrisurf/macmailbox`).
+#[test]
+fn folder_above_a_differing_repository_is_not_shown_in_sync() {
+    if !common::git_available() {
+        return;
+    }
+    let p = Pair::new();
+    fs::create_dir_all(p.ra().join("work/repo")).unwrap();
+    fs::write(p.ra().join("work/notes.txt"), "notes").unwrap();
+    common::init_repo(&p.ra().join("work/repo"));
+    p.sync();
+    p.sync();
+    let root = p.a.browse(Some(&p.b as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&root, "work").0, ItemState::Synced, "{root:#?}");
+
+    fs::write(p.ra().join("work/repo/new.txt"), "only on A").unwrap();
+    p.a.scan_all(false).unwrap();
+    let inside = p.a.browse(Some(&p.b as &dyn PeerApi), Some("work"), "").unwrap();
+    assert_eq!(state(&inside, "repo").0, ItemState::Differs);
+    assert_eq!(state(&inside, "notes.txt").0, ItemState::Synced);
+    let root = p.a.browse(Some(&p.b as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&root, "work").0, ItemState::Differs, "{root:#?}");
+
+    p.sync();
+    let root = p.a.browse(Some(&p.b as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&root, "work").0, ItemState::Synced);
+}

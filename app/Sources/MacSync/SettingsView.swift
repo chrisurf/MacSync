@@ -6,6 +6,7 @@ struct SettingsView: View {
         TabView {
             GeneralTab().tabItem { Label("Allgemein", systemImage: "gearshape") }
             SyncTab().tabItem { Label("Synchronisation", systemImage: "folder") }
+            FoldersTab().tabItem { Label("Ordner", systemImage: "shippingbox") }
             DeviceTab().tabItem { Label("Gerät", systemImage: "laptopcomputer") }
         }
         .frame(width: 480)
@@ -200,5 +201,93 @@ extension Bundle {
         let commit = object(forInfoDictionaryKey: "MacSyncCommit") as? String ?? "unbekannt"
         let date = object(forInfoDictionaryKey: "MacSyncCommitDate") as? String ?? ""
         return date.isEmpty ? "Commit \(commit)" : "Commit \(commit), \(date)"
+    }
+}
+
+/// Build and package folders per language: off by default (they can be
+/// installed or built again on each Mac), Git's own folders on. Matches
+/// `macsync_fs::ECOSYSTEMS` and `[sync] sync_build_*` / `sync_git`.
+private struct FoldersTab: View {
+    @EnvironmentObject var model: AppModel
+
+    struct Ecosystem: Identifiable {
+        let key: String
+        let title: String
+        let folders: String
+        let again: String
+        var id: String { key }
+        var configKey: String { "sync_build_\(key)" }
+    }
+
+    static let ecosystems = [
+        Ecosystem(key: "node", title: "Node.js / JavaScript",
+                  folders: "node_modules, .next, .nuxt, .svelte-kit, .turbo, .parcel-cache",
+                  again: "npm install"),
+        Ecosystem(key: "python", title: "Python",
+                  folders: ".venv, venv (mit pyvenv.cfg), __pycache__, .mypy_cache, .pytest_cache, .ruff_cache, .tox",
+                  again: "pip install / uv sync"),
+        Ecosystem(key: "rust", title: "Rust (Cargo)", folders: "target (neben Cargo.toml)", again: "cargo build"),
+        Ecosystem(key: "swift", title: "Swift / Xcode",
+                  folders: ".build (neben Package.swift), DerivedData, Pods (neben Podfile)",
+                  again: "swift build / pod install"),
+        Ecosystem(key: "go", title: "Go", folders: "vendor (neben go.mod)", again: "go mod vendor"),
+        Ecosystem(key: "terraform", title: "Terraform",
+                  folders: ".terraform, .terragrunt-cache", again: "terraform init"),
+    ]
+
+    private func syncs(_ e: Ecosystem) -> Bool {
+        model.config?.bool(e.configKey, in: "sync") ?? false
+    }
+
+    private var syncsGit: Bool { model.config?.bool("sync_git", in: "sync") ?? true }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: Binding(get: { syncsGit }, set: { on in confirmGit(on) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Git-Repositorys (.git)")
+                        Text("Verlauf, Branches und Stash wandern mit. Aus: nur die Dateien des Arbeitsbereichs.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Versionsverwaltung")
+            }
+            Section {
+                Toggle(isOn: Binding(
+                    get: { Self.ecosystems.allSatisfy(syncs) },
+                    set: { on in model.setSyncFlags(Dictionary(uniqueKeysWithValues: Self.ecosystems.map { ($0.configKey, on) })) })) {
+                    Text("Alle Build- und Paketordner synchronisieren").bold()
+                }
+                ForEach(Self.ecosystems) { e in
+                    Toggle(isOn: Binding(get: { syncs(e) }, set: { model.setConfig(e.configKey, $0, in: "sync") })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(e.title)
+                            Text(e.folders).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .help("Wiederherstellen auf dem anderen Mac: \(e.again)")
+                }
+            } header: {
+                Text("Build- und Paketordner")
+            } footer: {
+                Text("Aus (Standard): diese Ordner werden nicht abgeglichen – sie lassen sich auf jedem Mac neu installieren oder bauen. Vorhandene Kopien bleiben auf beiden Macs erhalten, es wird nichts gelöscht. Ein Ordner namens „target“ ohne Cargo.toml daneben zählt nicht dazu. Gilt für diesen Mac: stelle den anderen Mac genauso ein.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func confirmGit(_ on: Bool) {
+        if !on {
+            let alert = NSAlert()
+            alert.messageText = "Git-Ordner nicht mehr synchronisieren?"
+            alert.informativeText = "Commits, Branches und Stash wandern dann nicht mehr zum anderen Mac; nur die Dateien im Arbeitsbereich. Die vorhandenen .git-Ordner bleiben auf beiden Macs erhalten."
+            alert.addButton(withTitle: "Nicht synchronisieren")
+            alert.addButton(withTitle: "Abbrechen")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        model.setConfig("sync_git", on, in: "sync")
     }
 }
