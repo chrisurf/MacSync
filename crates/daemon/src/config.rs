@@ -22,6 +22,9 @@ pub struct Config {
     pub listen: SocketAddr,
     /// Port used while pairing.
     pub pair_port: u16,
+    /// Name shown to Macs looking for a pairing partner; defaults to the
+    /// device name without its owner ("MacBook Pro").
+    pub pair_name: Option<String>,
     /// `two-way`, `mirror-send` or `mirror-receive`.
     pub mode: String,
     pub peer: PeerConfig,
@@ -92,6 +95,7 @@ impl Default for Config {
             state_dir: None,
             listen: SocketAddr::from(([0, 0, 0, 0], macsync_net::DEFAULT_PORT)),
             pair_port: macsync_net::DEFAULT_PORT + 1,
+            pair_name: None,
             mode: "two-way".into(),
             peer: PeerConfig { address: None, discovery: true },
             sync: SyncConfig::default(),
@@ -189,6 +193,14 @@ impl Config {
 
     pub fn mode(&self) -> Mode {
         Mode::parse(&self.mode).unwrap_or_default()
+    }
+
+    /// Name announced while pairing.
+    pub fn pair_name(&self) -> String {
+        match self.pair_name.as_deref().map(str::trim) {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => macsync_net::discovery::short_name(&self.device_name),
+        }
     }
 
     pub fn engine_config(&self, device: &str) -> Result<EngineConfig> {

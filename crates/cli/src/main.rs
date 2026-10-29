@@ -894,7 +894,7 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             let code = pairing::generate_code();
             // Lets the other Mac find this one without knowing its name.
             let _advert =
-                macsync_net::discovery::Advertiser::start_pairing(&id.device_id(), &cfg.device_name, cfg.pair_port)
+                macsync_net::discovery::Advertiser::start_pairing(&id.device_id(), &cfg.pair_name(), cfg.pair_port)
                     .map_err(|e| tracing::warn!("Bonjour announcement failed: {e:#}"))
                     .ok();
             let ips = local_ips();

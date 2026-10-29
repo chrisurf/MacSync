@@ -49,7 +49,8 @@ impl Node {
             return macsync_net::lan::resolve(a);
         }
         if self.cfg.peer.discovery {
-            if let Ok(Some(a)) = discovery::find(&row.device, Duration::from_secs(3)) {
+            let blinding = discovery::Blinding::new(&self.identity, &row.pubkey)?;
+            if let Ok(Some(a)) = discovery::find(&blinding, Duration::from_secs(3)) {
                 let _ = self.engine.store().set_peer_addr(&row.device, &a.to_string());
                 return Ok(a);
             }
@@ -354,7 +355,8 @@ fn open_exposure(node: &Arc<Node>, shared: &Arc<Shared>, peer_key: Vec<u8>) -> R
     let server = Server::start(node.cfg.listen, node.identity.clone(), node.hello(), peer_key.clone(), handler)?;
     tracing::info!(addr = %server.local_addr(), "listening");
     let advertiser = if node.cfg.peer.discovery {
-        discovery::Advertiser::start(&node.identity.device_id(), server.local_addr().port())
+        discovery::Blinding::new(&node.identity, &peer_key)
+            .and_then(|b| discovery::Advertiser::start(b, server.local_addr().port()))
             .map_err(|e| tracing::warn!(error = %e, "mDNS advertisement unavailable"))
             .ok()
     } else {

@@ -81,11 +81,18 @@ PY
 converged() { roots_equal && trees_equal; }
 
 log "work dir $WORK, ports $PORT_A/$PORT_B"
-ra init --root "$A" --name "Mac A" --listen "127.0.0.1:$PORT_A" --peer "127.0.0.1:$PORT_B" --state-dir "$WORK/a-state" >/dev/null
-rb init --root "$B" --name "Mac B" --listen "127.0.0.1:$PORT_B" --peer "127.0.0.1:$PORT_A" --state-dir "$WORK/b-state" >/dev/null
-for c in a b; do
-  sed -i.bak 's/^discovery = true/discovery = false/' "$WORK/$c.toml"
-done
+# E2E_DISCOVERY=1: no fixed peer address; the daemons find each other by
+# their blinded Bonjour announcement (needs multicast, so off by default).
+if [ "${E2E_DISCOVERY:-0}" = 1 ]; then
+  ra init --root "$A" --name "Mac A" --listen "0.0.0.0:$PORT_A" --state-dir "$WORK/a-state" >/dev/null
+  rb init --root "$B" --name "Mac B" --listen "0.0.0.0:$PORT_B" --state-dir "$WORK/b-state" >/dev/null
+else
+  ra init --root "$A" --name "Mac A" --listen "127.0.0.1:$PORT_A" --peer "127.0.0.1:$PORT_B" --state-dir "$WORK/a-state" >/dev/null
+  rb init --root "$B" --name "Mac B" --listen "127.0.0.1:$PORT_B" --peer "127.0.0.1:$PORT_A" --state-dir "$WORK/b-state" >/dev/null
+  for c in a b; do
+    sed -i.bak 's/^discovery = true/discovery = false/' "$WORK/$c.toml"
+  done
+fi
 
 log "pairing"
 rb pair listen --timeout-s 30 > "$WORK/pair.out" 2>&1 &
@@ -110,6 +117,11 @@ echo "# Notizen" > "$A/notes/README.md"
 for i in $(seq 1 3000); do d="$A/web/node_modules/pkg$((i % 60))"; mkdir -p "$d"; echo "module.exports=$i" > "$d/f$i.js"; done
 echo "node_modules/" > "$A/web/.gitignore"
 
+if [ "${E2E_DISCOVERY:-0}" = 1 ]; then
+  # Forget the address seen at pairing: only Bonjour can find the peer now.
+  for c in a b; do sqlite3 "$WORK/$c-state/macsync.db" "UPDATE peers SET addr = ''"; done
+fi
+
 log "starting daemons"
 # Start the binary directly (not via a shell function) so that $! is the
 # daemon itself and cleanup terminates it.
@@ -120,6 +132,9 @@ T0=$(now_ms)
 wait_until 120 converged || fail "initial sync did not converge"
 INITIAL_MS=$(( $(now_ms) - T0 ))
 log "initial sync converged in ${INITIAL_MS} ms (3000+ files)"
+if [ "${E2E_DISCOVERY:-0}" = 1 ]; then
+  log "found via blinded Bonjour: $(ra peers)"
+fi
 ( cd "$B/web" && git fsck --full --no-dangling ) >/dev/null || fail "fsck after initial sync"
 
 log "latency of a single small change"

@@ -116,6 +116,7 @@ private struct SyncTab: View {
 private struct DeviceTab: View {
     @EnvironmentObject var model: AppModel
     @State private var name = ""
+    @State private var pairName = ""
     @State private var confirmUnpair = false
 
     var body: some View {
@@ -126,6 +127,12 @@ private struct DeviceTab: View {
                     Button("Sichern") { model.setConfig("device_name", name) }
                         .disabled(name.isEmpty || name == model.config?.string("device_name"))
                 }
+                HStack {
+                    TextField("Name beim Koppeln", text: $pairName, prompt: Text(Self.shortName(name)))
+                    Button("Sichern") { model.setConfig("pair_name", pairName) }
+                        .disabled(pairName == (model.config?.string("pair_name") ?? ""))
+                }
+                .help("Diesen Namen sehen Macs im selben Netz nur, während dieser Mac auf eine Kopplung wartet. Leer: der Gerätename ohne Besitzer.")
                 LabeledContent("Port", value: String(model.config?.port ?? 47123))
             }
             Section("Gekoppelter Mac") {
@@ -148,12 +155,29 @@ private struct DeviceTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { name = model.config?.string("device_name") ?? "" }
+        .onAppear {
+            name = model.config?.string("device_name") ?? ""
+            pairName = model.config?.string("pair_name") ?? ""
+        }
         .confirmationDialog("Kopplung aufheben?", isPresented: $confirmUnpair) {
             Button("Entkoppeln", role: .destructive) { Task { await model.unpair() } }
         } message: {
             Text("Der andere Mac kann sich danach nicht mehr verbinden. Dateien bleiben unverändert.")
         }
+    }
+}
+
+extension DeviceTab {
+    /// Mirrors `discovery::short_name`: the device name without its owner.
+    static func shortName(_ n: String) -> String {
+        let n = n.trimmingCharacters(in: .whitespaces)
+        for sep in [" von ", " de ", " di "] {
+            if let r = n.range(of: sep) { return String(n[..<r.lowerBound]) }
+        }
+        for sep in ["’s ", "'s ", "’ ", "' "] {
+            if let r = n.range(of: sep) { return String(n[r.upperBound...]) }
+        }
+        return n
     }
 }
 
