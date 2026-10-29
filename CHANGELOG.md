@@ -35,6 +35,8 @@ mit 0.5 verbinden sich nicht miteinander.
   Schlüssel werden im Speicher genullt
 
 ### Geändert
+- „Über MacSync“ und Einstellungen → Allgemein zeigen den Commit des Builds
+  (wie `macsync --version`), damit klar ist, was installiert ist
 - Synchronisations-Manager arbeitet wie ein Dateimanager: Liste und Baum
   kommen direkt von der Platte und stehen sofort – auch ohne laufende
   Synchronisation oder Verbindung, mit allen Ordnern und Dateien (auch

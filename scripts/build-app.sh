@@ -8,13 +8,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+# Same form as `macsync --version`, so app and daemon can be compared.
+COMMIT=$(git describe --always --dirty --abbrev=10 2>/dev/null || echo unknown)
+COMMIT_DATE=$(git log -1 --format=%cs 2>/dev/null || true)
 BUNDLE_ID=com.alpineperspective.macsync
 COMPANY="Alpine Perspective GmbH"
 OUT=build
 APP="$OUT/MacSync.app"
 TARGET=aarch64-apple-darwin
 
-echo "==> macsync $VERSION (Rust, $TARGET)"
+echo "==> macsync $VERSION ($COMMIT, Rust, $TARGET)"
 cargo build --release --locked -p macsync-cli --target "$TARGET"
 
 echo "==> MacSync (Swift)"
@@ -45,6 +48,8 @@ cat >"$APP/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>MacSyncCommit</key><string>$COMMIT</string>
+  <key>MacSyncCommitDate</key><string>$COMMIT_DATE</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleDevelopmentRegion</key><string>de</string>
   <key>CFBundleLocalizations</key><array><string>de</string></array>
