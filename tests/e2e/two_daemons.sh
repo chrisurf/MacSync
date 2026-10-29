@@ -93,6 +93,12 @@ else
     sed -i.bak 's/^discovery = true/discovery = false/' "$WORK/$c.toml"
   done
 fi
+# The test data includes 3000 files in node_modules: synchronise them here
+# (switched off by default).
+for c in a b; do
+  sed -i.bak 's/^sync_build_node = false/sync_build_node = true/' "$WORK/$c.toml"
+  grep -q '^sync_build_node = true' "$WORK/$c.toml" || fail "sync_build_node not in $c.toml"
+done
 
 log "pairing"
 rb pair listen --timeout-s 30 > "$WORK/pair.out" 2>&1 &
@@ -227,6 +233,25 @@ done
 wait_until 120 converged || fail "large file not converged"
 rm -rf "$A/big"
 wait_until 60 test ! -e "$B/big" || fail "large file not removed"
+
+log "overwrite: one Mac's state replaces the other's, both directions"
+ra pause >/dev/null; rb pause >/dev/null
+mkdir -p "$A/ow" "$B/ow"
+echo "A only" > "$A/ow/x.txt"; echo "B only" > "$B/ow/y.txt"
+ra resume >/dev/null; rb resume >/dev/null
+wait_until 60 test -e "$B/ow/x.txt" -a -e "$A/ow/y.txt" || fail "ow not merged"
+ra pause >/dev/null; rb pause >/dev/null
+echo "A edit" > "$A/ow/x.txt"; echo "B edit" > "$B/ow/x.txt"; echo "B new" > "$B/ow/z.txt"
+ra resume >/dev/null; rb resume >/dev/null
+ra verify ow >/dev/null; rb verify ow >/dev/null
+ra overwrite ow | grep -q "newer here" || fail "overwrite here failed"
+wait_until 60 sh -c "[ \"\$(cat '$B/ow/x.txt')\" = 'A edit' ] && [ ! -e '$B/ow/z.txt' ]" || fail "B did not take A's state"
+echo "B wins" > "$B/ow/y.txt"; rb verify ow >/dev/null
+sleep 1
+ra overwrite ow --from-peer >/dev/null || fail "overwrite from peer failed"
+wait_until 60 sh -c "[ \"\$(cat '$A/ow/y.txt')\" = 'B wins' ]" || fail "A did not take B's state"
+wait_until 60 converged || fail "not converged after overwrite"
+log "overwrite: both directions ok"
 
 log "diagnosis of both Macs"
 rb diag --minutes 10 --json > "$WORK/diag.json" || fail "diag failed"

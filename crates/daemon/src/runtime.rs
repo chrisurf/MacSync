@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use macsync_core::proto::Request;
+use macsync_core::proto::{Request, Response};
 use macsync_core::Hash;
 use macsync_engine::{telemetry, Engine, Outcome, PeerApi, PullOptions, PullQueue, PullReport, ScanOptions};
 use macsync_net::client::HelloInfo;
@@ -522,6 +522,13 @@ fn open_exposure(node: &Arc<Node>, shared: &Arc<Shared>, peer_key: Vec<u8>) -> R
             let units: Vec<String> =
                 units.iter().filter(|u| macsync_engine::validate_unit_name(u).is_ok()).take(64).cloned().collect();
             s3.prioritize(&units, "");
+        }
+        if let Request::Win { unit, prefix } = &req {
+            tracing::info!(peer = %peer.device, %unit, %prefix, "peer takes this Mac's state");
+            return match Daemon::win_here(&n3, &s3, unit, prefix) {
+                Ok(_) => Response::Ok,
+                Err(e) => Response::Error(format!("{e:#}")),
+            };
         }
         if let Request::Changed { units } = &req {
             tracing::debug!(peer = %peer.device, ?units, "peer reports changes");
@@ -1072,6 +1079,53 @@ impl Daemon {
             }
         }
         Ok(json!({ "units": units }))
+    }
+
+    /// Units affected by `path` (root-relative): its own unit with the
+    /// prefix inside it, and every unit below it (nested repositories).
+    fn win_targets(node: &Node, path: &str) -> Result<Vec<(String, String)>> {
+        let path = macsync_core::path::nfc(path.trim_matches('/'));
+        let (unit, prefix) = node.engine.split_path(&path)?;
+        let Some(unit) = unit else { bail!("choose a folder or file, not the whole sync folder") };
+        let below = format!("{path}/");
+        let mut out = vec![(unit.clone(), prefix)];
+        for u in node.engine.store().units()?.into_iter().map(|u| u.name) {
+            if u.starts_with(&below) && u != unit {
+                out.push((u, String::new()));
+            }
+        }
+        Ok(out)
+    }
+
+    /// This Mac's state of `unit`/`prefix` wins; the peer is told and pulls.
+    fn win_here(node: &Node, shared: &Shared, unit: &str, prefix: &str) -> Result<macsync_engine::WinReport> {
+        macsync_engine::validate_unit_name(unit)?;
+        let p = browse_peer(shared).context("the other Mac is not connected")?;
+        let r = node.engine.win(p.as_ref(), unit, prefix)?;
+        refresh_units(node, shared);
+        let _ = p.notify_changed(vec![unit.to_string()]);
+        let _ = p.prioritize(vec![unit.to_string()]);
+        Ok(r)
+    }
+
+    /// `here`: this Mac's state of `path` overwrites the other Mac's;
+    /// otherwise the other Mac's state is taken over here.
+    pub(crate) fn ipc_win(node: &Node, shared: &Shared, path: &str, here: bool) -> Result<Value> {
+        let targets = Self::win_targets(node, path)?;
+        let mut done = Vec::new();
+        for (unit, prefix) in &targets {
+            if here {
+                let r = Self::win_here(node, shared, unit, prefix)?;
+                done.push(serde_json::to_value(r)?);
+            } else {
+                let p = browse_peer(shared).context("the other Mac is not connected")?;
+                p.win(unit, prefix).with_context(|| format!("{unit}: the other Mac did not take over"))?;
+                shared.prioritize(std::slice::from_ref(unit), path);
+                done.push(json!({ "unit": unit }));
+            }
+        }
+        Self::kick(shared);
+        Ok(json!({ "units": done }))
     }
 
     /// Never connects: the IPC answer must not wait for discovery or a

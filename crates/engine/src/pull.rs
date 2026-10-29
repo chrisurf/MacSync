@@ -1313,7 +1313,7 @@ fn copy_rest(dests: &[PathBuf]) -> Result<()> {
 /// (remote) or listed from the local tree, never fetched as a whole subtree:
 /// below a build directory can lie hundreds of thousands of tombstones that
 /// only matter where the other side still has a file.
-fn descend(
+pub(crate) fn descend(
     peer: &dyn PeerApi,
     unit: &str,
     local: &Tree,
@@ -1389,7 +1389,13 @@ fn descend(
 }
 
 /// All live paths below `dir` in the local tree (excluded folders left out).
-fn local_subtree(local: &Tree, unit: &str, dir: &str, excludes: &macsync_fs::Excludes, paths: &mut BTreeSet<String>) {
+pub(crate) fn local_subtree(
+    local: &Tree,
+    unit: &str,
+    dir: &str,
+    excludes: &macsync_fs::Excludes,
+    paths: &mut BTreeSet<String>,
+) {
     let mut todo = vec![dir.to_string()];
     while let Some(d) = todo.pop() {
         for c in local.children(&d).unwrap_or(&[]) {
@@ -1405,7 +1411,11 @@ fn local_subtree(local: &Tree, unit: &str, dir: &str, excludes: &macsync_fs::Exc
     }
 }
 
-fn fetch_entries(peer: &dyn PeerApi, unit: &str, paths: &BTreeSet<String>) -> Result<HashMap<String, Entry>> {
+pub(crate) fn fetch_entries(
+    peer: &dyn PeerApi,
+    unit: &str,
+    paths: &BTreeSet<String>,
+) -> Result<HashMap<String, Entry>> {
     let mut out = HashMap::new();
     let wanted = paths;
     let paths: Vec<String> = paths.iter().cloned().collect();

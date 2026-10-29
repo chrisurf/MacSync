@@ -412,6 +412,34 @@ final class ManagerModel: ObservableObject {
         }
     }
 
+    /// `here`: this Mac's state of the rows replaces the other Mac's;
+    /// otherwise the other Mac's state replaces this one. Asks first; the
+    /// replaced versions stay in the MacSync trash of the Mac that changes.
+    func overwrite(_ rows: [ManagerRow], here: Bool) {
+        guard !rows.isEmpty else { return }
+        let names = rows.count == 1 ? "„\(rows[0].name)“" : "\(rows.count) Einträge"
+        let alert = NSAlert()
+        if here {
+            alert.messageText = "\(names) auf \(peerName) überschreiben?"
+            alert.informativeText = "Der Stand dieses Macs gilt: Abweichende Dateien auf \(peerName) werden ersetzt, Dateien, die es nur dort gibt, entfernt. Die bisherigen Fassungen bleiben 14 Tage im MacSync-Papierkorb auf \(peerName). Offene Konflikte darin werden zugunsten dieses Macs gelöst."
+            alert.addButton(withTitle: "Auf \(peerName) überschreiben")
+        } else {
+            alert.messageText = "\(names) von \(peerName) übernehmen?"
+            alert.informativeText = "Der Stand von \(peerName) gilt: Abweichende Dateien auf diesem Mac werden ersetzt, Dateien, die es nur hier gibt, entfernt. Die bisherigen Fassungen bleiben 14 Tage im MacSync-Papierkorb auf diesem Mac. Offene Konflikte darin werden zugunsten von \(peerName) gelöst."
+            alert.addButton(withTitle: "Von \(peerName) übernehmen")
+        }
+        alert.addButton(withTitle: "Abbrechen")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        for r in rows {
+            send(["cmd": "win", "path": r.path, "here": here])
+        }
+    }
+
+    func dismissGitNotice(_ row: ManagerRow) {
+        send(["cmd": "dismiss-git-notice", "unit": row.unit])
+    }
+
     func setPaused(_ row: ManagerRow, _ paused: Bool) {
         send(["cmd": paused ? "pause" : "resume", "unit": row.unit])
     }
@@ -829,6 +857,17 @@ struct ManagerView: View {
             if r.isUnit {
                 Button(r.paused ? "Fortsetzen" : "Pausieren") { model.setPaused(r, !r.paused) }
             }
+            if r.item?.gitNotice != nil {
+                Button("Git-Hinweis ausblenden") { model.dismissGitNotice(r) }
+            }
+        }
+        if !rows.isEmpty {
+            Divider()
+            Button("Diesen Stand auf \(model.peerName) übertragen …") { model.overwrite(rows, here: true) }
+                .help("Dieser Mac gilt: \(model.peerName) übernimmt genau diesen Stand (bisherige Fassungen dort in den MacSync-Papierkorb)")
+            Button("Stand von \(model.peerName) übernehmen …") { model.overwrite(rows, here: false) }
+                .help("\(model.peerName) gilt: dieser Mac übernimmt genau dessen Stand (bisherige Fassungen hier in den MacSync-Papierkorb)")
+            Divider()
         }
         if !rows.isEmpty {
             Button("Jetzt synchronisieren") { model.syncNow(rows) }

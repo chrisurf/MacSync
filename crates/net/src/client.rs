@@ -217,6 +217,12 @@ impl NetPeer {
         }
     }
 
+    /// Ask the peer to make its state of `prefix` in `unit` win.
+    pub fn win(&self, unit: &str, prefix: &str) -> Result<()> {
+        self.call(&Request::Win { unit: unit.to_string(), prefix: prefix.to_string() })?;
+        Ok(())
+    }
+
     pub fn disconnect(&self) {
         *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }

@@ -120,6 +120,16 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Overwrite: this Mac's state of a folder or file replaces the other
+    /// Mac's (`--from-peer`: the other way round). Replaced versions go to
+    /// the MacSync trash of the Mac that changes. Needs the running daemon.
+    Overwrite {
+        /// Path relative to the sync root, e.g. `chrisurf/macmailbox/src`.
+        path: String,
+        /// Take the other Mac's state instead.
+        #[arg(long)]
+        from_peer: bool,
+    },
     /// Synchronise this folder or file next, ahead of the rest (needs the
     /// running daemon).
     First {
@@ -559,6 +569,22 @@ fn run(cli: Cli) -> Result<()> {
                     println!("{}", p.display());
                 }
                 None => print!("{text}"),
+            }
+            Ok(())
+        }
+        Cmd::Overwrite { path, from_peer } => {
+            let v = ipc::call(&cfg.state_dir(), &IpcRequest::Win { path, here: !from_peer })?
+                .context("the daemon does not run: start it with `macsync daemon` or the app")?;
+            for u in v["units"].as_array().into_iter().flatten() {
+                match u["wins"].as_u64() {
+                    Some(w) => println!(
+                        "{}: {w} newer here, {} removed on the other Mac, {} conflicts closed",
+                        u["unit"].as_str().unwrap_or("?"),
+                        u["removes_there"],
+                        u["conflicts_closed"]
+                    ),
+                    None => println!("{}: the other Mac's state is taken over", u["unit"].as_str().unwrap_or("?")),
+                }
             }
             Ok(())
         }

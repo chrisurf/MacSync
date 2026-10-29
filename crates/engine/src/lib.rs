@@ -18,11 +18,13 @@ mod pull;
 mod resolve;
 mod serve;
 pub mod telemetry;
+mod win;
 
 pub use capture::{ScanOptions, ScanReport};
 pub use plan::{ActionKind, PlannedAction};
 pub use pull::{Outcome, PullOptions, PullQueue, PullReport, RetryLater};
 pub use resolve::{Choice, ConflictView, Side};
+pub use win::WinReport;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -32,13 +32,7 @@ private struct GeneralTab: View {
                     if let m = cliMessage { Text(m).font(.caption).foregroundStyle(.secondary) }
                 }
             }
-            LabeledContent("Version") {
-                VStack(alignment: .trailing) {
-                    Text(Bundle.main.shortVersion)
-                    Text(Bundle.main.build).font(.caption.monospaced()).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
+            LabeledContent("Version", value: Bundle.main.shortVersion)
             LabeledContent("Entwickelt von") {
                 VStack(alignment: .trailing) {
                     Text(About.company)
@@ -196,12 +190,7 @@ extension Bundle {
     var shortVersion: String {
         object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
-    /// Commit and date of this build, as in `macsync --version` ("Commit ac1b8bfa4c, 2026-10-29").
-    var build: String {
-        let commit = object(forInfoDictionaryKey: "MacSyncCommit") as? String ?? "unbekannt"
-        let date = object(forInfoDictionaryKey: "MacSyncCommitDate") as? String ?? ""
-        return date.isEmpty ? "Commit \(commit)" : "Commit \(commit), \(date)"
-    }
+
 }
 
 /// Build and package folders per language: off by default (they can be

@@ -121,6 +121,8 @@ impl Engine {
                     events: crate::telemetry::since(since_ms, max.min(50_000) as usize),
                 },
                 Request::Hello { .. } | Request::Changed { .. } | Request::Prioritize { .. } => Response::Ok,
+                // Needs a connection back to the asking Mac: the daemon.
+                Request::Win { .. } => Response::Error("not supported here".into()),
             })
         })();
         r.unwrap_or_else(|e| Response::Error(e.to_string()))

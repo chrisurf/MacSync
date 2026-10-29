@@ -35,6 +35,14 @@ mit 0.5 verbinden sich nicht miteinander.
   Schlüssel werden im Speicher genullt
 
 ### Geändert
+- Manager, Rechtsklick: „Diesen Stand auf … übertragen“ und „Stand von …
+  übernehmen“ für Ordner, Repositorys und Dateien – der gewählte Mac gilt,
+  der andere übernimmt genau diesen Stand (abweichende Dateien ersetzt, nur
+  dort vorhandene entfernt, beides in dessen MacSync-Papierkorb), offene
+  Konflikte darin sind damit gelöst. Geht von beiden Macs aus
+  (`macsync overwrite <pfad> [--from-peer]`). Neuer Peer-Befehl `Win`
+- Manager: „Git-Hinweis ausblenden“ entfernt das orange Zeichen einer
+  geänderten `.git/config`; eine spätere Änderung zeigt es wieder
 - Einstellungen → Ordner: Build- und Paketordner je Sprache abschaltbar
   (Node.js, Python, Rust, Swift/Xcode, Go, Terraform), Standard: nicht
   synchronisiert – sie lassen sich auf jedem Mac neu installieren oder bauen.
@@ -75,8 +83,7 @@ mit 0.5 verbinden sich nicht miteinander.
   nach vorn und beendet sich. Liegt die gestartete App nicht in „Programme“,
   fragt sie, ob die installierte geöffnet werden soll (mit beiden Versionen)
 - Versionen sichtbar: Menü und Manager-Fußzeile zeigen „MacSync 0.5.0
-  (0309498)“, „Über MacSync“ und Einstellungen → Allgemein den Commit des
-  Builds (wie `macsync --version`). Läuft nach einem Update noch die alte
+  (0309498)“. Läuft nach einem Update noch die alte
   Synchronisation, ersetzt die App sie von selbst durch die neue. Builds mit
   demselben Protokoll arbeiten ohne Hinweis zusammen
 - Manager: läuft die Synchronisation nicht, startet „Synchronisation

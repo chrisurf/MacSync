@@ -549,16 +549,24 @@ impl Store {
     /// The latest warning about `.git/config` or a hook (not Git's `*.sample`
     /// files) of `unit` changed by sync: `(path, ts_ms)`.
     pub fn git_config_warning(&self, unit: &str) -> Result<Option<(String, i64)>> {
+        let seen: i64 = self.kv(&format!("git_notice_seen:{unit}"))?.and_then(|v| v.parse().ok()).unwrap_or(0);
         Ok(self
             .conn
             .query_row(
                 "SELECT path, ts_ms FROM journal WHERE unit = ?1 AND action = 'warning'
                  AND (path = '.git/config' OR (path LIKE '.git/hooks/%' AND path NOT LIKE '%.sample'))
+                 AND ts_ms > ?2
                  ORDER BY id DESC LIMIT 1",
-                params![unit],
+                params![unit, seen],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?)
+    }
+
+    /// The user has seen the current Git notice of `unit`; a later change
+    /// shows a new one.
+    pub fn dismiss_git_warning(&self, unit: &str) -> Result<()> {
+        self.set_kv(&format!("git_notice_seen:{unit}"), &now_ms().to_string())
     }
 
     pub fn journal(&self, since_ms: i64, unit: Option<&str>, limit: usize) -> Result<Vec<LogRow>> {

@@ -74,6 +74,16 @@ pub enum IpcRequest {
         ids: Vec<i64>,
         choice: String,
     },
+    /// Overwrite: `here` = this Mac's state of `path` replaces the other
+    /// Mac's; otherwise the other Mac's state replaces this one.
+    Win {
+        path: String,
+        here: bool,
+    },
+    /// Hide the notice about a changed `.git/config` or hook of `unit`.
+    DismissGitNotice {
+        unit: String,
+    },
     /// Telemetry events of both Macs since `since_ms` (`macsync diag`).
     Diag {
         since_ms: i64,
@@ -256,6 +266,11 @@ fn dispatch(req: IpcRequest, node: &Arc<Node>, shared: &Arc<Shared>) -> Result<V
             json!({ "peer": name, "conflicts": engine.conflict_views(all)? })
         }
         IpcRequest::Diag { since_ms, peer } => Daemon::ipc_diag(node, shared, since_ms, peer)?,
+        IpcRequest::Win { path, here } => Daemon::ipc_win(node, shared, &path, here)?,
+        IpcRequest::DismissGitNotice { unit } => {
+            engine.store().dismiss_git_warning(&unit)?;
+            json!("dismissed")
+        }
         IpcRequest::ResolveMany { ids, choice } => {
             let v = resolve_many(engine, &ids, &choice)?;
             Daemon::kick(shared);

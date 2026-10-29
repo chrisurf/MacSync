@@ -74,6 +74,13 @@ pub enum Request {
         since_ms: i64,
         max: u32,
     },
+    /// The user wants the sender's version of `prefix` in `unit` (empty:
+    /// the whole unit): the receiver makes its own state win and tells the
+    /// sender, which then pulls it. Older builds answer with an error.
+    Win {
+        unit: String,
+        prefix: String,
+    },
 }
 
 impl Request {
@@ -90,6 +97,7 @@ impl Request {
             Request::Ping => "ping",
             Request::Prioritize { .. } => "prioritize",
             Request::Diag { .. } => "diag",
+            Request::Win { .. } => "win",
         }
     }
 }
