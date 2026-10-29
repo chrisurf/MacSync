@@ -852,6 +852,8 @@ name = "macsync-daemon"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "blake3",
+ "hex",
  "libc",
  "macsync-core",
  "macsync-engine",
