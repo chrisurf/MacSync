@@ -6,6 +6,10 @@ Geprüft: `crates/net` vollständig, `crates/engine/src/{serve,pull,apply}.rs`,
 `crates/daemon/src/{ipc,config,runtime}.rs`, Kopplung in `crates/cli/src/main.rs`.
 `cargo test -p macsync-net`: grün.
 
+> **Umgesetzt in 0.5.0** (siehe [Auftrag](security-auftrag-0.5.0.md),
+> CHANGELOG „Sicherheit“, ADR-0012): H1, H2, M1–M3, N1 (ohne Schlüsselbund),
+> N2, N3, N5, N6. Offen: N4 (Rekeying), N7 (Developer-ID), Schlüsselbund.
+
 ## Ergebnis in einem Satz
 
 Die Übertragung zwischen den Macs ist **vollständig Ende-zu-Ende verschlüsselt

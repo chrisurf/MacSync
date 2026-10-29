@@ -65,6 +65,14 @@ pub struct BrowseItem {
     pub state: ItemState,
     pub paused: bool,
     pub conflict_id: Option<i64>,
+    /// For a unit: the other Mac recently changed `.git/config` or a hook.
+    pub git_notice: Option<GitNotice>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct GitNotice {
+    pub path: String,
+    pub at_ms: i64,
 }
 
 fn kind_str(k: Kind) -> &'static str {
@@ -144,6 +152,7 @@ impl Engine {
                 state,
                 paused: paused.contains(name.as_str()),
                 conflict_id: None,
+                git_notice: self.store().git_config_warning(name)?.map(|(path, at_ms)| GitNotice { path, at_ms }),
             });
         }
 
@@ -246,6 +255,7 @@ impl Engine {
                 state: if conflict_id.is_some() { ItemState::Conflict } else { state },
                 paused,
                 conflict_id,
+                git_notice: None,
             });
         }
         Ok(items)

@@ -15,6 +15,13 @@ struct SyncItem: Decodable, Hashable {
     var state: String
     var paused: Bool
     var conflictId: Int64?
+    /// The other Mac changed `.git/config` or a hook of this repository.
+    struct GitNotice: Decodable, Hashable {
+        var path: String
+        var atMs: Int64
+    }
+
+    var gitNotice: GitNotice?
 
     var isSynced: Bool { state == "synced" }
 }
@@ -943,8 +950,14 @@ private struct StateCell: View {
 
     var body: some View {
         if let d = describe() {
-            Label(d.text, systemImage: d.symbol).foregroundStyle(d.color).lineLimit(1)
-                .help(longText ?? d.text)
+            HStack(spacing: 6) {
+                Label(d.text, systemImage: d.symbol).foregroundStyle(d.color).lineLimit(1)
+                    .help(longText ?? d.text)
+                if let n = row.item?.gitNotice {
+                    Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
+                        .help(gitNoticeText(n))
+                }
+            }
         } else if phase == .loading || phase == .local {
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini)
@@ -953,6 +966,12 @@ private struct StateCell: View {
         } else {
             Text("–").foregroundStyle(.tertiary).help(phase == .noDaemon ? "Synchronisation läuft nicht" : "Kein Status")
         }
+    }
+
+    private func gitNoticeText(_ n: SyncItem.GitNotice) -> String {
+        let when = Date(timeIntervalSince1970: Double(n.atMs) / 1000).formatted(date: .abbreviated, time: .shortened)
+        let what = n.path == ".git/config" ? "die Git-Konfiguration (.git/config)" : "den Git-Hook \(n.path)"
+        return "\(peer) hat \(what) dieses Repositorys geändert (\(when)). MacSync führt daraus nichts aus; Git selbst schon – prüfe die Änderung, wenn du sie nicht erwartet hast."
     }
 
     /// Spelled out with the name of the other Mac (tooltip).

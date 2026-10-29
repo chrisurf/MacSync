@@ -22,3 +22,7 @@ werden in Noise-Frames ≤ 65 535 Byte zerlegt; logische Nachrichten werden ab
   Transaktionen sind ohnehin idempotent und werden wiederholt.
 - Der `PeerApi`-Trait kapselt den Transport; ein Wechsel auf QUIC/iroh betrifft
   nur `macsync-net`.
+
+## Nachtrag 0.5.0
+Seit Protokoll 3 `Noise_KK` statt `Noise_XX`: Das Pinning ist in den
+Handshake gewandert. Details in [ADR-0012](0012-noise-kk-und-geblendete-ankuendigung.md).

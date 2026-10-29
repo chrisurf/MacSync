@@ -512,7 +512,8 @@ impl Engine {
                         }
                         case_keys.insert(k, path.clone());
                     }
-                    if class == Some(GitClass::Hook) {
+                    // Git never runs its `*.sample` files: no warning for those.
+                    if class == Some(GitClass::Hook) && !path.ends_with(".sample") {
                         let _ = self.store().log(
                             unit,
                             "warning",
@@ -520,7 +521,7 @@ impl Engine {
                             "hook changed by sync (never executed by MacSync)",
                             "",
                         );
-                    } else if path == ".git/config" {
+                    } else if path == ".git/config" && local_live.is_some() {
                         let _ = self.store().log(
                             unit,
                             "warning",

@@ -2,6 +2,38 @@
 
 ## 0.5.0 (in Arbeit)
 
+**Beide Macs auf 0.5.0 aktualisieren:** Das Netzwerkprotokoll ist neu
+(Version 3). Eine bestehende Kopplung bleibt gültig; ein Mac mit 0.4 und einer
+mit 0.5 verbinden sich nicht miteinander.
+
+### Sicherheit
+- Fremde im Netz (Café, Hotel, Firmen-WLAN) bekommen keine Antwort mehr:
+  Noise KK statt XX, beide Macs kennen den Schlüssel des anderen aus der
+  Kopplung. Der Port ist nur offen, solange ein Mac gekoppelt ist
+- Verbindungsflut begrenzt: höchstens 4 Verbindungen im Handshake (die
+  älteste weicht, damit der eigene Mac durchkommt), 3 s Handshake, nach
+  5 Fehlschlägen 60 s Sperre je Adresse, höchstens 4 gekoppelte Verbindungen
+- Bonjour zeigt keine feste Geräte-ID mehr, sondern eine stündlich
+  wechselnde, die nur der gekoppelte Mac zuordnen kann; Hostname neutral
+- Kopplung: Daten (Name, Pfad, Version) verschlüsselt statt nur
+  signiert; beide Macs zeigen danach vier gleiche Wörter, die App speichert
+  erst nach „Ja, stimmt überein“. Ein Fremder mit falschen Codes beendet das
+  Kopplungsfenster nicht mehr (3 Versuche je Adresse, 10 insgesamt). Beim
+  Koppeln wird nur ein kurzer Name angekündigt („MacBook Pro“, einstellbar
+  unter Einstellungen → Gerät). `pair connect` liest den Code aus
+  `MACSYNC_PAIR_CODE` oder stdin statt aus der Befehlszeile
+- Neu (Standard aus): „In unbekannten Netzen unsichtbar“ – in Netzen, in
+  denen der andere Mac nie erreicht wurde, kein offener Port und keine
+  Ankündigung; „Diesem Netz vertrauen“ im Menü
+- MacSync schreibt und löscht nur innerhalb des Sync-Ordners: nichts unter
+  einem Symlink, keine Einträge, die nicht angefragt wurden
+- Git-Aufrufe von MacSync führen kein `core.fsmonitor` und keine Hooks
+  aus einer synchronisierten `.git/config` aus. Ändert der andere Mac
+  `.git/config` oder einen Hook, zeigt der Manager ein Schild am Repository
+- Geräteschlüssel: wird nicht geladen, wenn andere ihn lesen können oder
+  er manipuliert ist; nicht mehr in Time Machine; State-Verzeichnis 0700;
+  Schlüssel werden im Speicher genullt
+
 ### Geändert
 - Synchronisations-Manager arbeitet wie ein Dateimanager: Liste und Baum
   kommen direkt von der Platte und stehen sofort – auch ohne laufende
@@ -37,6 +69,9 @@
   (`journal_retention_days` in `[sync]`)
 
 ### Behoben
+- Ersetzte der andere Mac einen Ordner durch einen Symlink, löschte MacSync
+  die alten Dateien am Ziel des Symlinks, also außerhalb des Sync-Ordners
+- Git-Beispiel-Hooks (`*.sample`) erzeugen keine Protokollwarnungen mehr
 - Synchronisations-Manager „hing“ und zeigte „0 Einträge · alles synchron“
   mit „Die Daten konnten nicht geöffnet werden, da sie nicht das korrekte
   Format haben“: eine Zeitüberschreitung der Daemon-Anfrage wurde als

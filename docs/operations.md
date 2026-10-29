@@ -45,11 +45,13 @@ root = "/Users/chris/Code"
 # state_dir = "~/Library/Application Support/MacSync"
 listen = "0.0.0.0:47123"      # Verbindungen werden nur aus dem LAN angenommen
 pair_port = 47124
+# pair_name = "MacBook Pro"   # beim Koppeln angezeigt; Standard: Gerätename ohne Besitzer
 mode = "two-way"              # two-way | mirror-send | mirror-receive
 
 [peer]
 # address = "mac-b.local:47123"   # sonst Bonjour bzw. Adresse vom Pairing
 discovery = true
+hide_in_unknown_networks = false  # true: in fremden Netzen kein Port, keine Ankündigung
 
 [sync]
 quiet_ms = 400                # Ruhezeit nach dem letzten Ereignis

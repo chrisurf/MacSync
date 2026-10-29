@@ -524,6 +524,21 @@ impl Store {
         Ok(())
     }
 
+    /// The latest warning about `.git/config` or a hook (not Git's `*.sample`
+    /// files) of `unit` changed by sync: `(path, ts_ms)`.
+    pub fn git_config_warning(&self, unit: &str) -> Result<Option<(String, i64)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT path, ts_ms FROM journal WHERE unit = ?1 AND action = 'warning'
+                 AND (path = '.git/config' OR (path LIKE '.git/hooks/%' AND path NOT LIKE '%.sample'))
+                 ORDER BY id DESC LIMIT 1",
+                params![unit],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
     pub fn journal(&self, since_ms: i64, unit: Option<&str>, limit: usize) -> Result<Vec<LogRow>> {
         let mut st = self.conn.prepare(
             "SELECT id, ts_ms, unit, action, path, reason, detail FROM journal

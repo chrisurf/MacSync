@@ -280,6 +280,7 @@ fn hooks_are_synced_but_reported() {
     assert!(p.rb().join("app/.git/hooks/pre-commit").exists());
     let log = p.b.store().journal(0, Some("app"), 1000).unwrap();
     assert!(log.iter().any(|l| l.action == "warning" && l.path == ".git/hooks/pre-commit"));
+    assert!(!log.iter().any(|l| l.action == "warning" && l.path.ends_with(".sample")), "sample hooks are inert");
 }
 
 #[test]
@@ -289,10 +290,17 @@ fn git_config_changes_are_reported() {
     let a = p.ra().join("app");
     init_repo(&a);
     p.sync();
+    // A newly transferred repository (its own config, sample hooks) is no news.
+    let items = p.b.browse(None, None, "").unwrap();
+    assert_eq!(items.iter().find(|i| i.unit == "app").unwrap().git_notice, None);
     let config = fs::read_to_string(a.join(".git/config")).unwrap();
     write(&a, ".git/config", &format!("{config}[core]\n\tfsmonitor = /bin/true\n"));
     p.sync();
     assert!(fs::read_to_string(p.rb().join("app/.git/config")).unwrap().contains("fsmonitor"));
     let log = p.b.store().journal(0, Some("app"), 1000).unwrap();
     assert!(log.iter().any(|l| l.action == "warning" && l.path == ".git/config"));
+    // The manager shows it on the repository.
+    let items = p.b.browse(None, None, "").unwrap();
+    let app = items.iter().find(|i| i.unit == "app" && i.is_unit).unwrap();
+    assert_eq!(app.git_notice.as_ref().map(|n| n.path.as_str()), Some(".git/config"));
 }
