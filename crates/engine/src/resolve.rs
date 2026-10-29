@@ -70,8 +70,26 @@ impl Engine {
         for (unit, rows) in by_unit {
             let lock = self.unit_lock(&unit);
             let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
-            // Make sure the index reflects the disk before deciding anything.
-            let s = self.scan_unit_locked(&unit, &ScanOptions::default())?;
+            // Make sure the index reflects the disk before deciding anything –
+            // for the paths in conflict only; a case collision involves other
+            // spellings, so the whole unit is scanned.
+            let whole = rows.iter().any(|(_, c)| ConflictClass::parse(&c.class) == Some(ConflictClass::CaseCollision));
+            let mut paths: Vec<String> = rows
+                .iter()
+                .flat_map(|(_, c)| {
+                    std::iter::once(c.path.clone())
+                        .chain(c.locals.iter().map(|e| e.path.clone()))
+                        .chain(c.remotes.iter().map(|e| e.path.clone()))
+                })
+                .collect();
+            let capture = |paths: &[String]| {
+                if whole {
+                    self.scan_unit_locked(&unit, &ScanOptions::default())
+                } else {
+                    self.capture_paths_locked(&unit, paths)
+                }
+            };
+            let s = capture(&paths)?;
             if let Some(d) = s.deferred {
                 for (i, _) in rows {
                     out[i].1 = Some(Err(anyhow!("unit {unit} is busy: {d}")));
@@ -79,7 +97,8 @@ impl Engine {
                 continue;
             }
             for (i, c) in rows {
-                let r = self.resolve_locked(&c, choice).and_then(|()| {
+                let r = self.resolve_locked(&c, choice).and_then(|added| {
+                    paths.extend(added);
                     self.store().resolve_conflict(c.id, choice.as_str())?;
                     self.store().log(
                         &unit,
@@ -92,7 +111,12 @@ impl Engine {
                 });
                 out[i].1 = Some(r);
             }
-            self.scan_unit_locked(&unit, &ScanOptions::default())?;
+            // Git rewrites its index after a remote version was taken.
+            if self.store().unit(&unit)?.is_some_and(|u| u.kind == macsync_core::UnitKind::Git) {
+                paths.push(".git/index".into());
+            }
+            capture(&paths)?;
+            self.invalidate_tree(&unit)?;
             let open = self.store().open_conflict_count(&unit)?;
             self.store().set_unit_status(&unit, if open > 0 { "conflict" } else { "resolved" }, false)?;
         }
@@ -103,8 +127,9 @@ impl Engine {
     }
 
     /// Apply `choice` to one open conflict; the unit lock is held and the
-    /// index is current.
-    fn resolve_locked(&self, c: &ConflictRow, choice: Choice) -> Result<()> {
+    /// index is current. Returns paths it created besides the conflict's own
+    /// (the sibling file of "keep both"); the caller recomputes the tree.
+    fn resolve_locked(&self, c: &ConflictRow, choice: Choice) -> Result<Vec<String>> {
         let id = c.id;
         let unit = c.unit.clone();
         let me = self.cfg.device.clone();
@@ -147,8 +172,8 @@ impl Engine {
                         std::fs::create_dir_all(p)?;
                     }
                     ops::clone_or_copy(&src, &dest).with_context(|| format!("copy {}", src.display()))?;
+                    return Ok(vec![sibling]);
                 }
-                self.invalidate_tree(&unit)?;
             }
             Choice::Remote => {
                 let staging = self.staging_root().join(format!("resolve-{id}-{}", crate::new_tx_id()));
@@ -160,7 +185,7 @@ impl Engine {
                 r?;
             }
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     /// Conflicts with both versions side by side (the app's conflict view).

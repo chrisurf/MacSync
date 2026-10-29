@@ -83,6 +83,10 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Konflikt lösen in einem sehr großen Ordner (Hunderttausende Einträge, z. B.
+  nach `cargo clean`) dauerte Sekunden bis Minuten: MacSync erfasst dabei nur
+  noch die betroffenen Dateien statt den ganzen Ordner zweimal zu scannen
+
 - Daemon antwortete nach dem Start mit großer Datenbank minutenlang nicht
   („Der Daemon antwortet nicht“, „Startet …“): Jede Statusabfrage zählte
   alle Einträge neu und hielt dabei die Datenbank fest; die App fragte jede

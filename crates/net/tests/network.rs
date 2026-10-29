@@ -160,12 +160,8 @@ fn sibling_connection_does_not_wait_behind_a_transfer() {
         a.handle(req)
     });
     let server = Server::start("127.0.0.1:0".parse().unwrap(), ida.clone(), hello, idb.public.clone(), slow).unwrap();
-    let main = Arc::new(NetPeer::new(
-        server.local_addr(),
-        idb.clone(),
-        ida.public.clone(),
-        HelloInfo::local(&idb, "b", "/"),
-    ));
+    let main =
+        Arc::new(NetPeer::new(server.local_addr(), idb.clone(), ida.public.clone(), HelloInfo::local(&idb, "b", "/")));
     main.ping().unwrap();
     let side = main.sibling();
     side.ping().unwrap();
@@ -226,7 +222,8 @@ fn large_transfer_runs_over_several_connections() {
         r
     });
     let hello = HelloInfo::local(&ida, "srv", "/");
-    let server = Server::start("127.0.0.1:0".parse().unwrap(), ida.clone(), hello, idb.public.clone(), handler).unwrap();
+    let server =
+        Server::start("127.0.0.1:0".parse().unwrap(), ida.clone(), hello, idb.public.clone(), handler).unwrap();
     let peer = NetPeer::new(server.local_addr(), idb.clone(), ida.public.clone(), HelloInfo::local(&idb, "b", "/"));
     let reports = b.sync_from(&peer, None, PullOptions::default()).unwrap();
     let r = reports.iter().find(|r| r.unit == "big").unwrap();

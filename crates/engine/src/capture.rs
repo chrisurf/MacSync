@@ -1,7 +1,7 @@
 //! Capturing local state: scan a unit, hash what changed, bump version vectors,
 //! write tombstones.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use macsync_core::entry::ROOT_UNIT;
@@ -216,6 +216,112 @@ impl Engine {
         }
         report.root = self.invalidate_tree(unit)?;
         report.nested = res.nested_units.iter().map(|n| macsync_fs::root_rel(unit, n)).collect();
+        Ok(report)
+    }
+
+    /// Capture only `paths` of `unit` (unit lock held). Resolving a conflict
+    /// touches a handful of paths; a full scan of a unit with hundreds of
+    /// thousands of entries would take seconds. Directories and hard links
+    /// depend on more than their own path: then the whole unit is scanned.
+    /// The tree is not recomputed; the caller does that once at the end.
+    pub(crate) fn capture_paths_locked(&self, unit: &str, paths: &[String]) -> Result<ScanReport> {
+        let Some(known) = self.store().unit(unit)? else {
+            return self.scan_unit_locked(unit, &ScanOptions::default());
+        };
+        let kind = known.kind;
+        let mut report = ScanReport { unit: unit.to_string(), ..Default::default() };
+        let unit_dir = macsync_fs::unit_dir(&self.cfg.root, unit);
+        if kind == UnitKind::Git {
+            let g = self.gate.check(&unit_dir);
+            if !g.is_open() {
+                report.deferred = Some(g.describe());
+                return Ok(report);
+            }
+        }
+        let oid_len = if kind == UnitKind::Git {
+            macsync_gitaware::resolve_git_dir(&unit_dir).map(|g| macsync_gitaware::object_id_len(&g)).unwrap_or(20)
+        } else {
+            20
+        };
+        let now = macsync_fs::time::now_ms();
+        let me = self.cfg.device.as_str();
+        let mut writes: Vec<Stored> = Vec::new();
+        let unique: BTreeSet<&String> = paths.iter().collect();
+        for p in unique {
+            let old = self.store().entry(unit, p)?;
+            if p.is_empty() || old.as_ref().is_some_and(|o| o.entry.kind == Kind::Dir && !o.entry.deleted) {
+                return self.scan_unit_locked(unit, &ScanOptions::default());
+            }
+            let disk = old.as_ref().map(|o| o.disk.clone()).filter(|d| !d.is_empty()).unwrap_or_else(|| p.clone());
+            let abs = macsync_fs::abs_path(&self.cfg.root, unit, &disk);
+            let s = match scan::stat(&abs, p.clone(), disk.clone()) {
+                Ok(s) => s,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e.into()),
+            };
+            match s {
+                Some(s) if s.kind == Kind::Dir || (s.kind == Kind::File && s.nlink > 1) => {
+                    return self.scan_unit_locked(unit, &ScanOptions::default());
+                }
+                Some(s) => {
+                    let Some((entry, hashed)) = self.build_entry(unit, kind, oid_len, &s, old.as_ref(), false, None)?
+                    else {
+                        continue;
+                    };
+                    report.hashed += usize::from(hashed);
+                    let stat = StatCache { ino: s.ino, dev: s.dev, ctime_ns: s.ctime_ns };
+                    match &old {
+                        Some(o) if !o.entry.deleted && o.entry.same_state(&entry) => {
+                            let e = Entry { vv: o.entry.vv.clone(), ..entry };
+                            if e != o.entry || o.disk != s.disk || o.stat != stat {
+                                writes.push(Stored { entry: e, disk: s.disk, stat, changed_ms: o.changed_ms });
+                            }
+                        }
+                        _ => {
+                            let vv = match &old {
+                                Some(o) => {
+                                    let mut vv = o.entry.vv.clone();
+                                    vv.increment(me);
+                                    vv
+                                }
+                                None => VersionVector::single(me, 1),
+                            };
+                            report.changed += 1;
+                            writes.push(Stored { entry: Entry { vv, ..entry }, disk: s.disk, stat, changed_ms: now });
+                        }
+                    }
+                }
+                None => {
+                    if let Some(o) = old.filter(|o| !o.entry.deleted) {
+                        let mut vv = o.entry.vv.clone();
+                        vv.increment(me);
+                        report.changed += 1;
+                        writes.push(Stored {
+                            entry: Entry::tombstone(p, o.entry.kind, vv),
+                            disk: o.disk,
+                            stat: StatCache::default(),
+                            changed_ms: now,
+                        });
+                    }
+                }
+            }
+        }
+        if kind == UnitKind::Git {
+            let g = macsync_gitaware::Gate::check_files(&unit_dir);
+            if g != GateState::Open {
+                report.deferred = Some(g.describe());
+                return Ok(report);
+            }
+        }
+        self.store().atomically(|st| {
+            for w in &writes {
+                st.put_entry(unit, w)?;
+            }
+            if report.changed > 0 {
+                st.log(unit, "capture", "", "local change", &format!("{} entries changed", report.changed))?;
+            }
+            Ok(())
+        })?;
         Ok(report)
     }
 

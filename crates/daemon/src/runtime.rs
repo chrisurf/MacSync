@@ -1145,7 +1145,10 @@ mod status_load {
             st.atomically(|st| {
                 for i in 0..300_000 {
                     let entry = Entry::tombstone(&format!("d{}/f{i}", i % 100), Kind::File, Default::default());
-                    st.put_entry("big", &Stored { entry, disk: String::new(), stat: Default::default(), changed_ms: 0 })?;
+                    st.put_entry(
+                        "big",
+                        &Stored { entry, disk: String::new(), stat: Default::default(), changed_ms: 0 },
+                    )?;
                 }
                 Ok(())
             })
