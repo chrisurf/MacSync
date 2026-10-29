@@ -74,13 +74,6 @@ struct MenuContent: View {
         if let e = model.lastError {
             Text("⚠︎ \(e)")
         }
-        if let w = model.daemonOutdated {
-            Text("⚠︎ \(w)")
-            Button("Neu starten") { model.restartOutdatedDaemon() }
-        }
-        if let w = model.peerOutdated {
-            Text("ⓘ \(w)")
-        }
         Divider()
         switch model.state {
         case .notConfigured:

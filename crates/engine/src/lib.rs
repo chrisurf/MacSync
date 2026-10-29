@@ -270,7 +270,8 @@ impl Engine {
         if let Some(t) = self.trees.lock().unwrap_or_else(|e| e.into_inner()).get(unit) {
             return Ok(t.clone());
         }
-        let entries = self.store().entries(unit)?;
+        // Tombstones are not part of the tree.
+        let entries = self.store().live_entries(unit)?;
         let t = Arc::new(Tree::build(entries.iter().map(|s| &s.entry)));
         self.trees.lock().unwrap_or_else(|e| e.into_inner()).insert(unit.to_string(), t.clone());
         Ok(t)

@@ -126,12 +126,9 @@ impl NetPeer {
                 if protocol != PROTOCOL_VERSION {
                     bail!("peer speaks protocol {protocol}, expected {PROTOCOL_VERSION}");
                 }
+                // Builds with the same protocol work together; only for the log.
                 if version != self.hello.version {
-                    tracing::warn!(
-                        local = %self.hello.version,
-                        peer = %version,
-                        "peer runs a different MacSync build; update both Macs (make update)"
-                    );
+                    tracing::debug!(local = %self.hello.version, peer = %version, "peer runs another build");
                 }
                 *self.remote.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(HelloInfo { device, name, arch, root, version });

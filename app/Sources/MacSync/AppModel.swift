@@ -251,6 +251,7 @@ final class AppModel: ObservableObject {
         }
         status = s
         daemonVersion = fromDaemon != nil ? s?.version : nil
+        replaceOutdatedDaemon()
         activity = fromDaemon != nil ? measure(s) : nil
         state = Self.state(s, daemonRunning: fromDaemon != nil, starting: running, exit: daemon.lastExit)
         if state == .inSync || state == .offline, activity != nil { state = .syncing }
@@ -353,23 +354,15 @@ final class AppModel: ObservableObject {
         "MacSync " + (helperVersion.map(Version.short) ?? Version.bundle() ?? "")
     }
 
-    /// The running daemon is another build than the app's helper.
-    var daemonOutdated: String? {
-        guard let d = daemonVersion, let h = helperVersion, d != h else { return nil }
-        let (old, new) = Version.pair(d, h)
-        return "Synchronisation läuft noch mit \(old) (App \(new)) – neu starten"
-    }
+    /// Build of the daemon that was last replaced, so a daemon that keeps
+    /// coming back (started from the Terminal) is not restarted in a loop.
+    private var replacedDaemon: String?
 
-    /// The other Mac runs another build.
-    var peerOutdated: String? {
-        guard let p = status?.peerVersion, let d = daemonVersion, p != d else { return nil }
-        let (there, here) = Version.pair(p, d)
-        return "\(status?.peer?.name ?? "Der andere Mac") hat \(there), dieser Mac \(here) – bitte dort aktualisieren"
-    }
-
-    /// Replaces a daemon of another build with the app's helper – also one
-    /// not started by this app (an older copy, Terminal).
-    func restartOutdatedDaemon() {
+    /// After an update the old daemon may still be running: replace it with
+    /// the app's helper, without asking – also one not started by this app.
+    private func replaceOutdatedDaemon() {
+        guard let d = daemonVersion, let h = helperVersion, d != h, replacedDaemon != d else { return }
+        replacedDaemon = d
         if daemon.isRunning {
             restartDaemon()
             return

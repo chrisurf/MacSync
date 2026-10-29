@@ -35,8 +35,6 @@ mit 0.5 verbinden sich nicht miteinander.
   Schlüssel werden im Speicher genullt
 
 ### Geändert
-- „Über MacSync“ und Einstellungen → Allgemein zeigen den Commit des Builds
-  (wie `macsync --version`), damit klar ist, was installiert ist
 - Synchronisations-Manager arbeitet wie ein Dateimanager: Liste und Baum
   kommen direkt von der Platte und stehen sofort – auch ohne laufende
   Synchronisation oder Verbindung, mit allen Ordnern und Dateien (auch
@@ -51,10 +49,10 @@ mit 0.5 verbinden sich nicht miteinander.
   nach vorn und beendet sich. Liegt die gestartete App nicht in „Programme“,
   fragt sie, ob die installierte geöffnet werden soll (mit beiden Versionen)
 - Versionen sichtbar: Menü und Manager-Fußzeile zeigen „MacSync 0.5.0
-  (0309498)“. Läuft die Synchronisation noch mit einer anderen Version als
-  die App, warnen Menü und Manager („Synchronisation läuft noch mit 0.3.0
-  (App 0.5.0)“) mit „Neu starten“; hat der andere Mac eine andere Version,
-  gibt es einen Hinweis
+  (0309498)“, „Über MacSync“ und Einstellungen → Allgemein den Commit des
+  Builds (wie `macsync --version`). Läuft nach einem Update noch die alte
+  Synchronisation, ersetzt die App sie von selbst durch die neue. Builds mit
+  demselben Protokoll arbeiten ohne Hinweis zusammen
 - Manager: läuft die Synchronisation nicht, startet „Synchronisation
   starten“ sie direkt aus der Hinweisleiste
 - Ordnerabgleich: statt Aktions-Markierung je Zeile zwei Spalten mit
@@ -83,6 +81,15 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Träge Synchronisation in Ordnern mit sehr vielen gelöschten Dateien (z. B.
+  nach `cargo clean`): Scan, Prüfbaum und Planung laden nur noch vorhandene
+  Dateien, gelöschte Einträge nur Pfad für Pfad. Eine Änderung in einem
+  Ordner mit 400 000 gelöschten Einträgen: Scan 0,8 → 0,2 s, Übernahme auf
+  dem anderen Mac 1,3 → 0,35 s
+- Nach einem Update hing die alte Synchronisation teils minutenlang weiter
+  („Daemon antwortet nicht“, „läuft noch mit …“): sie beendet sich jetzt nach
+  höchstens 2 s; eine unterbrochene Übernahme wird beim nächsten Start
+  abgeschlossen
 - Konflikt lösen in einem sehr großen Ordner (Hunderttausende Einträge, z. B.
   nach `cargo clean`) dauerte Sekunden bis Minuten: MacSync erfasst dabei nur
   noch die betroffenen Dateien statt den ganzen Ordner zweimal zu scannen

@@ -38,11 +38,6 @@ enum Version {
 
     static func semver(_ v: String) -> String { String(v.split(separator: " ").first ?? Substring(v)) }
 
-    /// Two differing versions as briefly as still tells them apart.
-    static func pair(_ a: String, _ b: String) -> (String, String) {
-        semver(a) != semver(b) ? (semver(a), semver(b)) : (short(a), short(b))
-    }
-
     /// Test runs (screenshots, own configuration) skip the launch checks.
     static var isTestRun: Bool {
         let env = ProcessInfo.processInfo.environment

@@ -376,10 +376,8 @@ impl Engine {
         let mut group_remotes: Vec<Entry> = Vec::new();
         let mut case_keys: HashMap<String, String> = HashMap::new();
         if self.case_insensitive {
-            for s in self.store().entries(unit)? {
-                if !s.entry.deleted {
-                    case_keys.insert(rpath::case_key(&s.entry.path), s.entry.path.clone());
-                }
+            for s in self.store().live_entries(unit)? {
+                case_keys.insert(rpath::case_key(&s.entry.path), s.entry.path.clone());
             }
         }
         let conflict_dir = self.conflict_root().join(unit).join(&tx);

@@ -693,13 +693,6 @@ struct ManagerView: View {
         if let e = model.error {
             HintBar(text: e, symbol: "exclamationmark.triangle.fill", color: .orange)
         }
-        if let w = app.daemonOutdated {
-            HintBar(text: w, symbol: "arrow.triangle.2.circlepath", color: .orange,
-                    action: ("Neu starten", { app.restartOutdatedDaemon() }))
-        }
-        if let w = app.peerOutdated {
-            HintBar(text: w, symbol: "info.circle.fill", color: .blue)
-        }
         if model.phase == .noDaemon {
             HintBar(text: "Synchronisation läuft nicht – Dateien ohne Status", symbol: "pause.circle.fill", color: .secondary,
                     action: ("Synchronisation starten", {

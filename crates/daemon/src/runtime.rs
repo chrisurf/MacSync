@@ -341,6 +341,10 @@ pub struct Daemon {
 
 static SIGNALLED: AtomicBool = AtomicBool::new(false);
 
+/// How long a stopping daemon waits for the sync in progress (the app sends
+/// SIGTERM after 3 s).
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
 extern "C" fn on_signal(_: libc::c_int) {
     SIGNALLED.store(true, Ordering::SeqCst);
 }
@@ -412,19 +416,35 @@ impl Daemon {
             std::thread::sleep(Duration::from_millis(200));
         }
         tracing::info!("shutting down");
-        self.stop();
+        self.stop_within(SHUTDOWN_GRACE);
         Ok(())
     }
 
-    pub fn stop(mut self) {
+    pub fn stop(self) {
+        self.stop_within(Duration::MAX);
+    }
+
+    /// Stop and wait at most `grace` for the sync in progress. A large unit
+    /// can take minutes; meanwhile the updated app would find the old daemon
+    /// still holding the socket. Leaving earlier is safe: an interrupted
+    /// transaction is completed on the next start (transaction journal).
+    pub fn stop_within(mut self, grace: Duration) {
         self.shared.stop.store(true, Ordering::SeqCst);
         self.shared.notify();
-        if let Some(t) = self.scheduler.take() {
-            let _ = t.join();
-        }
         // The server's handler holds `shared`: drop it explicitly.
         self.shared.exposure.lock().unwrap_or_else(|e| e.into_inner()).take();
         let _ = std::fs::remove_file(&self.socket);
+        if let Some(t) = self.scheduler.take() {
+            let deadline = Instant::now() + grace.min(Duration::from_secs(86_400));
+            while !t.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if t.is_finished() {
+                let _ = t.join();
+            } else {
+                tracing::info!("sync still running; it continues after the next start");
+            }
+        }
     }
 }
 
@@ -1057,6 +1077,39 @@ mod tests {
         assert!(std::net::TcpStream::connect(addr).is_ok());
         daemon.stop();
         assert!(std::net::TcpStream::connect(addr).is_err(), "port still open after stop");
+    }
+
+    /// A sync that takes minutes must not keep a stopping daemon alive: the
+    /// updated app would find the old one still holding the socket.
+    #[test]
+    fn stop_does_not_wait_for_a_long_sync() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            root: d.path().join("root"),
+            state_dir: Some(d.path().join("state")),
+            listen: "127.0.0.1:0".parse().unwrap(),
+            peer: crate::config::PeerConfig { discovery: false, ..Default::default() },
+            ..Config::default()
+        };
+        std::fs::create_dir_all(cfg.root()).unwrap();
+        let daemon = Daemon::start(Node::open(cfg).unwrap()).unwrap();
+        let socket = daemon.socket.clone();
+        assert!(socket.exists());
+        // Stand-in for a long sync: the scheduler blocks on the store.
+        let node = daemon.node().clone();
+        let (held, wait) = std::sync::mpsc::channel();
+        let busy = std::thread::spawn(move || {
+            let _store = node.engine.store();
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_secs(6));
+        });
+        wait.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(2500)); // scheduler hits the store
+        let t = Instant::now();
+        daemon.stop_within(Duration::from_millis(300));
+        assert!(t.elapsed() < Duration::from_secs(2), "stop took {:?}", t.elapsed());
+        assert!(!socket.exists(), "socket left behind");
+        busy.join().unwrap();
     }
 
     fn add_test_peer(daemon: &Daemon) {

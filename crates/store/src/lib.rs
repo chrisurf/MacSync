@@ -400,6 +400,15 @@ impl Store {
         Ok(rows)
     }
 
+    /// Entries that exist (no tombstones). After `cargo clean` a unit can hold
+    /// hundreds of thousands of tombstones that only matter path by path.
+    pub fn live_entries(&self, unit: &str) -> Result<Vec<Stored>> {
+        let mut st =
+            self.conn.prepare_cached(&format!("SELECT {ENTRY_COLS} FROM entries WHERE unit = ?1 AND deleted = 0"))?;
+        let rows = st.query_map([unit], row_to_stored)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn entry(&self, unit: &str, path: &str) -> Result<Option<Stored>> {
         let mut st =
             self.conn.prepare_cached(&format!("SELECT {ENTRY_COLS} FROM entries WHERE unit = ?1 AND path = ?2"))?;

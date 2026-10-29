@@ -77,8 +77,20 @@ impl Engine {
             self.log_skip_once(unit, p, reason);
         }
 
-        let prev: HashMap<String, Stored> =
-            self.store().entries(unit)?.into_iter().map(|s| (s.entry.path.clone(), s)).collect();
+        // Live entries in bulk; tombstones only for paths that exist again
+        // (a unit can hold hundreds of thousands of them).
+        let mut prev: HashMap<String, Stored> =
+            self.store().live_entries(unit)?.into_iter().map(|s| (s.entry.path.clone(), s)).collect();
+        {
+            let store = self.store();
+            let new: Vec<&String> =
+                res.items.iter().map(|s| &s.path).filter(|p| !prev.contains_key(*p) && !in_nested(p)).collect();
+            for p in new {
+                if let Some(t) = store.entry(unit, p)? {
+                    prev.insert(p.clone(), t);
+                }
+            }
+        }
 
         // Hard link groups: leader = lexicographically smallest path.
         let mut groups: BTreeMap<(u64, u64), Vec<&str>> = BTreeMap::new();
