@@ -93,11 +93,15 @@ PAIR_PID=$!
 wait_until 10 grep -q "pairing code" "$WORK/pair.out" || fail "no pairing code"
 CODE=$(sed -n 's/^pairing code: \([0-9]*\) \([0-9]*\)$/\1\2/p' "$WORK/pair.out")
 # A wrong code is rejected first.
-if ra pair connect "127.0.0.1:$((PORT_B + 1))" 000000 >/dev/null 2>&1 && [ "$CODE" != 000000 ]; then fail "wrong code accepted"; fi
-ra pair connect "127.0.0.1:$((PORT_B + 1))" "$CODE" > "$WORK/pair-a.out"
+if echo 000000 | ra pair connect "127.0.0.1:$((PORT_B + 1))" >/dev/null 2>&1 && [ "$CODE" != 000000 ]; then fail "wrong code accepted"; fi
+MACSYNC_PAIR_CODE="$CODE" ra pair connect "127.0.0.1:$((PORT_B + 1))" > "$WORK/pair-a.out"
 wait $PAIR_PID || fail "pair listen failed"
 grep -q "paired with Mac B" "$WORK/pair-a.out" || fail "A not paired"
 grep -q "paired with Mac A" "$WORK/pair.out" || fail "B not paired"
+FP_A=$(sed -n 's/^fingerprint: \(.*\) (the other.*/\1/p' "$WORK/pair-a.out")
+FP_B=$(sed -n 's/^fingerprint: \(.*\) (the other.*/\1/p' "$WORK/pair.out")
+[ -n "$FP_A" ] && [ "$FP_A" = "$FP_B" ] || fail "fingerprints differ: '$FP_A' vs '$FP_B'"
+log "fingerprint on both Macs: $FP_A"
 
 # Initial content on A before the daemons start.
 mkdir -p "$A/notes" "$A/web"

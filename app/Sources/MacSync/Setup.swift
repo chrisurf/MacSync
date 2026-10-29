@@ -12,7 +12,11 @@ struct Candidate: Decodable, Identifiable, Hashable {
 @MainActor
 final class SetupModel: ObservableObject {
     enum Step { case folder, pair, done }
-    enum Pairing: Equatable { case idle, waiting(code: String), entering(Candidate), connecting, failed(String) }
+    enum Pairing: Equatable {
+        case idle, waiting(code: String), entering(Candidate), connecting, failed(String)
+        /// Paired but not stored: both Macs must show the same words.
+        case verify(fingerprint: String, name: String)
+    }
 
     @Published var step: Step
     @Published var root: URL
@@ -107,7 +111,7 @@ final class SetupModel: ObservableObject {
     func waitForOther() {
         AppModel.shared.daemon.stop() // frees the ports, avoids two writers
         pairing = .connecting
-        listen = CLI.stream(["pair", "listen", "--json"], line: { line in
+        listen = CLI.stream(["pair", "listen", "--json", "--confirm"], line: { line in
             Task { @MainActor in self.handle(line) }
         }, done: { status, err in
             Task { @MainActor in
@@ -129,7 +133,9 @@ final class SetupModel: ObservableObject {
         guard digits.count == 6 else { error = "Der Code hat 6 Ziffern"; return }
         pairing = .connecting
         do {
-            let out = try await CLI.run(["pair", "connect", c.addr, digits, "--json"])
+            // The code goes through the environment, not the visible arguments.
+            let out = try await CLI.run(["pair", "connect", c.addr, "--json", "--confirm"],
+                                        env: ["MACSYNC_PAIR_CODE": digits])
             handle(out.trimmingCharacters(in: .whitespacesAndNewlines))
         } catch {
             pairing = .failed(error.localizedDescription)
@@ -148,12 +154,26 @@ final class SetupModel: ObservableObject {
         switch obj["event"] as? String {
         case "code":
             pairing = .waiting(code: obj["code"] as? String ?? "")
+        case "verify":
+            pairing = .verify(fingerprint: obj["fingerprint"] as? String ?? "", name: obj["name"] as? String ?? "")
         case "paired":
             pairedWith = obj["name"] as? String
             pairing = .idle
             finishPairing()
+        case "rejected":
+            pairing = .idle
         default:
             break
+        }
+    }
+
+    /// The user compared the words on both Macs.
+    func confirmPairing(_ same: Bool) async {
+        do {
+            let out = try await CLI.run(["pair", "confirm", "--json"] + (same ? [] : ["--reject"]))
+            handle(out.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch {
+            pairing = .failed(error.localizedDescription)
         }
     }
 
@@ -263,6 +283,22 @@ struct SetupView: View {
             }
         case .connecting:
             HStack { ProgressView().controlSize(.small); Text("Verbinde …") }
+        case .verify(let fingerprint, let name):
+            VStack(spacing: 12) {
+                Text("Verbunden mit „\(name)“. Zeigt der andere Mac dieselben vier Wörter?")
+                    .multilineTextAlignment(.center)
+                Text(fingerprint)
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .textSelection(.enabled)
+                Text("Nur wenn alle vier Wörter übereinstimmen, ist es wirklich dein Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Nein, abbrechen", role: .destructive) { Task { await setup.confirmPairing(false) } }
+                    Button("Ja, stimmt überein") { Task { await setup.confirmPairing(true) } }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .frame(maxWidth: .infinity)
         case .failed(let m):
             VStack(alignment: .leading, spacing: 8) {
                 Label(m, systemImage: "xmark.octagon").foregroundStyle(.red)

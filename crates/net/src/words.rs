@@ -1,0 +1,26 @@
+//! Word list for pairing fingerprints: 256 simple German nouns (ASCII,
+//! no two alike), one per byte.
+
+pub const WORDS: [&str; 256] = [
+    "Adler", "Ahorn", "Anker", "Apfel", "Arena", "Asche", "Atlas", "Bach", "Bahn", "Ball", "Banane", "Baum", "Becher",
+    "Beere", "Berg", "Besen", "Biene", "Birne", "Blatt", "Blitz", "Blume", "Boden", "Bogen", "Boot", "Brief", "Brille",
+    "Brot", "Bruecke", "Brunnen", "Buch", "Burg", "Butter", "Dach", "Dampf", "Daumen", "Decke", "Deich", "Delfin",
+    "Diamant", "Docht", "Dorf", "Drache", "Dreieck", "Duene", "Eber", "Eiche", "Eimer", "Elch", "Ente", "Erbse",
+    "Erde", "Esel", "Eule", "Fabrik", "Fackel", "Faden", "Falke", "Farn", "Faser", "Feder", "Fels", "Fenster", "Feuer",
+    "Fichte", "Film", "Fisch", "Flagge", "Flasche", "Floete", "Fluss", "Fohlen", "Forelle", "Frosch", "Fuchs", "Funke",
+    "Gabel", "Garten", "Geige", "Gipfel", "Glas", "Glocke", "Gold", "Gras", "Gurke", "Hafen", "Hagel", "Hammer",
+    "Hase", "Haus", "Hecht", "Hecke", "Heft", "Helm", "Hemd", "Herz", "Himmel", "Hirsch", "Hobel", "Holz", "Honig",
+    "Horn", "Hose", "Huegel", "Hund", "Igel", "Insel", "Jacke", "Jaguar", "Juwel", "Kaffee", "Kakao", "Kamel", "Kamin",
+    "Kanal", "Kanne", "Karte", "Kater", "Kegel", "Kerze", "Kessel", "Kette", "Kiefer", "Kirche", "Kissen", "Klee",
+    "Knopf", "Koffer", "Komet", "Korb", "Kran", "Kreis", "Krone", "Kugel", "Lachs", "Lampe", "Laterne", "Laub",
+    "Leiter", "Lerche", "Licht", "Linde", "Loewe", "Loeffel", "Luchs", "Mantel", "Marder", "Markt", "Maus", "Meer",
+    "Mehl", "Melone", "Messer", "Milch", "Moewe", "Mond", "Moos", "Motor", "Muehle", "Muschel", "Nadel", "Nebel",
+    "Nest", "Netz", "Nuss", "Oase", "Ofen", "Olive", "Orgel", "Otter", "Paddel", "Palme", "Papier", "Pfanne", "Pfeil",
+    "Pferd", "Pilz", "Pinsel", "Planet", "Pudel", "Puppe", "Quelle", "Rabe", "Rakete", "Regen", "Ring", "Rose",
+    "Rubin", "Ruder", "Saege", "Salz", "Sand", "Sattel", "Schaf", "Schal", "Schiff", "Schnee", "Schuh", "Segel",
+    "Seil", "Sessel", "Sonne", "Spiegel", "Stern", "Stiefel", "Stift", "Strand", "Stuhl", "Sturm", "Tafel", "Tanne",
+    "Tasche", "Tasse", "Taube", "Teich", "Teller", "Tiger", "Tisch", "Traube", "Trommel", "Tuer", "Tulpe", "Turm",
+    "Ufer", "Ulme", "Vase", "Vogel", "Vulkan", "Waage", "Wagen", "Wald", "Wand", "Wasser", "Welle", "Wiese", "Wind",
+    "Wolke", "Wolle", "Zange", "Zebra", "Zelt", "Ziege", "Zimmer", "Zitrone", "Zucker", "Zwerg", "Zwiebel", "Tunnel",
+    "Kompass", "Pirat", "Robbe", "Stempel", "Wurzel", "Zeder", "Kerbe", "Fass", "Wespe",
+];

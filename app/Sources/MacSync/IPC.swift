@@ -128,12 +128,16 @@ enum CLI {
     }
 
     /// Runs to completion; returns stdout, throws with stderr on failure.
-    static func run(_ args: [String]) async throws -> String {
+    /// `env` adds variables, e.g. a secret that must not appear in `ps`.
+    static func run(_ args: [String], env: [String: String] = [:]) async throws -> String {
         guard let bin = Paths.binary else { throw Failure(message: "macsync nicht gefunden") }
         return try await withCheckedThrowingContinuation { cont in
             let p = Process()
             p.executableURL = bin
             p.arguments = ["--config", Paths.config.path] + args
+            if !env.isEmpty {
+                p.environment = ProcessInfo.processInfo.environment.merging(env) { $1 }
+            }
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err

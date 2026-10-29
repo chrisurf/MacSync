@@ -220,12 +220,28 @@ enum PairCmd {
         /// JSON lines: {"event":"code",…} then {"event":"paired",…}.
         #[arg(long)]
         json: bool,
+        /// Do not store the pairing yet: print {"event":"verify",…} with the
+        /// fingerprint and wait for `macsync pair confirm`.
+        #[arg(long)]
+        confirm: bool,
     },
-    /// Pair with a listening Mac.
+    /// Pair with a listening Mac. The code is read from MACSYNC_PAIR_CODE or
+    /// stdin (an argument is visible to other processes).
     Connect {
         /// host or host:port of the listening Mac.
         addr: String,
-        code: String,
+        /// Deprecated: visible in `ps`; use MACSYNC_PAIR_CODE or stdin.
+        code: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Store (or with --reject discard) a pairing made with --confirm after
+    /// comparing the fingerprint on both Macs.
+    Confirm {
+        #[arg(long)]
+        reject: bool,
         #[arg(long)]
         json: bool,
     },
@@ -729,7 +745,7 @@ fn discover(config_path: &Path, timeout_s: u64, json: bool) -> Result<()> {
 }
 
 /// Store the paired peer; returns a JSON description incl. warnings.
-fn store_peer(cfg: &Config, r: &pairing::PairResult) -> Result<Value> {
+fn store_peer(cfg: &Config, own: &Identity, r: &pairing::PairResult) -> Result<Value> {
     let store = open_store(cfg)?;
     let mut warnings = Vec::new();
     for p in store.peers()? {
@@ -765,6 +781,7 @@ fn store_peer(cfg: &Config, r: &pairing::PairResult) -> Result<Value> {
         "device": r.info.device,
         "name": r.info.name,
         "addr": addr.to_string(),
+        "fingerprint": pairing::fingerprint(&own.public, &r.pubkey),
         "warnings": warnings,
     }))
 }
@@ -783,6 +800,87 @@ fn print_paired(v: &Value, json: bool) {
         v["device"].as_str().unwrap_or("?"),
         v["addr"].as_str().unwrap_or("?")
     );
+    println!("fingerprint: {} (the other Mac must show the same words)", v["fingerprint"].as_str().unwrap_or("?"));
+}
+
+/// A pairing made with `--confirm`, waiting for `macsync pair confirm`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingPair {
+    result: pairing::PairResult,
+    created_ms: i64,
+}
+
+const PENDING_MAX_MS: i64 = 10 * 60 * 1000;
+
+fn pending_path(cfg: &Config) -> PathBuf {
+    cfg.state_dir().join("pairing-pending.json")
+}
+
+/// Store the pairing, or with `confirm` keep it pending and show the fingerprint.
+fn finish_pairing(cfg: &Config, id: &Identity, r: &pairing::PairResult, confirm: bool, json: bool) -> Result<()> {
+    if !confirm {
+        print_paired(&store_peer(cfg, id, r)?, json);
+        return Ok(());
+    }
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = pending_path(cfg);
+    let _ = std::fs::remove_file(&path);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    let pending = PendingPair { result: r.clone(), created_ms: macsync_fs::time::now_ms() };
+    std::io::Write::write_all(&mut f, serde_json::to_string(&pending)?.as_bytes())?;
+    let fp = pairing::fingerprint(&id.public, &r.pubkey);
+    if json {
+        println!("{}", json!({"event": "verify", "fingerprint": fp, "name": r.info.name, "device": r.info.device}));
+    } else {
+        println!("fingerprint: {fp}");
+        println!(
+            "if the other Mac shows the same words: macsync pair confirm (otherwise: macsync pair confirm --reject)"
+        );
+    }
+    Ok(())
+}
+
+fn confirm_pairing(cfg: &Config, id: &Identity, reject: bool, json: bool) -> Result<()> {
+    let path = pending_path(cfg);
+    let text = std::fs::read_to_string(&path).context("no pairing waits for confirmation")?;
+    std::fs::remove_file(&path)?;
+    let pending: PendingPair = serde_json::from_str(&text)?;
+    if macsync_fs::time::now_ms() - pending.created_ms > PENDING_MAX_MS {
+        bail!("the pairing expired; pair again");
+    }
+    if reject {
+        if json {
+            println!("{}", json!({"event": "rejected"}));
+        } else {
+            println!("pairing discarded");
+        }
+        return Ok(());
+    }
+    print_paired(&store_peer(cfg, id, &pending.result)?, json);
+    Ok(())
+}
+
+/// The pairing code: deprecated argument, MACSYNC_PAIR_CODE, or one line of stdin.
+fn pair_code(arg: Option<String>) -> Result<String> {
+    let raw = match arg {
+        Some(c) => c,
+        None => match std::env::var("MACSYNC_PAIR_CODE") {
+            Ok(c) => c,
+            Err(_) => {
+                if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                    eprint!("pairing code: ");
+                }
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line
+            }
+        },
+    };
+    let code: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    if code.len() != 6 {
+        bail!("the pairing code has 6 digits");
+    }
+    Ok(code)
 }
 
 fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
@@ -790,7 +888,7 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
     let hello = HelloInfo::local(&id, &cfg.device_name, &cfg.root().to_string_lossy());
     let port = cfg.listen.port();
     match cmd {
-        PairCmd::Listen { timeout_s, json } => {
+        PairCmd::Listen { timeout_s, json, confirm } => {
             let listener = TcpListener::bind(SocketAddr::new(cfg.listen.ip(), cfg.pair_port))
                 .with_context(|| format!("bind pairing port {}", cfg.pair_port))?;
             let code = pairing::generate_code();
@@ -808,19 +906,21 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             } else {
                 println!("pairing code: {} {}", &code[..3], &code[3..]);
                 if ips.is_empty() {
-                    println!("on the other Mac run: macsync pair connect <this-mac>.local {code}");
+                    println!("on the other Mac run: macsync pair connect <this-mac>.local (it asks for the code)");
                 }
                 for ip in ips {
-                    println!("on the other Mac run: macsync pair connect {ip}:{} {code}", cfg.pair_port);
+                    println!(
+                        "on the other Mac run: macsync pair connect {ip}:{} (it asks for the code)",
+                        cfg.pair_port
+                    );
                 }
                 println!("waiting up to {timeout_s} s …");
             }
             let r = pairing::listen(&listener, &code, &id, &hello, port, Duration::from_secs(timeout_s))?;
-            print_paired(&store_peer(cfg, &r)?, json);
-            Ok(())
+            finish_pairing(cfg, &id, &r, confirm, json)
         }
-        PairCmd::Connect { addr, code, json } => {
-            let code: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
+        PairCmd::Connect { addr, code, json, confirm } => {
+            let code = pair_code(code)?;
             let with_port = if addr.contains(':') && !addr.starts_with('[') || addr.contains("]:") {
                 addr.clone()
             } else {
@@ -828,9 +928,9 @@ fn pair(cfg: &Config, cmd: PairCmd) -> Result<()> {
             };
             let sa = macsync_net::lan::resolve(&with_port)?;
             let r = pairing::connect(sa, &code, &id, &hello, port)?;
-            print_paired(&store_peer(cfg, &r)?, json);
-            Ok(())
+            finish_pairing(cfg, &id, &r, confirm, json)
         }
+        PairCmd::Confirm { reject, json } => confirm_pairing(cfg, &id, reject, json),
     }
 }
 

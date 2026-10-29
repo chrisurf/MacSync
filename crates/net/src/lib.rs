@@ -10,6 +10,7 @@ pub mod lan;
 pub mod pairing;
 pub mod secure;
 pub mod server;
+pub mod words;
 
 pub use client::NetPeer;
 pub use identity::Identity;
