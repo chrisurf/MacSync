@@ -281,3 +281,18 @@ fn hooks_are_synced_but_reported() {
     let log = p.b.store().journal(0, Some("app"), 1000).unwrap();
     assert!(log.iter().any(|l| l.action == "warning" && l.path == ".git/hooks/pre-commit"));
 }
+
+#[test]
+fn git_config_changes_are_reported() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("app");
+    init_repo(&a);
+    p.sync();
+    let config = fs::read_to_string(a.join(".git/config")).unwrap();
+    write(&a, ".git/config", &format!("{config}[core]\n\tfsmonitor = /bin/true\n"));
+    p.sync();
+    assert!(fs::read_to_string(p.rb().join("app/.git/config")).unwrap().contains("fsmonitor"));
+    let log = p.b.store().journal(0, Some("app"), 1000).unwrap();
+    assert!(log.iter().any(|l| l.action == "warning" && l.path == ".git/config"));
+}

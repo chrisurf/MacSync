@@ -515,6 +515,14 @@ impl Engine {
                             "hook changed by sync (never executed by MacSync)",
                             "",
                         );
+                    } else if path == ".git/config" {
+                        let _ = self.store().log(
+                            unit,
+                            "warning",
+                            &path,
+                            "git config changed by sync (MacSync ignores its programs)",
+                            "",
+                        );
                     }
                     let disk = self.disk_for(unit, &path, &local, &mut disk_cache)?;
                     let same_kind = local_live.is_some_and(|s| s.entry.kind == e.kind);

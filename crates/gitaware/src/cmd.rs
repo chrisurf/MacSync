@@ -1,5 +1,9 @@
 //! The only Git commands MacSync runs. None of them creates commits, refs,
 //! branches, tags or stashes.
+//!
+//! `.git/config` is synced from the peer, so every call disables the config
+//! options that run programs (`core.fsmonitor`, hooks) and ignores the
+//! system-wide config.
 
 use std::io;
 use std::path::Path;
@@ -8,8 +12,9 @@ use std::process::{Command, Stdio};
 fn git(work: &Path) -> Command {
     let mut c = Command::new("git");
     c.current_dir(work)
+        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
         .env("GIT_TERMINAL_PROMPT", "0")
-        // Never run hooks or pagers from the daemon.
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_PAGER", "cat")
         .stdin(Stdio::null());
     c
@@ -90,5 +95,32 @@ pub(crate) mod tests {
         // Corrupt: point main at a missing commit.
         std::fs::write(d.path().join(".git/refs/heads/main"), "1111111111111111111111111111111111111111\n").unwrap();
         assert!(fsck_connectivity(d.path()).unwrap().is_err());
+    }
+
+    /// A synced `.git/config` must not make MacSync run programs.
+    #[test]
+    fn fsmonitor_from_repo_config_is_not_run() {
+        if !git_available() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a"), "a").unwrap();
+        git(&repo, &["add", "a"]);
+        git(&repo, &["commit", "-qm", "init"]);
+        let pwned = d.path().join("pwned");
+        let script = d.path().join("monitor.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", pwned.display())).unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        git(&repo, &["config", "core.fsmonitor", &script.display().to_string()]);
+        std::fs::write(repo.join("a"), "changed").unwrap();
+        refresh_index(&repo).unwrap();
+        assert_eq!(fsck_connectivity(&repo).unwrap(), Ok(()));
+        assert!(!pwned.exists(), "core.fsmonitor was executed");
+        // Control: plain git does run it, so the test would catch a regression.
+        Command::new("git").current_dir(&repo).args(["status", "-s"]).output().unwrap();
+        assert!(pwned.exists(), "test setup: fsmonitor hook not picked up by git");
     }
 }
