@@ -31,6 +31,13 @@ struct Status: Decodable {
     var peerLastContact: String?
     var peerError: String?
     var peerVersion: String?
+    struct Network: Decodable {
+        var known: Bool
+        var hidden: Bool
+        var hideUnknown: Bool
+    }
+
+    var network: Network?
     struct Transfer: Decodable {
         var unit: String
         var filesTotal: Int64
@@ -380,6 +387,20 @@ final class AppModel: ObservableObject {
     func setConfig(_ key: String, _ value: Int, in section: String) {
         guard var c = config else { return }
         c.set(key, value, in: section)
+        saveAndRestart(c)
+    }
+
+    func setConfig(_ key: String, _ value: Bool, in section: String) {
+        guard var c = config else { return }
+        c.set(key, value, in: section)
+        saveAndRestart(c)
+    }
+
+    /// Remember the current network: MacSync listens here again although it
+    /// hides in unknown networks.
+    func trustNetwork() { send(["cmd": "trust-network"]) }
+
+    private func saveAndRestart(_ c: ConfigFile) {
         do {
             try c.save()
             objectWillChange.send()

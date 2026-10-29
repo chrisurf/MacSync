@@ -86,21 +86,43 @@ struct ConfigFile {
         text = lines.joined(separator: "\n")
     }
 
+    /// Boolean `key` in the table `[section]`.
+    func bool(_ key: String, in section: String) -> Bool? {
+        switch raw(key, in: section) {
+        case "true": return true
+        case "false": return false
+        default: return nil
+        }
+    }
+
     /// Integer `key` in the table `[section]`.
     func int(_ key: String, in section: String) -> Int? {
+        raw(key, in: section).flatMap { Int($0) }
+    }
+
+    /// Unquoted value of `key` in `[section]`, without a trailing comment.
+    private func raw(_ key: String, in section: String) -> String? {
         var inside = false
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let l = line.trimmingCharacters(in: .whitespaces)
             if l.hasPrefix("[") { inside = l == "[\(section)]"; continue }
             guard inside, let eq = l.firstIndex(of: "="), l[..<eq].trimmingCharacters(in: .whitespaces) == key else { continue }
             let v = l[l.index(after: eq)...].split(separator: "#").first ?? ""
-            return Int(v.trimmingCharacters(in: .whitespaces))
+            return v.trimmingCharacters(in: .whitespaces)
         }
         return nil
     }
 
     /// Set the integer `key` in `[section]`, adding the line (or the table) if missing.
     mutating func set(_ key: String, _ value: Int, in section: String) {
+        setRaw(key, String(value), in: section)
+    }
+
+    mutating func set(_ key: String, _ value: Bool, in section: String) {
+        setRaw(key, value ? "true" : "false", in: section)
+    }
+
+    private mutating func setRaw(_ key: String, _ value: String, in section: String) {
         let newLine = "\(key) = \(value)"
         var lines = text.components(separatedBy: "\n")
         var header: Int?

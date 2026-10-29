@@ -134,6 +134,10 @@ private struct DeviceTab: View {
                 }
                 .help("Diesen Namen sehen Macs im selben Netz nur, während dieser Mac auf eine Kopplung wartet. Leer: der Gerätename ohne Besitzer.")
                 LabeledContent("Port", value: String(model.config?.port ?? 47123))
+                Toggle("In unbekannten Netzen unsichtbar", isOn: Binding(
+                    get: { model.config?.bool("hide_in_unknown_networks", in: "peer") ?? false },
+                    set: { model.setConfig("hide_in_unknown_networks", $0, in: "peer") }))
+                    .help("In Netzen, in denen MacSync den anderen Mac noch nie erreicht hat (Café, Hotel), öffnet es keinen Port und kündigt sich nicht an; es verbindet sich nur selbst zum anderen Mac. Bekannt ist ein Netz nach der Kopplung, nach dem ersten Kontakt oder über „Diesem Netz vertrauen“ im Menü.")
             }
             Section("Gekoppelter Mac") {
                 if let peer = model.status?.peer {

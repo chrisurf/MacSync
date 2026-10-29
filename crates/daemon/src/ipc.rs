@@ -43,6 +43,9 @@ pub enum IpcRequest {
         unit: Option<String>,
     },
     Rescan,
+    /// Remember the current network, so the daemon listens here even with
+    /// `hide_in_unknown_networks`.
+    TrustNetwork,
     /// One directory with the state of every item on both Macs. `path`
     /// (relative to the sync root) replaces `unit`/`dir`. `local`: only this
     /// Mac's state, never the network (fast, for the first paint).
@@ -120,7 +123,7 @@ pub(crate) fn serve(path: &Path, node: Arc<Node>, shared: Arc<Shared>) -> Result
     Ok(())
 }
 
-fn handle_conn(stream: UnixStream, node: &Node, shared: &Shared) -> Result<()> {
+fn handle_conn(stream: UnixStream, node: &Arc<Node>, shared: &Arc<Shared>) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -137,7 +140,7 @@ fn handle_conn(stream: UnixStream, node: &Node, shared: &Shared) -> Result<()> {
     Ok(())
 }
 
-fn dispatch(req: IpcRequest, node: &Node, shared: &Shared) -> Result<Value> {
+fn dispatch(req: IpcRequest, node: &Arc<Node>, shared: &Arc<Shared>) -> Result<Value> {
     let engine = &node.engine;
     let pause = matches!(req, IpcRequest::Pause { .. });
     Ok(match req {
@@ -184,6 +187,7 @@ fn dispatch(req: IpcRequest, node: &Node, shared: &Shared) -> Result<Value> {
             Daemon::kick(shared);
             serde_json::to_value(r)?
         }
+        IpcRequest::TrustNetwork => Daemon::trust_network(node, shared)?,
         IpcRequest::Browse { unit, dir, path, local } => {
             let (unit, dir) = match path {
                 Some(p) => engine.split_path(&p)?,

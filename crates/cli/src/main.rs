@@ -755,6 +755,10 @@ fn store_peer(cfg: &Config, own: &Identity, r: &pairing::PairResult) -> Result<V
         }
     }
     let addr = SocketAddr::new(r.addr.ip(), r.port);
+    // Pairing happens where both Macs are: a network to trust.
+    if let Some(net) = macsync_daemon::network::current() {
+        let _ = macsync_daemon::network::remember(&store, &net);
+    }
     store.add_peer(&PeerRow {
         device: r.info.device.clone(),
         name: r.info.name.clone(),

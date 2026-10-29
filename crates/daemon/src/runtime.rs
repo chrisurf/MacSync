@@ -173,6 +173,17 @@ pub(crate) struct Shared {
     force_ae: AtomicBool,
     /// Listening port and Bonjour announcement; only while a peer is paired.
     exposure: Mutex<Option<Exposure>>,
+    network: Mutex<NetworkState>,
+}
+
+/// The current network (checked every few seconds) and whether the daemon
+/// hides in it.
+#[derive(Default)]
+struct NetworkState {
+    id: Option<String>,
+    checked: Option<Instant>,
+    known: bool,
+    hidden: bool,
 }
 
 /// What the daemon shows to the network.
@@ -248,6 +259,7 @@ impl Daemon {
             peer_state: Mutex::new(PeerState::default()),
             force_ae: AtomicBool::new(true),
             exposure: Mutex::new(None),
+            network: Mutex::new(NetworkState::default()),
         });
 
         // Startup capture replaces the FSEvents event-id replay (ADR-0004).
@@ -315,7 +327,8 @@ impl Daemon {
 /// Open the port (and the Bonjour announcement) for the paired peer, close it
 /// when there is none, and restart it after a new pairing.
 fn update_exposure(node: &Arc<Node>, shared: &Arc<Shared>) {
-    let key = node.peer_row().ok().flatten().map(|r| r.pubkey);
+    let hidden = check_network(node, shared);
+    let key = node.peer_row().ok().flatten().map(|r| r.pubkey).filter(|_| !hidden);
     let mut exp = shared.exposure.lock().unwrap_or_else(|e| e.into_inner());
     if exp.as_ref().map(|x| &x.peer_key) == key.as_ref() {
         return;
@@ -324,13 +337,37 @@ fn update_exposure(node: &Arc<Node>, shared: &Arc<Shared>) {
         tracing::info!("stopped listening");
     }
     let Some(key) = key else {
-        tracing::info!("not paired: not listening");
+        if hidden {
+            tracing::info!("unknown network: not listening, not announcing");
+        } else {
+            tracing::info!("not paired: not listening");
+        }
         return;
     };
     match open_exposure(node, shared, key) {
         Ok(x) => *exp = Some(x),
         Err(e) => tracing::warn!(error = %format!("{e:#}"), "cannot listen"),
     }
+}
+
+/// Refresh the network state; a network where the peer is reached becomes
+/// known. Returns true if the daemon should hide.
+fn check_network(node: &Node, shared: &Shared) -> bool {
+    let online = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner()).online;
+    let mut net = shared.network.lock().unwrap_or_else(|e| e.into_inner());
+    if net.checked.is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+        net.id = crate::network::current();
+        net.checked = Some(Instant::now());
+    }
+    let store = node.engine.store();
+    if let Some(id) = &net.id {
+        if online && crate::network::remember(&store, id).unwrap_or(false) {
+            tracing::info!("network remembered: the peer is reachable here");
+        }
+    }
+    net.known = net.id.as_deref().is_some_and(|id| crate::network::is_known(&store, id).unwrap_or(false));
+    net.hidden = node.cfg.peer.hide_in_unknown_networks && !net.known;
+    net.hidden
 }
 
 fn open_exposure(node: &Arc<Node>, shared: &Arc<Shared>, peer_key: Vec<u8>) -> Result<Exposure> {
@@ -722,6 +759,13 @@ impl Daemon {
             .and_then(|p| p.remote_hello())
             .map(|h| h.version);
         v["peer_version"] = json!(peer_version);
+        let net = shared.network.lock().unwrap_or_else(|e| e.into_inner());
+        v["network"] = json!({
+            "known": net.known,
+            "hidden": net.hidden,
+            "hide_unknown": node.cfg.peer.hide_in_unknown_networks,
+        });
+        drop(net);
         v["transfer"] = json!(node.engine.transfer());
         let (served, served_ms) = node.engine.served();
         v["served_bytes"] = json!(served);
@@ -786,6 +830,15 @@ impl Daemon {
         Ok(())
     }
 
+    /// Remember the current network ("trust this network") and listen again.
+    pub(crate) fn trust_network(node: &Arc<Node>, shared: &Arc<Shared>) -> Result<Value> {
+        let id = crate::network::current().context("no network (no default gateway)")?;
+        crate::network::remember(&node.engine.store(), &id)?;
+        shared.network.lock().unwrap_or_else(|e| e.into_inner()).checked = None;
+        update_exposure(node, shared);
+        Ok(json!("trusted"))
+    }
+
     pub(crate) fn kick(shared: &Shared) {
         shared.force_ae.store(true, Ordering::SeqCst);
         shared.notify();
@@ -820,12 +873,24 @@ mod tests {
             root: d.path().join("root"),
             state_dir: Some(d.path().join("state")),
             listen: "127.0.0.1:0".parse().unwrap(),
-            peer: crate::config::PeerConfig { address: Some("127.0.0.1:9".into()), discovery: false },
+            peer: crate::config::PeerConfig {
+                address: Some("127.0.0.1:9".into()),
+                discovery: false,
+                ..Default::default()
+            },
             ..Config::default()
         };
         std::fs::create_dir_all(cfg.root()).unwrap();
         let daemon = Daemon::start(Node::open(cfg).unwrap()).unwrap();
         assert_eq!(daemon.server_addr(), None);
+        add_test_peer(&daemon);
+        let addr = wait_listening(&daemon, 5).expect("listening after pairing");
+        assert!(std::net::TcpStream::connect(addr).is_ok());
+        daemon.stop();
+        assert!(std::net::TcpStream::connect(addr).is_err(), "port still open after stop");
+    }
+
+    fn add_test_peer(daemon: &Daemon) {
         let peer = Identity::generate().unwrap();
         daemon
             .node()
@@ -839,13 +904,43 @@ mod tests {
                 paired_ms: 0,
             })
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+    }
+
+    fn wait_listening(daemon: &Daemon, secs: u64) -> Option<SocketAddr> {
+        let deadline = Instant::now() + Duration::from_secs(secs);
         while daemon.server_addr().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
         }
-        let addr = daemon.server_addr().expect("listening after pairing");
-        assert!(std::net::TcpStream::connect(addr).is_ok());
+        daemon.server_addr()
+    }
+
+    /// With `hide_in_unknown_networks`, a paired daemon stays closed in an
+    /// unknown network and opens once the network is trusted.
+    #[test]
+    fn hides_in_unknown_networks() {
+        std::env::set_var("MACSYNC_NETWORK_ID", "test-network-1");
+        let d = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            root: d.path().join("root"),
+            state_dir: Some(d.path().join("state")),
+            listen: "127.0.0.1:0".parse().unwrap(),
+            peer: crate::config::PeerConfig {
+                address: Some("127.0.0.1:9".into()),
+                discovery: false,
+                hide_in_unknown_networks: true,
+            },
+            ..Config::default()
+        };
+        std::fs::create_dir_all(cfg.root()).unwrap();
+        let daemon = Daemon::start(Node::open(cfg).unwrap()).unwrap();
+        add_test_peer(&daemon);
+        assert_eq!(wait_listening(&daemon, 3), None, "listening in an unknown network");
+        let status = Daemon::status_json(&daemon.node, &daemon.shared).unwrap();
+        assert_eq!(status["network"]["hidden"], json!(true));
+        Daemon::trust_network(&daemon.node, &daemon.shared).unwrap();
+        assert!(daemon.server_addr().is_some(), "not listening after trusting the network");
+        let status = Daemon::status_json(&daemon.node, &daemon.shared).unwrap();
+        assert_eq!(status["network"], json!({"known": true, "hidden": false, "hide_unknown": true}));
         daemon.stop();
-        assert!(std::net::TcpStream::connect(addr).is_err(), "port still open after stop");
     }
 }

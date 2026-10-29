@@ -39,6 +39,9 @@ pub struct PeerConfig {
     pub address: Option<String>,
     /// Use Bonjour/mDNS to advertise and find the peer.
     pub discovery: bool,
+    /// In networks where the peer was never reached: no open port, no
+    /// announcement; only connect out to the peer (see `network`).
+    pub hide_in_unknown_networks: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,7 +100,7 @@ impl Default for Config {
             pair_port: macsync_net::DEFAULT_PORT + 1,
             pair_name: None,
             mode: "two-way".into(),
-            peer: PeerConfig { address: None, discovery: true },
+            peer: PeerConfig { address: None, discovery: true, hide_in_unknown_networks: false },
             sync: SyncConfig::default(),
         }
     }

@@ -5,6 +5,7 @@
 pub mod config;
 pub mod ipc;
 pub mod migrate;
+pub mod network;
 pub mod runtime;
 pub mod service;
 

@@ -67,6 +67,10 @@ struct MenuContent: View {
         if let peer = model.status?.peer?.name {
             Text("↔ \(peer) · \(model.status?.peerOnline == true ? "verbunden" : "nicht erreichbar")")
         }
+        if model.status?.network?.hidden == true {
+            Text("Fremdes Netz – MacSync unsichtbar")
+            Button("Diesem Netz vertrauen") { model.trustNetwork() }
+        }
         if let e = model.lastError {
             Text("⚠︎ \(e)")
         }

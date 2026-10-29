@@ -18,6 +18,8 @@ toml.workspace = true
 notify.workspace = true
 tracing.workspace = true
 libc.workspace = true
+blake3.workspace = true
+hex.workspace = true
 macsync-gitaware.workspace = true
 
 [dev-dependencies]
