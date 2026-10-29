@@ -46,6 +46,27 @@ impl Engine {
     }
 
     pub(crate) fn scan_unit_locked(&self, unit: &str, opts: &ScanOptions<'_>) -> Result<ScanReport> {
+        let t = std::time::Instant::now();
+        let r = self.scan_unit_inner(unit, opts);
+        let took = t.elapsed();
+        match &r {
+            Ok(rep) if took.as_millis() >= 100 || rep.changed > 0 || rep.deferred.is_some() => {
+                crate::telemetry::event(
+                    "scan",
+                    serde_json::json!({"unit": unit, "ms": crate::telemetry::ms(took), "changed": rep.changed,
+                                       "hashed": rep.hashed, "full": opts.full, "deferred": rep.deferred}),
+                );
+            }
+            Err(e) => crate::telemetry::event(
+                "scan",
+                serde_json::json!({"unit": unit, "ms": crate::telemetry::ms(took), "error": format!("{e:#}")}),
+            ),
+            _ => {}
+        }
+        r
+    }
+
+    fn scan_unit_inner(&self, unit: &str, opts: &ScanOptions<'_>) -> Result<ScanReport> {
         let root = &self.cfg.root;
         let known = self.store().unit(unit)?;
         let kind = scan::unit_kind_on_disk(root, unit).or(known.as_ref().map(|u| u.kind)).unwrap_or(UnitKind::Folder);

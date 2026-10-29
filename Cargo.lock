@@ -943,6 +943,7 @@ dependencies = [
  "macsync-engine",
  "mdns-sd",
  "serde",
+ "serde_json",
  "snow",
  "spake2",
  "tempfile",

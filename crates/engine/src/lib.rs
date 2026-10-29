@@ -17,6 +17,7 @@ mod plan;
 mod pull;
 mod resolve;
 mod serve;
+pub mod telemetry;
 
 pub use capture::{ScanOptions, ScanReport};
 pub use plan::{ActionKind, PlannedAction};
@@ -27,6 +28,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use anyhow::Result;
 use macsync_core::proto::{DirListing, UnitRoot};
@@ -112,6 +114,40 @@ pub trait PeerApi {
     /// content transfer; dropped when the transfer ends. Default: none.
     fn lanes(&self, _n: usize) -> Vec<Box<dyn PeerApi + Send + Sync>> {
         Vec::new()
+    }
+}
+
+/// Store access that takes longer than this is recorded (telemetry).
+const SLOW_STORE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The locked store; reports a long hold when dropped (telemetry on).
+pub struct StoreGuard<'a> {
+    guard: MutexGuard<'a, Store>,
+    since: Option<Instant>,
+    site: &'static std::panic::Location<'static>,
+}
+
+impl std::ops::Deref for StoreGuard<'_> {
+    type Target = Store;
+    fn deref(&self) -> &Store {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for StoreGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Store {
+        &mut self.guard
+    }
+}
+
+impl Drop for StoreGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(held) = self.since.map(|t| t.elapsed()).filter(|d| *d >= SLOW_STORE) {
+            telemetry::event(
+                "store-hold",
+                serde_json::json!({"ms": telemetry::ms(held), "at": format!("{}:{}", self.site.file(), self.site.line())}),
+            );
+        }
     }
 }
 
@@ -227,9 +263,24 @@ impl Engine {
         self.case_insensitive
     }
 
-    /// Access the store (short critical sections only).
-    pub fn store(&self) -> MutexGuard<'_, Store> {
-        self.store.lock().unwrap_or_else(|e| e.into_inner())
+    /// Access the store (short critical sections only). With telemetry on,
+    /// a long wait or hold is recorded with the calling code location.
+    #[track_caller]
+    pub fn store(&self) -> StoreGuard<'_> {
+        let site = std::panic::Location::caller();
+        if !telemetry::enabled() {
+            return StoreGuard { guard: self.store.lock().unwrap_or_else(|e| e.into_inner()), since: None, site };
+        }
+        let t = Instant::now();
+        let guard = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let waited = t.elapsed();
+        if waited >= SLOW_STORE {
+            telemetry::event(
+                "store-wait",
+                serde_json::json!({"ms": telemetry::ms(waited), "at": format!("{}:{}", site.file(), site.line())}),
+            );
+        }
+        StoreGuard { guard, since: Some(Instant::now()), site }
     }
 
     /// Fault injection for crash tests.

@@ -103,6 +103,23 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Diagnosis: events of both Macs on one time line (scans, transfers,
+    /// slow requests, waits for the index, connections). Without a running
+    /// daemon only this Mac's log files.
+    Diag {
+        /// How far back, in minutes.
+        #[arg(long, default_value_t = 60)]
+        minutes: i64,
+        /// Only this Mac.
+        #[arg(long)]
+        local: bool,
+        /// Raw JSON (both Macs, events as recorded).
+        #[arg(long)]
+        json: bool,
+        /// Write to this file instead of printing.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Synchronise this folder or file next, ahead of the rest (needs the
     /// running daemon).
     First {
@@ -519,6 +536,29 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 output::browse(&v);
+            }
+            Ok(())
+        }
+        Cmd::Diag { minutes, local, json, out } => {
+            let since_ms = macsync_engine::telemetry::now_ms() - minutes.max(1) * 60_000;
+            let v = match ipc::call(&cfg.state_dir(), &IpcRequest::Diag { since_ms, peer: !local })? {
+                Some(v) => v,
+                None => {
+                    let events: Vec<Value> = macsync_engine::telemetry::read_files(&cfg.state_dir(), since_ms)
+                        .iter()
+                        .filter_map(|l| serde_json::from_str(l).ok())
+                        .collect();
+                    json!({"devices": [{"name": cfg.device_name, "self": true, "offset_ms": 0,
+                                        "events": events, "note": "daemon not running: log files only"}]})
+                }
+            };
+            let text = if json { serde_json::to_string_pretty(&v)? + "\n" } else { output::diag(&v) };
+            match out {
+                Some(p) => {
+                    std::fs::write(&p, text).with_context(|| format!("write {}", p.display()))?;
+                    println!("{}", p.display());
+                }
+                None => print!("{text}"),
             }
             Ok(())
         }

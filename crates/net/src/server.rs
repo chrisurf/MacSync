@@ -15,6 +15,8 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use macsync_core::proto::{Request, Response};
 use macsync_core::PROTOCOL_VERSION;
+use macsync_engine::telemetry;
+use serde_json::json;
 
 use crate::client::HelloInfo;
 use crate::guard::{Bans, Handshakes};
@@ -38,6 +40,8 @@ pub const MAX_HANDSHAKES: usize = 4;
 pub const MAX_PAIRED: usize = 8;
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Requests taking longer are recorded (telemetry).
+const SLOW_REQUEST: Duration = Duration::from_millis(200);
 
 pub struct Server {
     local: SocketAddr,
@@ -103,15 +107,24 @@ impl Server {
                         }
                     };
                     limits.bans.succeed(addr.ip());
-                    if limits.paired.fetch_add(1, Ordering::SeqCst) >= MAX_PAIRED {
+                    let open = limits.paired.fetch_add(1, Ordering::SeqCst);
+                    if open >= MAX_PAIRED {
                         limits.paired.fetch_sub(1, Ordering::SeqCst);
                         tracing::warn!(%addr, "too many connections from the peer");
+                        telemetry::event("conn-refused", json!({"open": open, "limit": MAX_PAIRED}));
                         return;
                     }
+                    telemetry::event("conn-open", json!({"open": open + 1}));
                     let _paired = PairedSlot(&limits.paired);
-                    if let Err(e) = serve_conn(s, addr, &hello, &handler) {
+                    let r = serve_conn(s, addr, &hello, &handler);
+                    if let Err(e) = &r {
                         tracing::debug!(error = %format!("{e:#}"), "connection closed");
                     }
+                    telemetry::event(
+                        "conn-close",
+                        json!({"open": limits.paired.load(Ordering::SeqCst) - 1,
+                               "error": r.err().map(|e| format!("{e:#}"))}),
+                    );
                 });
             }
         })?;
@@ -172,7 +185,14 @@ fn serve_conn(mut s: SecureStream, addr: SocketAddr, hello: &HelloInfo, handler:
             Err(_) => return Ok(()), // closed or idle
         };
         let req: Request = macsync_core::codec::decode(&msg).context("decode request")?;
+        let name = req.name();
+        let t = std::time::Instant::now();
         let resp = handler(&info, req);
+        let took = t.elapsed();
+        if took >= SLOW_REQUEST {
+            let error = if let Response::Error(e) = &resp { Some(e.clone()) } else { None };
+            telemetry::event("serve-slow", json!({"req": name, "ms": telemetry::ms(took), "error": error}));
+        }
         s.send(&macsync_core::codec::encode(&resp)?)?;
     }
 }

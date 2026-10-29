@@ -228,6 +228,23 @@ wait_until 120 converged || fail "large file not converged"
 rm -rf "$A/big"
 wait_until 60 test ! -e "$B/big" || fail "large file not removed"
 
+log "diagnosis of both Macs"
+rb diag --minutes 10 --json > "$WORK/diag.json" || fail "diag failed"
+python3 - "$WORK/diag.json" <<'PY' || fail "diag misses events of one side"
+import json, sys
+d = json.load(open(sys.argv[1]))["devices"]
+assert len(d) == 2, d
+for dev in d:
+    assert "error" not in dev, dev.get("error")
+    kinds = {e["kind"] for e in dev["events"]}
+    assert "daemon-start" in kinds, (dev["name"], kinds)
+    assert kinds & {"pull", "scan"}, (dev["name"], kinds)
+assert abs(d[1]["offset_ms"]) < 1000, d[1]["offset_ms"]
+PY
+rb diag --minutes 10 --out "$WORK/diag.txt" >/dev/null || fail "diag --out failed"
+grep -q "Summary" "$WORK/diag.txt" || fail "diag text without summary"
+log "diag: $(grep -c . "$WORK/diag.txt") lines, both Macs"
+
 log "verify"
 ra verify --json > "$WORK/verify.json"
 SILENT=$(python3 -c 'import json; print(sum(r["silent_changes"] for r in json.load(open("'"$WORK"'/verify.json"))))')

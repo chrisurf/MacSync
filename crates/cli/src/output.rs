@@ -651,3 +651,73 @@ fn bytes(n: u64) -> String {
         format!("{v:.1} {}", UNITS[u])
     }
 }
+
+/// `macsync diag`: one time line for both Macs, the peer's events shifted by
+/// its clock offset. Then a summary per Mac (slowest steps, refusals).
+pub fn diag(v: &Value) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let mut lines: Vec<(i64, String, String)> = Vec::new();
+    let devices = v["devices"].as_array().cloned().unwrap_or_default();
+    for d in &devices {
+        let name = d["name"].as_str().unwrap_or("?").to_string();
+        let offset = d["offset_ms"].as_i64().unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "{name}: {}{}{}",
+            d["version"].as_str().unwrap_or("?"),
+            if offset != 0 { format!(", clock {offset:+} ms") } else { String::new() },
+            d["error"].as_str().or(d["note"].as_str()).map(|e| format!(" – {e}")).unwrap_or_default()
+        );
+        for e in d["events"].as_array().into_iter().flatten() {
+            let t = e["t"].as_i64().unwrap_or(0) - offset;
+            let kind = e["kind"].as_str().unwrap_or("?");
+            let mut fields = String::new();
+            if let Some(o) = e.as_object() {
+                for (k, val) in o {
+                    if k == "t" || k == "kind" || val.is_null() {
+                        continue;
+                    }
+                    let shown = match val {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    let _ = write!(fields, " {k}={shown}");
+                }
+            }
+            lines.push((t, name.clone(), format!("{kind:<16}{fields}")));
+        }
+    }
+    lines.sort_by_key(|l| l.0);
+    let width = devices.iter().filter_map(|d| d["name"].as_str()).map(|n| n.chars().count()).max().unwrap_or(4);
+    let _ = writeln!(out);
+    for (t, name, text) in &lines {
+        let _ = writeln!(out, "{}  {name:<width$}  {text}", clock(*t));
+    }
+    // Summary: what took longest, per Mac and kind.
+    let _ = writeln!(out, "\nSummary");
+    for d in &devices {
+        let name = d["name"].as_str().unwrap_or("?");
+        let mut by_kind: std::collections::BTreeMap<&str, (usize, u64)> = Default::default();
+        for e in d["events"].as_array().into_iter().flatten() {
+            let k = by_kind.entry(e["kind"].as_str().unwrap_or("?")).or_default();
+            k.0 += 1;
+            k.1 = k.1.max(e["ms"].as_u64().unwrap_or(0));
+        }
+        let parts: Vec<String> = by_kind
+            .iter()
+            .map(|(k, (n, max))| if *max > 0 { format!("{k} {n}× (max {max} ms)") } else { format!("{k} {n}×") })
+            .collect();
+        let _ = writeln!(out, "  {name}: {}", if parts.is_empty() { "no events".into() } else { parts.join(", ") });
+    }
+    out
+}
+
+/// Local time of day with milliseconds.
+fn clock(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let t: libc::time_t = secs as libc::time_t;
+    unsafe { libc::localtime_r(&t, &mut tm) };
+    format!("{:02}:{:02}:{:02}.{:03}", tm.tm_hour, tm.tm_min, tm.tm_sec, ms.rem_euclid(1000))
+}

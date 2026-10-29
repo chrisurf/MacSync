@@ -79,6 +79,7 @@ Konfigurationsänderungen werden beim Neustart des Daemons übernommen.
 | `macsync diff [unit]` | Trockenlauf: abweichende Pfade und geplante Aktion mit Grund |
 | `macsync sync [units…] [--dry-run]` | sofort synchronisieren |
 | `macsync first <pfad>` | Ordner/Datei als Nächstes synchronisieren (beide Macs; braucht den Daemon) |
+| `macsync diag [--minutes 60] [--local] [--json] [--out datei]` | Diagnose: Ereignisse beider Macs auf einer Zeitachse (Scans, Übernahmen, langsame Anfragen, Wartezeit auf den Index, Verbindungen). App: Menü → „Diagnose beider Macs sichern“ legt die letzten 2 h auf den Schreibtisch. Rohdaten je Mac: `events.jsonl` im Zustandsordner (2 × 8 MB, bleibt auf den beiden Macs) |
 | `macsync verify [unit]` | vollständiges Neu-Hashen, meldet „stille“ Änderungen |
 | `macsync conflicts [--all]` | Konflikte inkl. Speicherort der fremden Version |
 | `macsync resolve <id> --keep local\|remote\|both` | Konflikt lösen |

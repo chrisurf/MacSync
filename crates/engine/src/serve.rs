@@ -116,6 +116,10 @@ impl Engine {
                     Response::BlobRange(self.serve_blob_range(&hash, offset, len)?)
                 }
                 Request::Ping => Response::Pong,
+                Request::Diag { since_ms, max } => Response::Diag {
+                    now_ms: crate::telemetry::now_ms(),
+                    events: crate::telemetry::since(since_ms, max.min(50_000) as usize),
+                },
                 Request::Hello { .. } | Request::Changed { .. } | Request::Prioritize { .. } => Response::Ok,
             })
         })();

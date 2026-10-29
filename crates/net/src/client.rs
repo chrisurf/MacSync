@@ -58,6 +58,9 @@ impl HelloInfo {
     }
 }
 
+/// Calls to the peer taking longer are recorded (telemetry).
+const SLOW_CALL: std::time::Duration = std::time::Duration::from_millis(500);
+
 pub struct NetPeer {
     addr: SocketAddr,
     identity: Identity,
@@ -142,6 +145,20 @@ impl NetPeer {
     /// Send one request; reconnects once on transport errors (all requests are
     /// idempotent).
     pub fn call(&self, req: &Request) -> Result<Response> {
+        let t = std::time::Instant::now();
+        let r = self.call_inner(req);
+        let took = t.elapsed();
+        if took >= SLOW_CALL || r.is_err() {
+            macsync_engine::telemetry::event(
+                "peer-call",
+                serde_json::json!({"req": req.name(), "ms": macsync_engine::telemetry::ms(took),
+                                   "error": r.as_ref().err().map(|e| format!("{e:#}"))}),
+            );
+        }
+        r
+    }
+
+    fn call_inner(&self, req: &Request) -> Result<Response> {
         let payload = macsync_core::codec::encode(req)?;
         let mut guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
@@ -186,6 +203,18 @@ impl NetPeer {
     pub fn prioritize(&self, units: Vec<String>) -> Result<()> {
         self.call(&Request::Prioritize { units })?;
         Ok(())
+    }
+
+    /// The peer's diagnostic events since `since_ms` (peer clock) and the
+    /// estimated offset of its clock (peer minus local, ms).
+    pub fn diag(&self, since_ms: i64, max: u32) -> Result<(i64, Vec<String>)> {
+        let t1 = macsync_engine::telemetry::now_ms();
+        let r = self.call(&Request::Diag { since_ms, max })?;
+        let t4 = macsync_engine::telemetry::now_ms();
+        match r {
+            Response::Diag { now_ms, events } => Ok((now_ms - (t1 + t4) / 2, events)),
+            other => bail!("unexpected response {other:?}"),
+        }
     }
 
     pub fn disconnect(&self) {

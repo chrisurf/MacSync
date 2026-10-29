@@ -449,6 +449,23 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(Paths.logFile)
     }
 
+    /// Events of both Macs of the last two hours on one time line
+    /// (`macsync diag`), as a file on the Desktop, shown in the Finder.
+    func saveDiagnosis() {
+        let stamp = Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))
+            .replacingOccurrences(of: ":", with: "")
+        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+        let file = desktop.appendingPathComponent("MacSync-Diagnose-\(stamp).txt")
+        Task {
+            do {
+                _ = try await CLI.run(["diag", "--minutes", "120", "--out", file.path])
+                NSWorkspace.shared.activateFileViewerSelecting([file])
+            } catch {
+                lastError = "Diagnose nicht gesichert: \(error.localizedDescription)"
+            }
+        }
+    }
+
     func openRoot() {
         guard let root = status?.root ?? config?.string("root") else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: Paths.expand(root)))

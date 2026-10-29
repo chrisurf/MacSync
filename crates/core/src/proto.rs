@@ -67,6 +67,31 @@ pub enum Request {
     Prioritize {
         units: Vec<String>,
     },
+    /// Diagnostic events of the peer since `since_ms` (its wall clock), at
+    /// most `max`. Answered without touching the index, so it works while
+    /// the peer is busy. Older builds answer with an error.
+    Diag {
+        since_ms: i64,
+        max: u32,
+    },
+}
+
+impl Request {
+    /// Short name for logs and telemetry.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Request::Hello { .. } => "hello",
+            Request::Roots => "roots",
+            Request::Tree { .. } => "tree",
+            Request::Entries { .. } => "entries",
+            Request::Blobs { .. } => "blobs",
+            Request::BlobRange { .. } => "blob-range",
+            Request::Changed { .. } => "changed",
+            Request::Ping => "ping",
+            Request::Prioritize { .. } => "prioritize",
+            Request::Diag { .. } => "diag",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,6 +113,12 @@ pub enum Response {
     Ok,
     Pong,
     Error(String),
+    /// Answer to `Diag`: the peer's clock when answering and its events
+    /// (one JSON object each).
+    Diag {
+        now_ms: i64,
+        events: Vec<String>,
+    },
 }
 
 /// Limits used by both sides.

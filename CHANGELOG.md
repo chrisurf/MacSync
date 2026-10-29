@@ -35,6 +35,14 @@ mit 0.5 verbinden sich nicht miteinander.
   Schlüssel werden im Speicher genullt
 
 ### Geändert
+- Diagnose für beide Macs: jeder Daemon schreibt Ereignisse mit Dauer
+  (Scan, Übernahme mit Phasen, langsame Anfragen von App und anderem Mac,
+  Wartezeit und Haltezeit der Index-Sperre mit Codestelle, Verbindungen und
+  Abweisungen, Zustand jede Minute) nach `events.jsonl`. `macsync diag` und
+  Menü „Diagnose beider Macs sichern“ holen die Ereignisse des anderen Macs
+  über die gekoppelte Verbindung dazu (neuer Befehl `Diag`, ohne Index-Zugriff,
+  ältere Builds antworten mit Fehler) und zeigen beide auf einer Zeitachse
+  mit ausgeglichenem Uhrversatz. Analyse und Plan: docs/analyse-robustheit.md
 - Synchronisations-Manager arbeitet wie ein Dateimanager: Liste und Baum
   kommen direkt von der Platte und stehen sofort – auch ohne laufende
   Synchronisation oder Verbindung, mit allen Ordnern und Dateien (auch

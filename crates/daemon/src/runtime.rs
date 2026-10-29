@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use macsync_core::proto::Request;
 use macsync_core::Hash;
-use macsync_engine::{Engine, Outcome, PeerApi, PullOptions, PullQueue, PullReport, ScanOptions};
+use macsync_engine::{telemetry, Engine, Outcome, PeerApi, PullOptions, PullQueue, PullReport, ScanOptions};
 use macsync_net::client::HelloInfo;
 use macsync_net::{discovery, Identity, NetPeer, Server};
 use macsync_store::PeerRow;
@@ -370,9 +370,16 @@ impl Daemon {
             network: Mutex::new(NetworkState::default()),
         });
 
+        telemetry::init(&node.cfg.state_dir());
+        telemetry::event(
+            "daemon-start",
+            json!({"version": macsync_net::build_version(), "pid": std::process::id(), "device": node.cfg.device_name}),
+        );
         // Startup capture replaces the FSEvents event-id replay (ADR-0004).
         tracing::info!(root = %node.cfg.root().display(), "initial scan");
+        let t = Instant::now();
         node.engine.scan_all(false)?;
+        telemetry::event("initial-scan", json!({"ms": telemetry::ms(t.elapsed())}));
         refresh_units(&node, &shared);
 
         // Protocol server: only while paired, and only for the paired key.
@@ -435,11 +442,17 @@ impl Daemon {
         self.shared.exposure.lock().unwrap_or_else(|e| e.into_inner()).take();
         let _ = std::fs::remove_file(&self.socket);
         if let Some(t) = self.scheduler.take() {
-            let deadline = Instant::now() + grace.min(Duration::from_secs(86_400));
+            let started = Instant::now();
+            let deadline = started + grace.min(Duration::from_secs(86_400));
             while !t.is_finished() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(50));
             }
-            if t.is_finished() {
+            let finished = t.is_finished();
+            telemetry::event(
+                "daemon-stop",
+                json!({"waited_ms": telemetry::ms(started.elapsed()), "finished": finished}),
+            );
+            if finished {
                 let _ = t.join();
             } else {
                 tracing::info!("sync still running; it continues after the next start");
@@ -609,6 +622,10 @@ fn peer(node: &Node, shared: &Shared) -> Option<Arc<NetPeer>> {
             let p = Arc::new(p);
             if let Some(h) = p.remote_hello() {
                 tracing::info!(peer = %h.name, addr = %p.addr(), "connected to peer");
+                telemetry::event(
+                    "peer-connected",
+                    json!({"peer": h.name, "addr": p.addr().to_string(), "version": h.version}),
+                );
             }
             *shared.peer.lock().unwrap_or_else(|e| e.into_inner()) = Some(p.clone());
             let mut ps = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner());
@@ -621,6 +638,7 @@ fn peer(node: &Node, shared: &Shared) -> Option<Arc<NetPeer>> {
             let mut ps = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner());
             if ps.online || ps.last_error.is_empty() {
                 tracing::warn!(error = %format!("{e:#}"), "peer unavailable");
+                telemetry::event("peer-unavailable", json!({"error": format!("{e:#}")}));
             }
             ps.online = false;
             ps.last_error = format!("{e:#}");
@@ -631,6 +649,45 @@ fn peer(node: &Node, shared: &Shared) -> Option<Arc<NetPeer>> {
 
 /// The manager's own connection, opened next to the sync connection while
 /// the peer is online (never a connect attempt of its own otherwise).
+impl Daemon {
+    /// Events of this Mac and of the peer since `since_ms`, with the peer's
+    /// clock offset. Needs no store lock: works while the sync is stuck.
+    pub(crate) fn ipc_diag(node: &Node, shared: &Shared, since_ms: i64, with_peer: bool) -> Result<Value> {
+        let parse =
+            |lines: Vec<String>| -> Vec<Value> { lines.iter().filter_map(|l| serde_json::from_str(l).ok()).collect() };
+        let mut devices = vec![json!({
+            "name": node.cfg.device_name,
+            "self": true,
+            "version": macsync_net::build_version(),
+            "offset_ms": 0,
+            "events": parse(telemetry::since(since_ms, DIAG_MAX as usize)),
+        })];
+        if with_peer {
+            let peer = match browse_peer(shared) {
+                None => json!({"name": "peer", "error": "not connected"}),
+                Some(p) => {
+                    let name = p.remote_hello().map(|h| h.name).unwrap_or_else(|| "peer".into());
+                    // Asked in the peer's clock: a minute of slack covers drift.
+                    match p.diag(since_ms - 60_000, DIAG_MAX) {
+                        Ok((offset, events)) => json!({
+                            "name": name,
+                            "version": p.remote_hello().map(|h| h.version),
+                            "offset_ms": offset,
+                            "events": parse(events),
+                        }),
+                        Err(e) => json!({"name": name, "error": format!("{e:#}")}),
+                    }
+                }
+            };
+            devices.push(peer);
+        }
+        Ok(json!({ "now_ms": telemetry::now_ms(), "devices": devices }))
+    }
+}
+
+/// Events per Mac in one diagnosis.
+const DIAG_MAX: u32 = 20_000;
+
 fn browse_peer(shared: &Shared) -> Option<Arc<NetPeer>> {
     let main = shared.peer.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
     let mut b = shared.browse_peer.lock().unwrap_or_else(|e| e.into_inner());
@@ -642,11 +699,51 @@ fn browse_peer(shared: &Shared) -> Option<Arc<NetPeer>> {
 
 fn peer_failed(shared: &Shared, e: &anyhow::Error) {
     tracing::warn!(error = %format!("{e:#}"), "peer request failed");
+    telemetry::event("peer-failed", json!({"error": format!("{e:#}")}));
     *shared.peer.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *shared.browse_peer.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let mut ps = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner());
     ps.online = false;
     ps.last_error = format!("{e:#}");
+}
+
+/// Interval of the `health` telemetry event.
+const HEALTH_EVERY: Duration = Duration::from_secs(60);
+
+/// Queue lengths, peer state and process resources (telemetry). Takes no
+/// store lock, so it shows up even while the store is blocked – but only
+/// between scheduler steps.
+fn health(shared: &Shared) {
+    let dirty = shared.dirty.lock().unwrap_or_else(|e| e.into_inner()).len();
+    let pending = shared.pending.lock().unwrap_or_else(|e| e.into_inner()).len();
+    let priority = shared.priority.lock().unwrap_or_else(|e| e.into_inner()).len();
+    let online = shared.peer_state.lock().unwrap_or_else(|e| e.into_inner()).online;
+    let (rss, threads) = process_resources();
+    telemetry::event(
+        "health",
+        json!({"dirty": dirty, "pending": pending, "priority": priority, "online": online,
+               "rss_mb": rss / (1024 * 1024), "threads": threads}),
+    );
+}
+
+/// Resident memory (bytes) and thread count of this process.
+fn process_resources() -> (u64, i32) {
+    let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+    let n = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTASKINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    if n == size {
+        (info.pti_resident_size, info.pti_threadnum)
+    } else {
+        (0, 0)
+    }
 }
 
 fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
@@ -656,6 +753,7 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
     let mut last_rescan = Instant::now();
     let mut last_housekeeping: Option<Instant> = None;
     let mut last_exposure = Instant::now();
+    let mut last_health = Instant::now();
     let tick = Duration::from_millis(100);
     while !shared.stop.load(Ordering::SeqCst) {
         {
@@ -666,6 +764,10 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
                 woke = g;
             }
             *woke = false;
+        }
+        if last_health.elapsed() >= HEALTH_EVERY {
+            last_health = Instant::now();
+            health(&shared);
         }
         // Pairing (`macsync pair`) changes the peer behind our back.
         if last_exposure.elapsed() >= Duration::from_secs(2) {

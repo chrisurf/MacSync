@@ -21,6 +21,7 @@ getrandom.workspace = true
 zstd.workspace = true
 mdns-sd.workspace = true
 tracing.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

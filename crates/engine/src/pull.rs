@@ -192,8 +192,41 @@ impl Engine {
         names: &BTreeSet<String>,
         opts: PullOptions,
     ) -> PullReport {
+        let t = std::time::Instant::now();
         let lock = self.unit_lock(&remote.name);
         let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let waited = t.elapsed();
+        let r = self.pull_unit_locked(peer, remote, names, opts);
+        let took = t.elapsed();
+        if took.as_millis() >= 100 || !matches!(r.outcome, Outcome::InSync) {
+            let outcome = match &r.outcome {
+                Outcome::InSync => "in-sync".to_string(),
+                Outcome::Applied => "applied".into(),
+                Outcome::DryRun => "dry-run".into(),
+                Outcome::Deferred(w) => format!("deferred: {w}"),
+                Outcome::Paused => "paused".into(),
+                Outcome::Failed(e) => format!("failed: {e}"),
+                Outcome::Skipped(w) => format!("skipped: {w}"),
+            };
+            crate::telemetry::event(
+                "pull",
+                serde_json::json!({"unit": r.unit, "ms": crate::telemetry::ms(took),
+                    "lock_wait_ms": crate::telemetry::ms(waited), "outcome": outcome,
+                    "writes": r.writes, "deletes": r.deletes, "conflicts": r.conflicts,
+                    "fetched": r.bytes_fetched, "converged": r.converged,
+                    "phases": r.timings_ms.iter().map(|(p, ms)| serde_json::json!([p, ms])).collect::<Vec<_>>()}),
+            );
+        }
+        r
+    }
+
+    fn pull_unit_locked(
+        &self,
+        peer: &dyn PeerApi,
+        remote: &UnitRoot,
+        names: &BTreeSet<String>,
+        opts: PullOptions,
+    ) -> PullReport {
         match self.pull_locked(peer, remote, names, opts) {
             Ok(r) => r,
             Err(e) => {

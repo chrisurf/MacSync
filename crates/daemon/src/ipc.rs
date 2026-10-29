@@ -74,6 +74,16 @@ pub enum IpcRequest {
         ids: Vec<i64>,
         choice: String,
     },
+    /// Telemetry events of both Macs since `since_ms` (`macsync diag`).
+    Diag {
+        since_ms: i64,
+        #[serde(default = "yes")]
+        peer: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,6 +135,7 @@ pub(crate) fn serve(path: &Path, node: Arc<Node>, shared: Arc<Shared>) -> Result
             if busy.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
                 busy.fetch_sub(1, Ordering::SeqCst);
                 let _ = refuse_busy(&stream);
+                macsync_engine::telemetry::event("ipc-busy", json!({"limit": MAX_IN_FLIGHT}));
                 continue;
             }
             let (n, s, b) = (node.clone(), shared.clone(), busy.clone());
@@ -139,6 +150,9 @@ pub(crate) fn serve(path: &Path, node: Arc<Node>, shared: Arc<Shared>) -> Result
     })?;
     Ok(())
 }
+
+/// App and CLI requests taking longer are recorded (telemetry).
+const SLOW_IPC: Duration = Duration::from_millis(500);
 
 /// Requests handled at the same time; more are refused at once.
 const MAX_IN_FLIGHT: usize = 16;
@@ -156,10 +170,23 @@ fn handle_conn(stream: UnixStream, node: &Arc<Node>, shared: &Arc<Shared>) -> Re
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let resp = match serde_json::from_str::<IpcRequest>(&line) {
-        Ok(req) => match dispatch(req, node, shared) {
-            Ok(data) => IpcResponse { ok: true, data, error: None },
-            Err(e) => IpcResponse { ok: false, data: Value::Null, error: Some(format!("{e:#}")) },
-        },
+        Ok(req) => {
+            let cmd = serde_json::to_value(&req).ok().and_then(|v| v["cmd"].as_str().map(str::to_string));
+            let t = std::time::Instant::now();
+            let r = dispatch(req, node, shared);
+            let took = t.elapsed();
+            if took >= SLOW_IPC {
+                macsync_engine::telemetry::event(
+                    "ipc-slow",
+                    json!({"cmd": cmd, "ms": macsync_engine::telemetry::ms(took),
+                           "error": r.as_ref().err().map(|e| format!("{e:#}"))}),
+                );
+            }
+            match r {
+                Ok(data) => IpcResponse { ok: true, data, error: None },
+                Err(e) => IpcResponse { ok: false, data: Value::Null, error: Some(format!("{e:#}")) },
+            }
+        }
         Err(e) => IpcResponse { ok: false, data: Value::Null, error: Some(format!("bad request: {e}")) },
     };
     let mut out = serde_json::to_string(&resp)?;
@@ -228,6 +255,7 @@ fn dispatch(req: IpcRequest, node: &Arc<Node>, shared: &Arc<Shared>) -> Result<V
             let name = engine.store().peers()?.into_iter().last().map(|r| r.name);
             json!({ "peer": name, "conflicts": engine.conflict_views(all)? })
         }
+        IpcRequest::Diag { since_ms, peer } => Daemon::ipc_diag(node, shared, since_ms, peer)?,
         IpcRequest::ResolveMany { ids, choice } => {
             let v = resolve_many(engine, &ids, &choice)?;
             Daemon::kick(shared);

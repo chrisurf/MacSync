@@ -101,6 +101,7 @@ struct MenuContent: View {
         SettingsLink { Text("Einstellungen …") }
             .keyboardShortcut(",")
         Button("Protokoll anzeigen") { model.openLog() }
+        Button("Diagnose beider Macs sichern") { model.saveDiagnosis() }
         Divider()
         Button("MacSync beenden") { model.quit() }
             .keyboardShortcut("q")
