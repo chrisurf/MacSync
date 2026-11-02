@@ -113,3 +113,105 @@ fn git_switched_off_syncs_only_the_working_tree() {
     assert_eq!(read(b.root(), "app/README.md"), "hello again");
     assert!(a.root().join("app/.git/HEAD").exists(), "never deleted");
 }
+
+/// Both Macs skip build folders and pull in both directions until quiet.
+fn sync_skipping(a: &Engine, b: &Engine) {
+    for _ in 0..4 {
+        a.scan_all(false).unwrap();
+        b.scan_all(false).unwrap();
+        b.sync_from(a, None, PullOptions::default()).unwrap();
+        a.sync_from(b, None, PullOptions::default()).unwrap();
+    }
+}
+
+fn pair_skipping() -> (tempfile::TempDir, Engine, Engine) {
+    let dir = tempfile::tempdir().unwrap();
+    let a = reopen(dir.path(), "devA", &["node", "rust"]);
+    let b = reopen(dir.path(), "devB", &["node", "rust"]);
+    (dir, a, b)
+}
+
+/// A folder deleted on one Mac is deleted on the other as a whole, with the
+/// build folders, `.DS_Store` and everything else that is never synchronised;
+/// none of it comes back.
+#[test]
+fn deleted_folder_goes_with_its_build_folders() {
+    let (_dir, a, b) = pair_skipping();
+    write(a.root(), "rs/Cargo.toml", "[package]");
+    write(a.root(), "rs/src/main.rs", "fn main() {}");
+    write(a.root(), "web/package.json", "{}");
+    write(a.root(), "web/src/index.js", "app");
+    sync_skipping(&a, &b);
+    // Local builds on B only, as Cargo and npm leave them.
+    write(b.root(), "rs/target/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55");
+    write(b.root(), "rs/target/release/app", "binary B");
+    write(b.root(), "web/node_modules/x/index.js", "x");
+    write(b.root(), "web/src/.DS_Store", "finder");
+    sync_skipping(&a, &b);
+
+    std::fs::remove_dir_all(a.root().join("rs")).unwrap();
+    std::fs::remove_dir_all(a.root().join("web")).unwrap();
+    sync_skipping(&a, &b);
+    for r in [a.root(), b.root()] {
+        assert!(!r.join("rs").exists(), "rs left in {r:?}");
+        assert!(!r.join("web").exists(), "web left in {r:?}");
+    }
+    // In MacSync's trash on B, not gone.
+    let in_trash =
+        std::fs::read_dir(b.trash_root()).unwrap().flatten().any(|tx| tx.path().join("rs/target/release/app").exists());
+    assert!(in_trash, "build folder not in the trash");
+}
+
+/// The same for a repository (a unit of its own, like `chrisurf/RepoSync`):
+/// its `.git` objects are deleted after the folders.
+#[test]
+fn deleted_repository_goes_with_its_build_folder() {
+    if !git_available() {
+        return;
+    }
+    let (_dir, a, b) = pair_skipping();
+    init_repo(&a.root().join("app"));
+    write(a.root(), "app/Cargo.toml", "[package]");
+    sync_skipping(&a, &b);
+    write(b.root(), "app/target/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55");
+    write(b.root(), "app/target/debug/app", "binary B");
+    sync_skipping(&a, &b);
+
+    std::fs::remove_dir_all(a.root().join("app")).unwrap();
+    sync_skipping(&a, &b);
+    assert!(!b.root().join("app").exists(), "left on B");
+    assert!(!a.root().join("app").exists(), "came back on A");
+}
+
+/// Without `Cargo.toml` the folder `target` stays a build folder (Cargo's
+/// `CACHEDIR.TAG` inside): it is not transferred as new files.
+#[test]
+fn build_folder_stays_excluded_without_its_project_file() {
+    let (_dir, a, b) = pair_skipping();
+    write(a.root(), "rs/Cargo.toml", "[package]");
+    write(a.root(), "rs/notes.md", "keep");
+    sync_skipping(&a, &b);
+    write(b.root(), "rs/target/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55");
+    write(b.root(), "rs/target/release/app", "binary B");
+    sync_skipping(&a, &b);
+
+    std::fs::remove_file(a.root().join("rs/Cargo.toml")).unwrap();
+    sync_skipping(&a, &b);
+    assert!(!b.root().join("rs/Cargo.toml").exists());
+    assert!(!a.root().join("rs/target").exists(), "B's build folder transferred");
+    assert!(b.root().join("rs/target/release/app").exists(), "never deleted");
+}
+
+/// New work on B inside a folder deleted on A is not thrown away.
+#[test]
+fn deleted_folder_keeps_new_work_of_the_other_mac() {
+    let (_dir, a, b) = pair_skipping();
+    write(a.root(), "docs/a.md", "a");
+    sync_skipping(&a, &b);
+    std::fs::remove_dir_all(a.root().join("docs")).unwrap();
+    write(b.root(), "docs/node_modules/x/index.js", "x");
+    write(b.root(), "docs/new.md", "written on B, not yet synchronised");
+    sync_skipping(&a, &b);
+    let kept = [a.root(), b.root()].iter().any(|r| r.join("docs/new.md").exists());
+    assert!(kept, "new work lost");
+}

@@ -17,8 +17,11 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 pub enum Marker {
     /// Always (the name is unambiguous, e.g. `node_modules`).
     Always,
-    /// Only next to this project file (`target` next to `Cargo.toml`).
-    Sibling(&'static str),
+    /// Next to this project file (`target` next to `Cargo.toml`), or
+    /// containing the second file, which the tool writes into every folder
+    /// it creates (`target/CACHEDIR.TAG`). The second keeps the folder a
+    /// build folder when the project file is deleted before it.
+    Sibling(&'static str, &'static str),
     /// Only if the folder contains this file (`venv/pyvenv.cfg`).
     Inside(&'static str),
 }
@@ -63,17 +66,21 @@ pub const ECOSYSTEMS: &[Ecosystem] = &[
             (".tox", Marker::Always),
         ],
     },
-    Ecosystem { key: "rust", title: "Rust (Cargo)", dirs: &[("target", Marker::Sibling("Cargo.toml"))] },
+    Ecosystem {
+        key: "rust",
+        title: "Rust (Cargo)",
+        dirs: &[("target", Marker::Sibling("Cargo.toml", "CACHEDIR.TAG"))],
+    },
     Ecosystem {
         key: "swift",
         title: "Swift / Xcode",
         dirs: &[
-            (".build", Marker::Sibling("Package.swift")),
+            (".build", Marker::Sibling("Package.swift", "workspace-state.json")),
             ("DerivedData", Marker::Always),
-            ("Pods", Marker::Sibling("Podfile")),
+            ("Pods", Marker::Sibling("Podfile", "Manifest.lock")),
         ],
     },
-    Ecosystem { key: "go", title: "Go", dirs: &[("vendor", Marker::Sibling("go.mod"))] },
+    Ecosystem { key: "go", title: "Go", dirs: &[("vendor", Marker::Sibling("go.mod", "modules.txt"))] },
     Ecosystem {
         key: "terraform",
         title: "Terraform",
@@ -180,7 +187,7 @@ impl Excludes {
         let dir = root.join(root_rel);
         match m {
             Marker::Always => true,
-            Marker::Sibling(f) => dir.parent().is_some_and(|p| p.join(f).exists()),
+            Marker::Sibling(f, tag) => dir.parent().is_some_and(|p| p.join(f).exists()) || dir.join(tag).exists(),
             Marker::Inside(f) => dir.join(f).exists(),
         }
     }
@@ -233,7 +240,11 @@ mod tests {
         assert!(!ex.is_excluded_path("rs/src/main.rs"));
         assert!(!ex.is_excluded_path("photos/target/a.jpg"));
         // A listing of the other Mac can supply the marker.
-        assert!(ex.is_excluded_with("new/target", "target", &|m| *m == Marker::Sibling("Cargo.toml")));
+        assert!(ex.is_excluded_with("new/target", "target", &|m| matches!(m, Marker::Sibling("Cargo.toml", _))));
+        // Without the project file the tool's own file inside still counts.
+        std::fs::create_dir_all(r.join("old/target")).unwrap();
+        std::fs::write(r.join("old/target/CACHEDIR.TAG"), "").unwrap();
+        assert!(ex.is_excluded("old/target", "target"), "Cargo.toml deleted, CACHEDIR.TAG left");
         // Switched on again: nothing excluded; Git off excludes `.git`.
         let none = Excludes::new(&[], true).unwrap().with_ecosystems(r, &[], false);
         assert!(!none.is_excluded("web/node_modules", "node_modules"));

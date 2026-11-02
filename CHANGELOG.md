@@ -114,6 +114,15 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Ein auf einem Mac gelöschter Ordner wird auf dem anderen als Ganzes
+  gelöscht, auch mit Build-Ordnern (`target`, `node_modules`, …), `.DS_Store`
+  und anderem, was nie synchronisiert wird – alles in den MacSync-Papierkorb.
+  Vorher blieb er mit diesen Resten stehen. Neue, noch nicht übertragene
+  Arbeit darin bleibt erhalten
+- Ein Build-Ordner bleibt einer, wenn seine Projektdatei gelöscht wird
+  (`target/CACHEDIR.TAG`, `.build/workspace-state.json`, `Pods/Manifest.lock`,
+  `vendor/modules.txt`). Vorher galt `target` ohne `Cargo.toml` als normaler
+  Ordner und wurde zum anderen Mac übertragen
 - Ein verschobenes oder gelöschtes Repository blieb als `.git/objects` stehen
   und ließ sich nicht mehr löschen: MacSyncs eigene `index.lock` hielt `.git`
   belegt, und `git fsck` auf dem Rest („not a git repository“) holte die

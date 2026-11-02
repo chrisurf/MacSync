@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use macsync_core::{Kind, UnitKind};
+use macsync_core::{gitpath, Kind, UnitKind};
 use macsync_fs::{meta, ops, scan};
 use macsync_store::{StatCache, Stored};
 
@@ -74,16 +74,32 @@ impl Engine {
             if fs::metadata(p).is_ok_and(|m| m.len() == 0) {
                 let _ = fs::remove_file(p);
             }
-            // Deleting a whole repository: `.git` and the unit directory could
-            // not go while our lock was inside. Retry them, deepest first.
-            let mut dirs: Vec<&Op> =
-                plan.ops.iter().filter(|o| o.kind == OpKind::Delete && o.entry.kind == Kind::Dir).collect();
-            dirs.sort_by_key(|o| std::cmp::Reverse(macsync_core::path::depth(&o.disk)));
-            for op in dirs {
-                if !self.behind_symlink(&plan.unit, &op.disk) {
-                    let _ = fs::remove_dir(macsync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk));
-                }
+        }
+        // Deleting a whole repository: `.git` and the unit directory could
+        // not go while our lock was inside, and object deletions come after
+        // the folders. Retry them now, deepest first.
+        let mut dirs: Vec<&Op> =
+            plan.ops.iter().filter(|o| o.kind == OpKind::Delete && o.entry.kind == Kind::Dir).collect();
+        dirs.sort_by_key(|o| std::cmp::Reverse(macsync_core::path::depth(&o.disk)));
+        for op in dirs {
+            if !self.behind_symlink(&plan.unit, &op.disk) {
+                self.delete_dir(&plan.unit, &op.disk, &trash)?;
             }
+        }
+        Ok(())
+    }
+
+    /// A folder deleted on the other Mac goes as a whole: what is left after
+    /// the synchronised files is moved to the trash if none of it would be
+    /// synchronised (build folders, `.DS_Store`, Git's process-local files).
+    /// New, not yet synchronised work keeps the folder.
+    fn delete_dir(&self, unit: &str, disk: &str, trash: &Path) -> Result<()> {
+        let target = macsync_fs::abs_path(&self.cfg.root, unit, disk);
+        if fs::remove_dir(&target).is_ok() || fs::symlink_metadata(&target).is_err() {
+            return Ok(());
+        }
+        if self.only_excluded_inside(unit, &target, disk) {
+            trash_into(&target, trash, &macsync_fs::root_rel(unit, disk))?;
         }
         Ok(())
     }
@@ -186,14 +202,7 @@ impl Engine {
                     return Ok(());
                 };
                 if md.is_dir() {
-                    match fs::remove_dir(&target) {
-                        Ok(()) => {}
-                        Err(_) if self.only_excluded_inside(&target) => {
-                            ops::move_to_trash(&target, trash, &trash_rel)?;
-                        }
-                        // Contains files that are not (yet) synced: keep it.
-                        Err(_) => {}
-                    }
+                    self.delete_dir(unit, &op.disk, trash)?;
                 } else {
                     ops::move_to_trash(&target, trash, &trash_rel)?;
                 }
@@ -240,15 +249,27 @@ impl Engine {
         Ok(())
     }
 
-    fn only_excluded_inside(&self, dir: &Path) -> bool {
+    /// True if nothing below `dir` (unit-relative `disk`) would be
+    /// synchronised: only excluded entries and empty folders. A repository
+    /// of its own inside counts as content.
+    fn only_excluded_inside(&self, unit: &str, dir: &Path, disk: &str) -> bool {
         let Ok(rd) = fs::read_dir(dir) else {
             return false;
         };
         rd.flatten().all(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            let excluded = self.cfg.excludes.is_excluded(&name, &name);
-            excluded && !e.path().join(".git").exists()
+            let Some(name) = e.file_name().to_str().map(macsync_core::path::nfc) else {
+                return false;
+            };
+            let rel = macsync_core::path::join(disk, &name);
+            let path = e.path();
+            let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+            if is_dir && macsync_fs::is_git_dir(&path) {
+                return false;
+            }
+            if self.cfg.excludes.is_excluded(&macsync_fs::root_rel(unit, &rel), &name) || gitpath::is_excluded(&rel) {
+                return true;
+            }
+            is_dir && self.only_excluded_inside(unit, &path, &rel)
         })
     }
 
@@ -416,4 +437,22 @@ impl Engine {
         }
         Ok(n)
     }
+}
+
+/// Move `path` to the trash, into the folder of the same transaction that
+/// already holds its synchronised files, so a deleted folder stays one folder
+/// there.
+fn trash_into(path: &Path, trash: &Path, rel: &str) -> io::Result<()> {
+    let dest = trash.join(rel);
+    let both_dirs =
+        fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) && fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir());
+    if !both_dirs {
+        ops::move_to_trash(path, trash, rel)?;
+        return Ok(());
+    }
+    for e in fs::read_dir(path)?.flatten() {
+        let name = e.file_name();
+        trash_into(&e.path(), trash, &macsync_core::path::join(rel, &name.to_string_lossy()))?;
+    }
+    fs::remove_dir(path)
 }

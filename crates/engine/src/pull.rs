@@ -1364,7 +1364,7 @@ pub(crate) fn descend(
                 }
                 let root_rel = macsync_fs::root_rel(unit, &path);
                 let listed = |m: &macsync_fs::Marker| match m {
-                    macsync_fs::Marker::Sibling(f) => has(f),
+                    macsync_fs::Marker::Sibling(f, _) => has(f),
                     _ => false,
                 };
                 if excludes.is_excluded_with(&root_rel, name, &listed) || excludes.is_excluded(&root_rel, name) {

@@ -221,7 +221,7 @@ impl Engine {
         // Folders excluded here (build and package folders switched off)
         // are not synchronised: not listed, even if the other Mac has them.
         let has: BTreeSet<&str> = by_name.keys().copied().collect();
-        let listed = |m: &macsync_fs::Marker| matches!(m, macsync_fs::Marker::Sibling(f) if has.contains(f));
+        let listed = |m: &macsync_fs::Marker| matches!(m, macsync_fs::Marker::Sibling(f, _) if has.contains(f));
         by_name.retain(|name, _| {
             let root_rel = macsync_fs::root_rel(unit, &rpath::join(dir, name));
             !self.cfg.excludes.is_excluded_with(&root_rel, name, &listed)
