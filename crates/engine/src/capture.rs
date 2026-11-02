@@ -203,7 +203,7 @@ impl Engine {
             vv.increment(me);
             report.changed += 1;
             writes.push(Stored {
-                entry: Entry::tombstone(p, o.entry.kind, vv),
+                entry: Entry::deletion_of(&o.entry, vv),
                 disk: o.disk.clone(),
                 stat: StatCache::default(),
                 changed_ms: now,
@@ -351,7 +351,7 @@ impl Engine {
                         vv.increment(me);
                         report.changed += 1;
                         writes.push(Stored {
-                            entry: Entry::tombstone(p, o.entry.kind, vv),
+                            entry: Entry::deletion_of(&o.entry, vv),
                             disk: o.disk,
                             stat: StatCache::default(),
                             changed_ms: now,

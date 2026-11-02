@@ -944,13 +944,17 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
 fn pull(node: &Node, shared: &Shared, peer: &NetPeer, units: Option<&[String]>) -> Result<()> {
     let reports = node.engine.sync_from_queue(peer, units, PullOptions::default(), &SharedQueue(shared))?;
     let mut applied = Vec::new();
+    let mut changed = Vec::new();
     for r in &reports {
         match &r.outcome {
             Outcome::Applied => {
-                tracing::info!(
-                    unit = %r.unit, writes = r.writes, deletes = r.deletes, conflicts = r.conflicts,
-                    fetched = r.bytes_fetched, deduped = r.bytes_deduped, converged = r.converged, "applied"
-                );
+                if r.changed {
+                    tracing::info!(
+                        unit = %r.unit, writes = r.writes, deletes = r.deletes, conflicts = r.conflicts,
+                        fetched = r.bytes_fetched, deduped = r.bytes_deduped, converged = r.converged, "applied"
+                    );
+                    changed.push(r.unit.clone());
+                }
                 applied.push(r.unit.clone());
                 if r.skipped > 0 {
                     // Files that changed on the peer during the transfer.
@@ -977,7 +981,11 @@ fn pull(node: &Node, shared: &Shared, peer: &NetPeer, units: Option<&[String]>) 
     }
     if !applied.is_empty() {
         refresh_units(node, shared);
-        peer.notify_changed(applied)?;
+    }
+    // Only what changed: telling the peer about a pull that did nothing makes
+    // it pull back, and a unit that cannot converge never stops bouncing.
+    if !changed.is_empty() {
+        peer.notify_changed(changed)?;
     }
     Ok(())
 }

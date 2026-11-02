@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS conflicts (
     resolution TEXT
 );
 CREATE INDEX IF NOT EXISTS conflicts_open ON conflicts(unit, path) WHERE resolved_ms IS NULL;
+CREATE TABLE IF NOT EXISTS trashed (
+    path TEXT PRIMARY KEY,
+    blob BLOB NOT NULL,
+    at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS trashed_blob ON trashed(blob);
 CREATE TABLE IF NOT EXISTS peers (
     device TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -488,6 +494,33 @@ impl Store {
             .query_map([blob.0.to_vec()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    /// Remember that a file with this content now lies at `path` in the
+    /// trash, so a moved file is taken from there instead of the network.
+    pub fn record_trashed(&self, path: &str, blob: &Hash) -> Result<()> {
+        self.conn
+            .prepare_cached("INSERT OR REPLACE INTO trashed (path, blob, at_ms) VALUES (?1, ?2, ?3)")?
+            .execute(params![path, blob.0.to_vec(), now_ms()])?;
+        Ok(())
+    }
+
+    /// Trash paths that held this content when they were trashed (newest first).
+    pub fn find_trashed(&self, blob: &Hash) -> Result<Vec<String>> {
+        let mut st =
+            self.conn.prepare_cached("SELECT path FROM trashed WHERE blob = ?1 ORDER BY at_ms DESC LIMIT 8")?;
+        let rows = st.query_map([blob.0.to_vec()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(rows)
+    }
+
+    pub fn forget_trashed(&self, path: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM trashed WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
+    /// Forget trash rows older than `cutoff_ms` (the files are gone by then).
+    pub fn prune_trashed(&self, cutoff_ms: i64) -> Result<usize> {
+        Ok(self.conn.execute("DELETE FROM trashed WHERE at_ms < ?1", [cutoff_ms])?)
     }
 
     /// Remove tombstones older than `cutoff_ms` in `unit`.

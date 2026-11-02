@@ -439,6 +439,7 @@ impl Engine {
             }
         }
         let store = self.store();
+        store.prune_trashed(trash_cutoff)?;
         let tomb_cutoff = now - self.cfg.tombstone_ttl_days as i64 * day;
         for u in in_sync_units {
             store.purge_tombstones(u, tomb_cutoff)?;

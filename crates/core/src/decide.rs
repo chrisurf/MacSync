@@ -138,12 +138,22 @@ fn concurrent(
     merged: VersionVector,
     me: &str,
 ) -> Decision {
-    // Modify vs. delete: the modification always wins (avoid data loss).
+    // Modify vs. delete: the modification wins (avoid data loss) – unless it
+    // is exactly what was deleted, e.g. the same file created on both Macs
+    // independently. Then nothing is lost and the deletion goes through.
     if remote.deleted && !local.deleted {
-        return Decision::AdoptVv(merged);
+        return if remote.deleted_state() == Some(local.state_hash()) {
+            Decision::TakeRemote(merged)
+        } else {
+            Decision::AdoptVv(merged)
+        };
     }
     if local.deleted && !remote.deleted {
-        return Decision::TakeRemote(merged);
+        return if local.deleted_state() == Some(remote.state_hash()) {
+            Decision::AdoptVv(merged)
+        } else {
+            Decision::TakeRemote(merged)
+        };
     }
 
     // Classes that can be merged or tie-broken deterministically.
@@ -203,9 +213,7 @@ mod tests {
     }
 
     fn deleted(vv: &[(&str, u64)]) -> Entry {
-        let mut e = file("", vv);
-        e.deleted = true;
-        e
+        Entry::tombstone("f", Kind::File, VersionVector(vv.iter().map(|(k, v)| (k.to_string(), *v)).collect()))
     }
 
     const TW: Policy = Policy::TwoWay(Prefer::None);
@@ -248,6 +256,21 @@ mod tests {
         let b = decide(Some(&gone), &modified, None, TW, "B");
         assert!(matches!(a, Decision::AdoptVv(_)));
         assert!(matches!(b, Decision::TakeRemote(_)));
+    }
+
+    #[test]
+    fn deletion_beats_an_identical_independent_copy_on_both_sides() {
+        // Created on both Macs independently, then deleted on A.
+        let copy = file("same", &[("B", 1)]);
+        let gone = Entry::deletion_of(&file("same", &[("A", 1)]), VersionVector::single("A", 2));
+        let a = decide(Some(&gone), &copy, None, TW, "A");
+        let b = decide(Some(&copy), &gone, None, TW, "B");
+        assert_eq!(a, Decision::AdoptVv(gone.vv.merge(&copy.vv)));
+        assert_eq!(b, Decision::TakeRemote(gone.vv.merge(&copy.vv)));
+        // A different copy still wins.
+        let other = file("other", &[("B", 1)]);
+        assert!(matches!(decide(Some(&other), &gone, None, TW, "B"), Decision::AdoptVv(_)));
+        assert!(matches!(decide(Some(&gone), &other, None, TW, "A"), Decision::TakeRemote(_)));
     }
 
     #[test]
@@ -328,7 +351,7 @@ mod tests {
             if let Decision::TakeRemote(_) = d {
                 let ord = a.vv.compare(&b.vv);
                 prop_assert!(
-                    ord == Ordering::Dominated || a.deleted || a.same_state(&b),
+                    ord == Ordering::Dominated || a.deleted || a.same_state(&b) || b.deleted_state() == Some(a.state_hash()),
                     "lost {:?} for {:?}", a, b
                 );
             }

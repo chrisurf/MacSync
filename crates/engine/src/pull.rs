@@ -75,6 +75,10 @@ pub struct PullReport {
     /// Files left out because they changed on the peer during the transfer;
     /// the rest was applied, these follow in the next round.
     pub skipped: usize,
+    /// True if the pull changed anything here (files, rows or new conflicts).
+    /// Only then is the peer told: a unit that cannot converge (an open
+    /// conflict) would otherwise bounce between the two Macs forever.
+    pub changed: bool,
 }
 
 impl PullReport {
@@ -98,6 +102,7 @@ impl PullReport {
             converged: false,
             timings_ms: Vec::new(),
             skipped: 0,
+            changed: false,
         }
     }
 }
@@ -562,7 +567,7 @@ impl Engine {
                                     kind: OpKind::Delete,
                                     phase: if is_obj { Phase::ObjectDeletes } else { Phase::Deletes },
                                     rank: rank_of(class),
-                                    entry: Entry::tombstone(&path, s.entry.kind, vv),
+                                    entry: Entry::deletion_of(&s.entry, vv),
                                     staged: None,
                                     source: None,
                                     reason: reason.clone(),
@@ -571,7 +576,7 @@ impl Engine {
                             }
                             None => {
                                 let disk = l.map(|s| s.disk.clone()).unwrap_or_else(|| path.clone());
-                                plan.ops.push(db_op(&path, &disk, Entry::tombstone(&path, e.kind, vv), "tombstone"));
+                                plan.ops.push(db_op(&path, &disk, Entry { vv, ..e }, "tombstone"));
                             }
                         }
                         continue;
@@ -672,6 +677,7 @@ impl Engine {
             })
             .count();
         rep.deletes = plan.ops.iter().filter(|o| o.kind == OpKind::Delete).count();
+        rep.changed = !plan.ops.is_empty() || !plan.conflicts.is_empty();
         rep.conflicts = plan.conflicts.len()
             + plan
                 .actions
@@ -1066,14 +1072,22 @@ impl Engine {
 
     /// Try to materialise a blob from a local copy (copy-on-write clone where
     /// supported). The copy is verified before use.
+    /// Take the content from a local copy instead of the network: a live
+    /// file anywhere in the root, or one this Mac just moved to the trash
+    /// (a folder moved on the other Mac arrives as deletion plus creation).
+    /// The trash keeps its copy; APFS clones cost neither time nor space.
     fn dedup_local(&self, hash: &Hash, dest: &Path) -> Result<bool> {
-        let candidates = self.store().find_blob(hash)?;
-        for (unit, _path, disk) in candidates {
-            let src = macsync_fs::abs_path(&self.cfg.root, &unit, &disk);
+        let live = self.store().find_blob(hash)?;
+        let live = live.into_iter().map(|(unit, _, disk)| (macsync_fs::abs_path(&self.cfg.root, &unit, &disk), false));
+        let trashed = self.store().find_trashed(hash)?.into_iter().map(|p| (PathBuf::from(p), true));
+        for (src, in_trash) in live.chain(trashed) {
             if ops::clone_or_copy(&src, dest).is_ok() && ops::hash_file(dest).ok() == Some(*hash) {
                 return Ok(true);
             }
             let _ = std::fs::remove_file(dest);
+            if in_trash {
+                let _ = self.store().forget_trashed(&src.to_string_lossy());
+            }
         }
         Ok(false)
     }

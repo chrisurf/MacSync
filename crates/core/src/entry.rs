@@ -119,6 +119,28 @@ impl Entry {
         }
     }
 
+    /// Tombstone for the deletion of `prev`. It keeps what was deleted (kind,
+    /// content, attributes), so that a copy on the other Mac that is merely
+    /// concurrent but identical goes as well. None of it is part of the state
+    /// hash: all tombstones stay equal.
+    pub fn deletion_of(prev: &Entry, vv: VersionVector) -> Entry {
+        Entry { size: 0, mtime_ns: 0, deleted: true, vv, ..prev.clone() }
+    }
+
+    /// For a tombstone: the state hash of what it deleted, if it knows.
+    /// Tombstones written before 0.5.0 do not.
+    pub fn deleted_state(&self) -> Option<Hash> {
+        if !self.deleted {
+            return None;
+        }
+        let known = match self.kind {
+            Kind::File => self.cmp.or(self.blob).is_some(),
+            Kind::Symlink => self.target.is_some(),
+            Kind::Dir => self.mode != 0,
+        };
+        known.then(|| Entry { deleted: false, ..self.clone() }.state_hash())
+    }
+
     /// Hash of everything that constitutes the *state* of this entry, excluding
     /// its name, timestamps and version vector. Two entries with the same state
     /// hash are interchangeable.
@@ -243,6 +265,18 @@ mod tests {
         b.cmp = Some(sem);
         assert!(a.same_state(&b));
         assert!(!a.same_content(&b));
+    }
+
+    #[test]
+    fn deletion_remembers_what_it_deleted() {
+        let mut a = file("a", b"x");
+        a.vv.increment("A");
+        let t = Entry::deletion_of(&a, VersionVector::single("A", 2));
+        assert!(t.deleted && t.same_state(&Entry::tombstone("a", Kind::File, VersionVector::new())));
+        assert_eq!(t.state_hash(), Entry::tombstone("a", Kind::Dir, VersionVector::new()).state_hash());
+        assert_eq!(t.deleted_state(), Some(a.state_hash()));
+        assert_eq!(Entry::tombstone("a", Kind::File, VersionVector::new()).deleted_state(), None);
+        assert_eq!(a.deleted_state(), None);
     }
 
     #[test]

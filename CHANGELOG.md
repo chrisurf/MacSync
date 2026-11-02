@@ -114,6 +114,16 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Verschobene oder umbenannte Ordner und Repositories werden nicht neu
+  übertragen: Der andere Mac nimmt den Inhalt aus seinem MacSync-Papierkorb
+  (APFS-Klon), statt ihn erneut zu laden. 2 GB dauern Sekunden statt Minuten
+- Gelöschte Dateien kommen nicht zurück, wenn der andere Mac sie mit gleichem
+  Inhalt unabhängig selbst angelegt hatte. Eine Löschung merkt sich, was sie
+  gelöscht hat, und gewinnt gegen eine identische Kopie; gegen eine andere
+  Fassung gewinnt weiter die Änderung
+- Keine Endlosschleife mehr bei Einheiten, die nicht abgleichbar sind (offene
+  Konflikte): Ein Mac meldet dem anderen nur noch Abgleiche, die etwas
+  geändert haben. Das spart Rechenzeit auf beiden Macs
 - Ein auf einem Mac gelöschter Ordner wird auf dem anderen als Ganzes
   gelöscht, auch mit Build-Ordnern (`target`, `node_modules`, …), `.DS_Store`
   und anderem, was nie synchronisiert wird – alles in den MacSync-Papierkorb.

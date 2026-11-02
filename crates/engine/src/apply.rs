@@ -203,8 +203,11 @@ impl Engine {
                 };
                 if md.is_dir() {
                     self.delete_dir(unit, &op.disk, trash)?;
-                } else {
-                    ops::move_to_trash(&target, trash, &trash_rel)?;
+                } else if let Some(dest) = ops::move_to_trash(&target, trash, &trash_rel)? {
+                    // Moved on the other Mac: the new place takes it from here.
+                    if let Some(b) = e.blob.filter(|_| md.is_file()) {
+                        let _ = self.store().record_trashed(&dest.to_string_lossy(), &b);
+                    }
                 }
             }
         }
