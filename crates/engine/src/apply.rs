@@ -74,6 +74,16 @@ impl Engine {
             if fs::metadata(p).is_ok_and(|m| m.len() == 0) {
                 let _ = fs::remove_file(p);
             }
+            // Deleting a whole repository: `.git` and the unit directory could
+            // not go while our lock was inside. Retry them, deepest first.
+            let mut dirs: Vec<&Op> =
+                plan.ops.iter().filter(|o| o.kind == OpKind::Delete && o.entry.kind == Kind::Dir).collect();
+            dirs.sort_by_key(|o| std::cmp::Reverse(macsync_core::path::depth(&o.disk)));
+            for op in dirs {
+                if !self.behind_symlink(&plan.unit, &op.disk) {
+                    let _ = fs::remove_dir(macsync_fs::abs_path(&self.cfg.root, &plan.unit, &op.disk));
+                }
+            }
         }
         Ok(())
     }

@@ -1112,7 +1112,11 @@ impl Engine {
     fn post_apply(&self, plan: &Plan, rep: &mut PullReport) -> Result<()> {
         let unit = plan.unit.as_str();
         let unit_dir = macsync_fs::unit_dir(&self.cfg.root, unit);
-        let is_git = plan.unit_kind == UnitKind::Git && macsync_gitaware::resolve_git_dir(&unit_dir).is_some();
+        // Without HEAD the repository was removed (moved or deleted as a
+        // whole), not damaged: fsck would fail and the object restore below
+        // would resurrect a bare `.git/objects` that never goes away.
+        let is_git = plan.unit_kind == UnitKind::Git
+            && macsync_gitaware::resolve_git_dir(&unit_dir).is_some_and(|d| d.join("HEAD").exists());
         let touched_tree = plan.ops.iter().any(|o| o.kind != OpKind::DbOnly && !o.path.starts_with(".git/"));
         let touched_index = plan.ops.iter().any(|o| o.phase == Phase::Index);
         let touched_objects = plan.ops.iter().any(|o| {

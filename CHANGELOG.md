@@ -114,6 +114,12 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Ein verschobenes oder gelöschtes Repository blieb als `.git/objects` stehen
+  und ließ sich nicht mehr löschen: MacSyncs eigene `index.lock` hielt `.git`
+  belegt, und `git fsck` auf dem Rest („not a git repository“) holte die
+  Objekte aus dem Papierkorb zurück – auf beiden Macs im Wechsel. Leere Ordner
+  werden nach dem Freigeben der Sperre entfernt; ohne `.git/HEAD` gilt das
+  Repository als entfernt, nicht als beschädigt
 - Ausschluss per Muster (`excludes = ["**/target"]`) wertete die Dateien im
   ausgeschlossenen Ordner beim nächsten Scan als gelöscht und hätte sie auf
   dem anderen Mac gelöscht; jetzt werden sie nur vergessen

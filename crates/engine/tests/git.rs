@@ -304,3 +304,53 @@ fn git_config_changes_are_reported() {
     let app = items.iter().find(|i| i.unit == "app" && i.is_unit).unwrap();
     assert_eq!(app.git_notice.as_ref().map(|n| n.path.as_str()), Some(".git/config"));
 }
+
+#[test]
+fn deleted_repository_stays_deleted() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("app");
+    init_repo(&a);
+    // Loose and packed objects, as in a real repository.
+    git(&a, &["gc", "-q"]);
+    write(&a, "loose.txt", "loose");
+    git(&a, &["add", "loose.txt"]);
+    git(&a, &["commit", "-qm", "loose"]);
+    p.sync();
+    let b = p.rb().join("app");
+    assert_fsck(&b);
+
+    // Moving the repository elsewhere removes it here as a whole.
+    fs::create_dir_all(p.ra().join("moved")).unwrap();
+    fs::rename(&a, p.ra().join("moved/app")).unwrap();
+    p.sync();
+    p.sync();
+    assert!(!a.exists());
+    assert!(!b.exists(), "left over on B: {:?}", snapshot(&b).keys().take(5).collect::<Vec<_>>());
+    assert_fsck(&p.rb().join("moved/app"));
+    p.assert_identical();
+}
+
+#[test]
+fn deleted_repository_is_not_restored_around_local_git_files() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("app");
+    init_repo(&a);
+    p.sync();
+    let b = p.rb().join("app");
+    // Never synchronised, so `.git` on B cannot be removed with the rest.
+    write(&b, ".git/fsmonitor--daemon/cookies/1", "");
+
+    fs::remove_dir_all(&a).unwrap();
+    p.sync();
+    p.sync();
+    // HEAD is gone: the repository was removed, not damaged. Its objects must
+    // not be restored from the trash (they would come back forever).
+    assert!(
+        !b.join(".git/objects").exists(),
+        "objects restored: {:?}",
+        snapshot(&b).keys().take(5).collect::<Vec<_>>()
+    );
+    assert!(!a.join(".git/objects").exists());
+}
