@@ -117,6 +117,10 @@ mit 0.5 verbinden sich nicht miteinander.
 - Verschobene oder umbenannte Ordner und Repositories werden nicht neu
   übertragen: Der andere Mac nimmt den Inhalt aus seinem MacSync-Papierkorb
   (APFS-Klon), statt ihn erneut zu laden. 2 GB dauern Sekunden statt Minuten
+- Git-Repositories in einem verschobenen Ordner werden sofort als gelöscht
+  erfasst. macOS meldet beim Verschieben nur den Ordner selbst; die Repos
+  darin blieben bis zur Nachkontrolle (bis zu 10 Minuten) auf dem anderen Mac
+  stehen und mit ihnen der alte Ordner
 - Gelöschte Dateien kommen nicht zurück, wenn der andere Mac sie mit gleichem
   Inhalt unabhängig selbst angelegt hatte. Eine Löschung merkt sich, was sie
   gelöscht hat, und gewinnt gegen eine identische Kopie; gegen eine andere

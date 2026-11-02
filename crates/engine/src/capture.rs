@@ -267,6 +267,14 @@ impl Engine {
         }
         report.root = self.invalidate_tree(unit)?;
         report.nested = res.nested_units.iter().map(|n| macsync_fs::root_rel(unit, n)).collect();
+        // Moving a folder reports only the folder itself: repositories inside
+        // that vanished with it must be captured too, or the other Mac keeps
+        // them (and with them the folder).
+        for n in nested_known {
+            if !report.nested.contains(&n) && std::fs::symlink_metadata(macsync_fs::unit_dir(root, &n)).is_err() {
+                report.nested.push(n);
+            }
+        }
         Ok(report)
     }
 

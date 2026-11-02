@@ -122,3 +122,32 @@ fn moved_repository_is_not_transferred_again() {
     assert_fsck(&p.rb().join("github/chrisurf/app"));
     assert_eq!(read(&p.rb(), "chrisurf/notes.md"), "stays");
 }
+
+/// Moving a folder reports only the folder itself (FSEvents). Repositories
+/// inside it are units of their own and must be captured as gone as well –
+/// like the daemon does it: scan the folder, then what it reports as nested.
+#[test]
+fn repository_inside_a_moved_folder_is_captured_as_gone() {
+    if !git_available() {
+        return;
+    }
+    let p = Pair::new();
+    write(&p.ra(), "reviews/README.md", "reviews");
+    init_repo(&p.ra().join("reviews/targets/grid"));
+    p.sync();
+    assert!(p.rb().join("reviews/targets/grid/.git").exists());
+
+    std::fs::create_dir_all(p.ra().join("github")).unwrap();
+    std::fs::rename(p.ra().join("reviews"), p.ra().join("github/reviews")).unwrap();
+    let mut queue = vec!["reviews".to_string()];
+    while let Some(u) = queue.pop() {
+        let r = p.a.scan_unit(&u, &Default::default()).unwrap();
+        queue.extend(r.nested);
+    }
+    let live = p.a.store().entries("reviews/targets/grid").unwrap().into_iter().filter(|s| !s.entry.deleted).count();
+    assert_eq!(live, 0, "repository inside the moved folder not captured as gone");
+    p.sync();
+    assert!(!p.rb().join("reviews").exists(), "old place kept on the other Mac");
+    assert!(p.rb().join("github/reviews/targets/grid/.git").exists());
+    p.assert_identical();
+}
