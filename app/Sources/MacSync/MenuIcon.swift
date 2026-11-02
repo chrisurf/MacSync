@@ -19,7 +19,7 @@ enum MenuIcon {
 
     static func image(for state: SyncState, frame: Int = 0) -> NSImage {
         let badge: Badge = switch state {
-        case .inSync: Badge(color: .systemGreen, glyph: "checkmark")
+        case .inSync, .pending: Badge(color: .systemGreen, glyph: "checkmark")
         case .syncing, .starting: Badge(color: .systemBlue, glyph: "ellipsis")
         case .paused: Badge(color: .systemOrange, glyph: "pause.fill")
         case .offline: Badge(color: .systemOrange, glyph: "exclamationmark")

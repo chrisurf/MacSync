@@ -4,7 +4,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -232,6 +232,9 @@ pub(crate) struct Shared {
     wake: (Mutex<bool>, Condvar),
     stop: AtomicBool,
     paused: AtomicBool,
+    /// A capture or pull is running right now (for the menu: "syncing"
+    /// means work is being done, not merely that a unit differs).
+    busy: AtomicUsize,
     units: RwLock<Vec<String>>,
     peer: Mutex<Option<Arc<NetPeer>>>,
     /// A second connection for the manager's status requests, so they never
@@ -360,6 +363,7 @@ impl Daemon {
             wake: (Mutex::new(false), Condvar::new()),
             stop: AtomicBool::new(false),
             paused: AtomicBool::new(node.engine.store().kv("paused_all")?.as_deref() == Some("1")),
+            busy: AtomicUsize::new(0),
             units: RwLock::new(Vec::new()),
             peer: Mutex::new(None),
             browse_peer: Mutex::new(None),
@@ -803,6 +807,7 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
                 .collect()
         };
         let mut changed = Vec::new();
+        let _busy = (!ready.is_empty()).then(|| Busy::new(&shared));
         for (unit, gen, overdue) in ready {
             let still = || shared.dirty_gen(&unit) == Some(gen);
             let opts = ScanOptions { full: false, still_quiet: if overdue { None } else { Some(&still) } };
@@ -941,7 +946,24 @@ fn scheduler(node: Arc<Node>, shared: Arc<Shared>) {
     }
 }
 
+/// Marks the daemon busy while alive.
+struct Busy<'a>(&'a Shared);
+
+impl<'a> Busy<'a> {
+    fn new(s: &'a Shared) -> Busy<'a> {
+        s.busy.fetch_add(1, Ordering::SeqCst);
+        Busy(s)
+    }
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.busy.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn pull(node: &Node, shared: &Shared, peer: &NetPeer, units: Option<&[String]>) -> Result<()> {
+    let _busy = Busy::new(shared);
     let reports = node.engine.sync_from_queue(peer, units, PullOptions::default(), &SharedQueue(shared))?;
     let mut applied = Vec::new();
     let mut changed = Vec::new();
@@ -1004,6 +1026,9 @@ fn anti_entropy(node: &Node, shared: &Shared, peer: &NetPeer) -> Result<()> {
         ps.last_contact_ms = macsync_fs::time::now_ms();
     }
     for r in &remote {
+        if node.engine.unit_excluded(&r.name) {
+            continue;
+        }
         if local.get(&r.name) != Some(&r.root) && !dirty.contains(&r.name) {
             if !pending.contains(&r.name) {
                 let _ = node.engine.store().log(&r.name, "drift", "", "root differs from peer during anti-entropy", "");
@@ -1031,6 +1056,12 @@ impl Daemon {
         let mut v = node.status(Some(&remote), &shared.dirty_set())?;
         v["daemon"] = json!(true);
         v["paused"] = json!(shared.paused.load(Ordering::SeqCst));
+        // Work in progress or due: captures waiting for quiet, units the
+        // peer reported as changed, a running capture or pull.
+        let queued = shared.dirty.lock().unwrap_or_else(|e| e.into_inner()).len()
+            + shared.pending.lock().unwrap_or_else(|e| e.into_inner()).len();
+        v["queued"] = json!(queued);
+        v["busy"] = json!(shared.busy.load(Ordering::SeqCst) > 0);
         v["peer_online"] = json!(online);
         v["peer_last_contact"] = json!(if last > 0 { Some(macsync_fs::time::rfc3339(last)) } else { None });
         v["peer_error"] = json!(if err.is_empty() { None } else { Some(err) });

@@ -57,7 +57,13 @@ struct MenuContent: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        Text(statusLine)
+        Text(model.state.runLine)
+        if let line = statusLine {
+            Text(line)
+        }
+        if let n = pausedUnits, n > 0 {
+            Text(n == 1 ? "1 Ordner einzeln pausiert" : "\(n) Ordner einzeln pausiert")
+        }
         if let a = model.activity {
             Text(a.summary(peer: model.status?.peer?.name ?? "anderer Mac"))
         }
@@ -107,11 +113,26 @@ struct MenuContent: View {
             .keyboardShortcut("q")
     }
 
-    private var statusLine: String {
-        var s = model.state.title
-        if model.state == .inSync, let d = model.status?.lastSync {
-            s += " · " + RelativeDateTimeFormatter().localizedString(for: d, relativeTo: Date())
+    /// What is happening while it runs (the first line says whether it runs).
+    private var statusLine: String? {
+        switch model.state {
+        case .notConfigured, .starting, .paused:
+            return nil
+        case .stopped(let why):
+            return why.isEmpty ? "Starten, um wieder abzugleichen" : why
+        case .inSync:
+            var s = "Synchron"
+            if let d = model.status?.lastSync {
+                s += " · zuletzt " + RelativeDateTimeFormatter().localizedString(for: d, relativeTo: Date())
+            }
+            return s
+        default:
+            return model.state.title
         }
-        return s
+    }
+
+    private var pausedUnits: Int? {
+        guard model.state != .paused else { return nil }
+        return model.status?.units.filter(\.paused).count
     }
 }

@@ -68,6 +68,14 @@ impl Engine {
 
     fn scan_unit_inner(&self, unit: &str, opts: &ScanOptions<'_>) -> Result<ScanReport> {
         let root = &self.cfg.root;
+        if self.unit_excluded(unit) {
+            // Forgotten like any excluded path: no tombstones, files stay.
+            if self.store().unit(unit)?.is_some() {
+                self.store().retire_unit(unit)?;
+                let _ = self.store().log(unit, "skip", "", "inside a folder that is not synchronised", "");
+            }
+            return Ok(ScanReport { unit: unit.to_string(), ..Default::default() });
+        }
         let known = self.store().unit(unit)?;
         let kind = scan::unit_kind_on_disk(root, unit).or(known.as_ref().map(|u| u.kind)).unwrap_or(UnitKind::Folder);
         if known.as_ref().is_none_or(|u| u.kind != kind) {

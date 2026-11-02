@@ -57,6 +57,9 @@ struct Status: Decodable {
 
     var units: [Unit]
     var version: String?
+    /// The daemon is capturing or pulling right now / has work due.
+    var busy: Bool?
+    var queued: Int?
     /// Content transfer in progress (this Mac receives).
     var transfer: Transfer?
     /// Bytes served to the other Mac so far, and when the last ones went out.
@@ -129,7 +132,7 @@ struct Activity: Equatable {
 }
 
 enum SyncState: Equatable {
-    case notConfigured, starting, stopped(String), paused, conflict(Int), offline, syncing, inSync
+    case notConfigured, starting, stopped(String), paused, conflict(Int), offline, syncing, pending(Int), inSync
 
     var title: String {
         switch self {
@@ -140,7 +143,26 @@ enum SyncState: Equatable {
         case .conflict(let n): return n == 1 ? "1 Konflikt" : "\(n) Konflikte"
         case .offline: return "Anderer Mac nicht erreichbar"
         case .syncing: return "Wird synchronisiert …"
+        case .pending(let n): return n == 1 ? "1 Ordner noch nicht abgeglichen" : "\(n) Ordner noch nicht abgeglichen"
         case .inSync: return "Synchron"
+        }
+    }
+}
+
+extension SyncState {
+    var isPending: Bool {
+        if case .pending = self { return true }
+        return false
+    }
+
+    /// Whether the background synchronisation runs at all.
+    var runLine: String {
+        switch self {
+        case .notConfigured: return "Nicht eingerichtet"
+        case .starting: return "Synchronisation startet …"
+        case .stopped: return "■ Synchronisation gestoppt"
+        case .paused: return "❙❙ Synchronisation pausiert"
+        default: return "▶︎ Synchronisation läuft"
         }
     }
 }
@@ -254,7 +276,7 @@ final class AppModel: ObservableObject {
         replaceOutdatedDaemon()
         activity = fromDaemon != nil ? measure(s) : nil
         state = Self.state(s, daemonRunning: fromDaemon != nil, starting: running, exit: daemon.lastExit)
-        if state == .inSync || state == .offline, activity != nil { state = .syncing }
+        if activity != nil, state == .inSync || state == .offline || state.isPending { state = .syncing }
         updateSpin()
         notifyConflicts(s?.conflicts ?? 0)
     }
@@ -327,8 +349,12 @@ final class AppModel: ObservableObject {
         if s.conflicts > 0 { return .conflict(s.conflicts) }
         if s.peer == nil { return .notConfigured }
         if s.peerOnline != true { return .offline }
-        if s.units.contains(where: { $0.state != "in sync" }) { return .syncing }
-        return .inSync
+        // A unit that differs is not yet work in progress: the daemon says
+        // whether it is capturing or pulling (older daemons do not).
+        let open = s.units.filter { !$0.paused && $0.state != "in sync" && $0.state != "paused" }.count
+        guard let busy = s.busy else { return open > 0 ? .syncing : .inSync }
+        if busy || (s.queued ?? 0) > 0 { return .syncing }
+        return open > 0 ? .pending(open) : .inSync
     }
 
     // MARK: actions

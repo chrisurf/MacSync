@@ -114,6 +114,16 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Menü zeigt klar, ob die Synchronisation läuft, pausiert oder gestoppt ist
+  (eigene erste Zeile), und darunter, was gerade passiert. „Wird
+  synchronisiert …“ erscheint nur noch, während MacSync wirklich erfasst oder
+  abgleicht; Ordner, die nur noch nicht abgeglichen sind, werden als solche
+  gezählt, einzeln pausierte Ordner eigens genannt. Vorher stand dort
+  dauerhaft „Wird synchronisiert …“, sobald irgendein Ordner abwich
+- Git-Repositories in einem nicht synchronisierten Build-Ordner (z. B.
+  `.build/checkouts/…`), die schon vorher bekannt waren, werden vergessen
+  (Dateien bleiben). Sie wurden halb behandelt und galten für immer als
+  „nicht synchron“
 - Verschobene oder umbenannte Ordner und Repositories werden nicht neu
   übertragen: Der andere Mac nimmt den Inhalt aus seinem MacSync-Papierkorb
   (APFS-Klon), statt ihn erneut zu laden. 2 GB dauern Sekunden statt Minuten

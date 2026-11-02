@@ -159,7 +159,7 @@ impl Engine {
             return Ok(Vec::new());
         }
         let mut remote = peer.roots()?;
-        remote.retain(|r| crate::validate_unit_name(&r.name).is_ok());
+        remote.retain(|r| crate::validate_unit_name(&r.name).is_ok() && !self.unit_excluded(&r.name));
         remote.sort_by(|a, b| a.name.cmp(&b.name));
         let names: BTreeSet<String> = remote.iter().map(|r| r.name.clone()).collect();
         let mut todo: VecDeque<&UnitRoot> =
@@ -172,7 +172,9 @@ impl Engine {
                 todo.retain(|r| r.name != first);
                 // Fresh root: the list above may be old after a long round.
                 let fresh = peer.roots()?.into_iter().find(|r| r.name == first);
-                if let Some(r) = fresh.filter(|r| crate::validate_unit_name(&r.name).is_ok()) {
+                if let Some(r) =
+                    fresh.filter(|r| crate::validate_unit_name(&r.name).is_ok() && !self.unit_excluded(&r.name))
+                {
                     let rep = self.pull_with_names(peer, &r, &names, opts);
                     queue.done(&first);
                     reports.push(rep);

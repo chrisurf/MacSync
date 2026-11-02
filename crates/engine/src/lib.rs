@@ -387,6 +387,9 @@ impl Engine {
         let units = self.store().units()?;
         let mut out = Vec::with_capacity(units.len());
         for u in units {
+            if self.unit_excluded(&u.name) {
+                continue;
+            }
             let root = match u.root {
                 Some(r) => r,
                 None => self.invalidate_tree(&u.name)?,
@@ -394,6 +397,13 @@ impl Engine {
             out.push(UnitRoot { name: u.name, kind: u.kind, root });
         }
         Ok(out)
+    }
+
+    /// A repository inside a folder that is not synchronised (a build folder
+    /// switched off in the settings) is not synchronised either. Known from
+    /// before, it would stay half handled forever: listed, never in sync.
+    pub fn unit_excluded(&self, unit: &str) -> bool {
+        unit != macsync_core::entry::ROOT_UNIT && self.cfg.excludes.is_excluded_path(unit)
     }
 
     fn private_dir(&self) -> PathBuf {

@@ -215,3 +215,32 @@ fn deleted_folder_keeps_new_work_of_the_other_mac() {
     let kept = [a.root(), b.root()].iter().any(|r| r.join("docs/new.md").exists());
     assert!(kept, "new work lost");
 }
+
+/// A repository inside a build folder (`.build/checkouts/…`, a crate in
+/// `target/`) that was a unit before the folder was switched off: forgotten
+/// on both Macs, files kept, never listed as "not in sync" again.
+#[test]
+fn repository_inside_a_switched_off_build_folder_is_forgotten() {
+    if !git_available() {
+        return;
+    }
+    let p = Pair::new();
+    write(&p.ra(), "rs/Cargo.toml", "[package]");
+    init_repo(&p.ra().join("rs/target/checkouts/dep"));
+    p.sync();
+    assert!(p.b.store().unit("rs/target/checkouts/dep").unwrap().is_some());
+    let base = p.dir.path().to_path_buf();
+    drop(p.a);
+    drop(p.b);
+    let (a, b) = (reopen(&base, "devA", &["rust"]), reopen(&base, "devB", &["rust"]));
+    a.scan_all(false).unwrap();
+    b.scan_all(false).unwrap();
+    for e in [&a, &b] {
+        assert!(e.store().unit("rs/target/checkouts/dep").unwrap().is_none());
+        assert!(e.root().join("rs/target/checkouts/dep/.git").exists(), "files stay");
+        assert!(e.local_roots().unwrap().iter().all(|r| !r.name.contains("target")));
+    }
+    let r = b.sync_from(&a, None, PullOptions::default()).unwrap();
+    assert!(r.iter().all(|r| !r.unit.contains("target")), "{r:?}");
+    assert_eq!(a.local_roots().unwrap(), b.local_roots().unwrap());
+}
