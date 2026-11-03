@@ -57,6 +57,17 @@ pub fn status(v: &Value) {
             s(&u["last_sync"])
         );
     }
+    for u in v["units"].as_array().into_iter().flatten() {
+        if let (Some(need), Some(free)) = (u["no_space"]["need"].as_u64(), u["no_space"]["free"].as_u64()) {
+            println!(
+                "\n⚠ {}: not enough free space on this Mac: needs {}, {} free. Free up {} – sync resumes by itself.",
+                s(&u["name"]),
+                bytes(need),
+                bytes(free),
+                bytes(need.saturating_sub(free))
+            );
+        }
+    }
 }
 
 pub fn reports(v: &Value, dry_run: bool) {

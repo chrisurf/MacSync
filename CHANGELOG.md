@@ -114,6 +114,11 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Ordner, der auf diesem Mac keinen Platz hat, blieb stumm „nicht
+  abgeglichen“: der Grund stand nur im Protokoll. Jetzt zeigen Menü
+  („⚠︎ Photos: zu wenig Speicher – nötig 141 GB, frei 15 GB …“), eine
+  Mitteilung und `macsync status` (Zustand `no space`) an, wie viel fehlt.
+  Sobald Platz frei ist, geht es von selbst weiter
 - App blieb nach dem Start bei „Startet …“ stehen, sobald der Status
   größer als 64 KB war (viele Ordner): die Ausgabe des Hilfsprogramms wurde
   erst nach seinem Ende gelesen, es wartete aber auf den Leser. Ausgabe wird

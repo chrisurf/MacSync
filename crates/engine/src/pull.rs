@@ -122,6 +122,21 @@ impl std::fmt::Display for RetryLater {
 
 impl std::error::Error for RetryLater {}
 
+/// The content of a pull does not fit on the disk; nothing was written.
+#[derive(Debug)]
+pub struct NoSpace {
+    pub need: u64,
+    pub free: u64,
+}
+
+impl std::fmt::Display for NoSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "not enough free space: need {} bytes, {} available", self.need, self.free)
+    }
+}
+
+impl std::error::Error for NoSpace {}
+
 fn retry<T>(msg: impl Into<String>) -> Result<T> {
     Err(RetryLater(msg.into()).into())
 }
@@ -242,7 +257,22 @@ impl Engine {
         names: &BTreeSet<String>,
         opts: PullOptions,
     ) -> PullReport {
-        match self.pull_locked(peer, remote, names, opts) {
+        let result = self.pull_locked(peer, remote, names, opts);
+        if !opts.dry_run {
+            let mut no_space = self.no_space.lock().unwrap_or_else(|e| e.into_inner());
+            match &result {
+                Err(e) => {
+                    if let Some(ns) = e.downcast_ref::<NoSpace>() {
+                        no_space.insert(remote.name.clone(), (ns.need, ns.free));
+                    }
+                }
+                Ok(r) if matches!(r.outcome, Outcome::InSync | Outcome::Applied) => {
+                    no_space.remove(&remote.name);
+                }
+                Ok(_) => {}
+            }
+        }
+        match result {
             Ok(r) => r,
             Err(e) => {
                 let mut r = PullReport::new(&remote.name, remote.root);
@@ -782,9 +812,9 @@ impl Engine {
 
         let total: u64 = needs.values().map(|n| n.size).sum();
         if total > 0 {
-            let free = ops::available_space(staging).unwrap_or(u64::MAX);
+            let free = self.free_space(staging).unwrap_or(u64::MAX);
             if free < total.saturating_add(64 * 1024 * 1024) {
-                anyhow::bail!("not enough free space: need {total} bytes, {free} available");
+                return Err(NoSpace { need: total.saturating_add(64 * 1024 * 1024), free }.into());
             }
         }
         let mut t = std::time::Instant::now();

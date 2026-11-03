@@ -67,6 +67,9 @@ struct MenuContent: View {
         ForEach(oldCommits, id: \.self) { line in
             Text(line)
         }
+        ForEach(noSpace, id: \.self) { line in
+            Text("⚠︎ \(line)")
+        }
         if let a = model.activity {
             Text(a.summary(peer: model.status?.peer?.name ?? "anderer Mac"))
         }
@@ -137,6 +140,11 @@ struct MenuContent: View {
     private var pausedUnits: Int? {
         guard model.state != .paused else { return nil }
         return model.status?.units.filter(\.paused).count
+    }
+
+    /// Folders that do not fit on this disk: nothing of them arrives.
+    private var noSpace: [String] {
+        (model.status?.units ?? []).compactMap(\.noSpaceLine)
     }
 
     /// Repositories where an older commit is checked out: held back, not

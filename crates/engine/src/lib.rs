@@ -23,7 +23,7 @@ mod win;
 
 pub use capture::{ScanOptions, ScanReport};
 pub use plan::{ActionKind, PlannedAction};
-pub use pull::{Outcome, PullOptions, PullQueue, PullReport, RetryLater};
+pub use pull::{NoSpace, Outcome, PullOptions, PullQueue, PullReport, RetryLater};
 pub use resolve::{Choice, ConflictView, Side};
 pub use win::WinReport;
 
@@ -178,10 +178,14 @@ pub struct Engine {
     /// Pulls per unit deferred in a row because files changed on the peer
     /// during the transfer (see `leave_out_changed`).
     churn: Mutex<HashMap<String, u32>>,
+    /// Units whose last pull did not fit on the disk: (needed, free) bytes.
+    no_space: Mutex<HashMap<String, (u64, u64)>>,
     case_insensitive: bool,
     /// Fault injection: abort the apply after this many file operations
     /// (negative = disabled).
     fault_after_ops: AtomicI64,
+    /// Free bytes reported to pulls instead of the disk's (negative = real).
+    free_space_override: AtomicI64,
     /// The transfer in progress (receiving side), for progress display.
     transfer: Mutex<Option<Transfer>>,
     /// Bytes served to the peer so far and when the last ones went out.
@@ -203,6 +207,12 @@ pub struct Transfer {
 }
 
 impl Engine {
+    /// Bytes needed and free when the last pull of `unit` did not fit on the
+    /// disk; `None` once a pull got through.
+    pub fn no_space(&self, unit: &str) -> Option<(u64, u64)> {
+        self.no_space.lock().unwrap_or_else(|e| e.into_inner()).get(unit).copied()
+    }
+
     /// The content transfer in progress, if any.
     pub fn transfer(&self) -> Option<Transfer> {
         self.transfer.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -247,8 +257,10 @@ impl Engine {
             unit_locks: Mutex::new(HashMap::new()),
             trees: Mutex::new(HashMap::new()),
             churn: Mutex::new(HashMap::new()),
+            no_space: Mutex::new(HashMap::new()),
             case_insensitive,
             fault_after_ops: AtomicI64::new(-1),
+            free_space_override: AtomicI64::new(-1),
             transfer: Mutex::new(None),
             served_bytes: AtomicU64::new(0),
             served_ms: AtomicI64::new(0),
@@ -296,6 +308,20 @@ impl Engine {
     /// Fault injection for crash tests.
     pub fn inject_crash_after(&self, ops: i64) {
         self.fault_after_ops.store(ops, AtomicOrdering::SeqCst);
+    }
+
+    /// Fault injection: pulls see `bytes` free on the disk (negative = real).
+    pub fn pretend_free_space(&self, bytes: i64) {
+        self.free_space_override.store(bytes, AtomicOrdering::SeqCst);
+    }
+
+    pub(crate) fn free_space(&self, dir: &Path) -> Option<u64> {
+        let o = self.free_space_override.load(AtomicOrdering::SeqCst);
+        if o >= 0 {
+            Some(o as u64)
+        } else {
+            macsync_fs::ops::available_space(dir).ok()
+        }
     }
 
     fn tick_fault(&self) -> Result<()> {

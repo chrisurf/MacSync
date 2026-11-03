@@ -173,10 +173,13 @@ impl Node {
             let conflicts = store.open_conflict_count(&u.name)?;
             let remote_root = remote.and_then(|m| m.get(&u.name));
             let old_commit = old_commits.get(&u.name);
+            let no_space = self.engine.no_space(&u.name);
             let state = if u.paused {
                 "paused".to_string()
             } else if old_commit.is_some() {
                 "old commit".to_string()
+            } else if no_space.is_some() {
+                "no space".to_string()
             } else if conflicts > 0 {
                 "conflict".to_string()
             } else if dirty.contains(&u.name) {
@@ -200,6 +203,7 @@ impl Node {
                 "remote_root": remote_root.map(|h| h.short()),
                 "paused": u.paused,
                 "old_commit": old_commit,
+                "no_space": no_space.map(|(need, free)| json!({"need": need, "free": free})),
                 "prefer": u.prefer.as_str(),
                 "conflicts": conflicts,
                 "entries": live,

@@ -19,6 +19,13 @@ struct Status: Decodable {
         var lastSync: String?
         var paused: Bool
         var oldCommit: String?
+        /// Set while the last pull did not fit on this Mac's disk.
+        struct NoSpace: Decodable, Equatable {
+            var need: Int64
+            var free: Int64
+        }
+
+        var noSpace: NoSpace?
     }
 
     var daemon: Bool?
@@ -132,6 +139,15 @@ struct Activity: Equatable {
     }
 }
 
+extension Status.Unit {
+    /// What is missing on this disk, or `nil` while the unit fits.
+    var noSpaceLine: String? {
+        guard let n = noSpace else { return nil }
+        return "\(name): zu wenig Speicher auf diesem Mac – nötig \(Activity.bytes(n.need)), frei \(Activity.bytes(n.free)). "
+            + "Bitte \(Activity.bytes(max(0, n.need - n.free))) freigeben, dann geht es von selbst weiter."
+    }
+}
+
 enum SyncState: Equatable {
     case notConfigured, starting, stopped(String), paused, conflict(Int), offline, syncing, pending(Int), inSync
 
@@ -193,6 +209,8 @@ final class AppModel: ObservableObject {
     private var timer: Timer?
     private var refreshing = false
     private var lastConflicts = 0
+    /// Units already reported as not fitting on the disk.
+    private var reportedNoSpace: Set<String> = []
 
     var isConfigured: Bool { FileManager.default.fileExists(atPath: Paths.config.path) }
     var config: ConfigFile? { ConfigFile.load() }
@@ -280,6 +298,7 @@ final class AppModel: ObservableObject {
         if activity != nil, state == .inSync || state == .offline || state.isPending { state = .syncing }
         updateSpin()
         notifyConflicts(s?.conflicts ?? 0)
+        notifyNoSpace(s?.units ?? [])
     }
 
     /// Current transfer with a smoothed rate from consecutive samples.
@@ -533,6 +552,20 @@ final class AppModel: ObservableObject {
         content.body = (n == 1 ? "Eine Datei wurde auf beiden Macs geändert." : "\(n) Dateien wurden auf beiden Macs geändert.")
             + " Klicken zum Anzeigen und Lösen."
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "conflicts", content: content, trigger: nil))
+    }
+
+    /// Once per unit and episode: a folder from the other Mac does not fit
+    /// on this disk, so nothing of it arrives until space is freed.
+    private func notifyNoSpace(_ units: [Status.Unit]) {
+        let now = Set(units.filter { $0.noSpace != nil }.map(\.name))
+        defer { reportedNoSpace = now }
+        for u in units where !reportedNoSpace.contains(u.name) {
+            guard let line = u.noSpaceLine else { continue }
+            let content = UNMutableNotificationContent()
+            content.title = "MacSync: Kein Speicherplatz"
+            content.body = line
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "nospace-\(u.name)", content: content, trigger: nil))
+        }
     }
 
     func requestNotificationPermission() {
