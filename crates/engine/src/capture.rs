@@ -187,11 +187,12 @@ impl Engine {
                     }
                     let mut vv = o.entry.vv.clone();
                     vv.increment(me);
-                    Some(Stored { entry: Entry { vv, ..entry }, disk: s.disk.clone(), stat, changed_ms: now })
+                    let prev = Entry::lineage_after(&o.entry);
+                    Some(Stored { entry: Entry { vv, prev, ..entry }, disk: s.disk.clone(), stat, changed_ms: now })
                 }
                 Some(o) => {
                     // Same state. Refresh stat cache, bytes hash (index) and mtime silently.
-                    let e = Entry { vv: o.entry.vv.clone(), ..entry };
+                    let e = Entry { vv: o.entry.vv.clone(), prev: o.entry.prev.clone(), ..entry };
                     if e != o.entry || o.disk != s.disk || o.stat != stat {
                         writes.push(Stored { entry: e, disk: s.disk.clone(), stat, changed_ms: o.changed_ms });
                     }
@@ -352,22 +353,27 @@ impl Engine {
                     let stat = StatCache { ino: s.ino, dev: s.dev, ctime_ns: s.ctime_ns };
                     match &old {
                         Some(o) if !o.entry.deleted && o.entry.same_state(&entry) => {
-                            let e = Entry { vv: o.entry.vv.clone(), ..entry };
+                            let e = Entry { vv: o.entry.vv.clone(), prev: o.entry.prev.clone(), ..entry };
                             if e != o.entry || o.disk != s.disk || o.stat != stat {
                                 writes.push(Stored { entry: e, disk: s.disk, stat, changed_ms: o.changed_ms });
                             }
                         }
                         _ => {
-                            let vv = match &old {
+                            let (vv, prev) = match &old {
                                 Some(o) => {
                                     let mut vv = o.entry.vv.clone();
                                     vv.increment(me);
-                                    vv
+                                    (vv, Entry::lineage_after(&o.entry))
                                 }
-                                None => VersionVector::single(me, 1),
+                                None => (VersionVector::single(me, 1), Vec::new()),
                             };
                             report.changed += 1;
-                            writes.push(Stored { entry: Entry { vv, ..entry }, disk: s.disk, stat, changed_ms: now });
+                            writes.push(Stored {
+                                entry: Entry { vv, prev, ..entry },
+                                disk: s.disk,
+                                stat,
+                                changed_ms: now,
+                            });
                         }
                     }
                 }
@@ -460,6 +466,7 @@ impl Engine {
                 link,
                 deleted: false,
                 vv: VersionVector::new(),
+                prev: Vec::new(),
             },
             hashed,
         )))

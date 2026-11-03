@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS entries (
     dev INTEGER NOT NULL DEFAULT 0,
     ctime_ns INTEGER NOT NULL DEFAULT 0,
     changed_ms INTEGER NOT NULL DEFAULT 0,
+    prev BLOB,
     PRIMARY KEY (unit, path)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS entries_blob ON entries(blob) WHERE deleted = 0;
@@ -187,12 +188,13 @@ fn read_hash(v: Option<Vec<u8>>) -> Option<Hash> {
 }
 
 const ENTRY_COLS: &str =
-    "path, disk, kind, mode, size, mtime_ns, blob, cmp, target, xattrs, flags, link, deleted, vv, ino, dev, ctime_ns, changed_ms";
+    "path, disk, kind, mode, size, mtime_ns, blob, cmp, target, xattrs, flags, link, deleted, vv, ino, dev, ctime_ns, changed_ms, prev";
 
 fn row_to_stored(r: &Row) -> rusqlite::Result<Stored> {
     let kind: i64 = r.get(2)?;
     let xattrs: Option<Vec<u8>> = r.get(9)?;
     let vv: String = r.get(13)?;
+    let prev: Option<Vec<u8>> = r.get(18)?;
     Ok(Stored {
         entry: Entry {
             path: r.get(0)?,
@@ -208,6 +210,7 @@ fn row_to_stored(r: &Row) -> rusqlite::Result<Stored> {
             link: r.get(11)?,
             deleted: r.get::<_, i64>(12)? != 0,
             vv: serde_json::from_str(&vv).unwrap_or_default(),
+            prev: prev.and_then(|b| macsync_core::codec::decode(&b).ok()).unwrap_or_default(),
         },
         disk: r.get(1)?,
         stat: StatCache { ino: r.get::<_, i64>(14)? as u64, dev: r.get::<_, i64>(15)? as u64, ctime_ns: r.get(16)? },
@@ -256,13 +259,49 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        // Columns added after the first release (older databases lack them;
+        // older versions ignore them).
+        let has_prev = conn.prepare("SELECT 1 FROM pragma_table_info('entries') WHERE name = 'prev'")?.exists([])?;
+        if !has_prev {
+            conn.execute_batch("ALTER TABLE entries ADD COLUMN prev BLOB")?;
+        }
         let s = Store { conn };
         match s.kv("schema_version")? {
             None => s.set_kv("schema_version", &SCHEMA_VERSION.to_string())?,
             Some(v) if v == SCHEMA_VERSION.to_string() => {}
             Some(v) => anyhow::bail!("unsupported database schema version {v}"),
         }
+        s.reencode_conflicts()?;
         Ok(s)
+    }
+
+    /// Conflicts recorded before entries carried their lineage are rewritten
+    /// once in the current layout, so they stay readable.
+    fn reencode_conflicts(&self) -> Result<()> {
+        const KEY: &str = "entry_layout";
+        if self.kv(KEY)?.as_deref() == Some("lineage") {
+            return Ok(());
+        }
+        self.atomically(|s| {
+            let rows: Vec<(i64, Option<Vec<u8>>, Vec<u8>)> = s
+                .conn
+                .prepare("SELECT id, local, remote FROM conflicts")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            for (id, local, remote) in rows {
+                let local = match local.as_deref().map(decode_v3) {
+                    Some(Some(v)) => Some(macsync_core::codec::encode(&v)?),
+                    Some(None) => continue, // not the old layout: leave it alone
+                    None => None,
+                };
+                let Some(remote) = decode_v3(&remote) else { continue };
+                s.conn.execute(
+                    "UPDATE conflicts SET local = ?2, remote = ?3 WHERE id = ?1",
+                    params![id, local, macsync_core::codec::encode(&remote)?],
+                )?;
+            }
+            s.set_kv(KEY, "lineage")
+        })
     }
 
     /// Run `f` inside one SQLite transaction.
@@ -452,8 +491,9 @@ impl Store {
     pub fn put_entry(&self, unit: &str, s: &Stored) -> Result<()> {
         let e = &s.entry;
         let xattrs = if e.xattrs.is_empty() { None } else { Some(macsync_core::codec::encode(&e.xattrs)?) };
+        let prev = if e.prev.is_empty() { None } else { Some(macsync_core::codec::encode(&e.prev)?) };
         let mut st = self.conn.prepare_cached(&format!(
-            "INSERT OR REPLACE INTO entries(unit, {ENTRY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"
+            "INSERT OR REPLACE INTO entries(unit, {ENTRY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"
         ))?;
         st.execute(params![
             unit,
@@ -475,6 +515,7 @@ impl Store {
             s.stat.dev as i64,
             s.stat.ctime_ns,
             s.changed_ms,
+            prev,
         ])?;
         Ok(())
     }
@@ -819,9 +860,108 @@ pub fn first_version(device: &str) -> VersionVector {
     VersionVector::single(device, 1)
 }
 
+/// Entries as encoded before they carried their lineage (protocol 3).
+fn decode_v3(bytes: &[u8]) -> Option<Vec<Entry>> {
+    #[derive(Deserialize)]
+    struct V3 {
+        path: String,
+        kind: Kind,
+        mode: u32,
+        size: u64,
+        mtime_ns: i64,
+        blob: Option<Hash>,
+        cmp: Option<Hash>,
+        target: Option<Vec<u8>>,
+        xattrs: Vec<(String, Vec<u8>)>,
+        flags: u32,
+        link: Option<String>,
+        deleted: bool,
+        vv: macsync_core::VersionVector,
+    }
+    let v: Vec<V3> = macsync_core::codec::decode_exact(bytes).ok()?;
+    Some(
+        v.into_iter()
+            .map(|e| Entry {
+                path: e.path,
+                kind: e.kind,
+                mode: e.mode,
+                size: e.size,
+                mtime_ns: e.mtime_ns,
+                blob: e.blob,
+                cmp: e.cmp,
+                target: e.target,
+                xattrs: e.xattrs,
+                flags: e.flags,
+                link: e.link,
+                deleted: e.deleted,
+                vv: e.vv,
+                prev: Vec::new(),
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A conflict recorded by a version before entries carried their lineage
+    /// is rewritten once and then reads like any other.
+    #[test]
+    fn conflicts_of_the_old_layout_stay_readable() {
+        #[derive(Serialize)]
+        struct V3<'a> {
+            path: &'a str,
+            kind: Kind,
+            mode: u32,
+            size: u64,
+            mtime_ns: i64,
+            blob: Option<Hash>,
+            cmp: Option<Hash>,
+            target: Option<Vec<u8>>,
+            xattrs: Vec<(String, Vec<u8>)>,
+            flags: u32,
+            link: Option<String>,
+            deleted: bool,
+            vv: VersionVector,
+        }
+        let v3 = |path| V3 {
+            path,
+            kind: Kind::File,
+            mode: 0o644,
+            size: 1,
+            mtime_ns: 7,
+            blob: Some(Hash::of(path.as_bytes())),
+            cmp: Some(Hash::of(path.as_bytes())),
+            target: None,
+            xattrs: vec![],
+            flags: 0,
+            link: None,
+            deleted: false,
+            vv: VersionVector::single("A", 2),
+        };
+        let s = Store::open_in_memory().unwrap();
+        let old = |v: Vec<V3>| macsync_core::codec::encode(&v).unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO conflicts(unit, path, class, local, remote, remote_state, stored, created_ms)
+                 VALUES ('u', '.git', 'git-state', ?1, ?2, x'00', '', 1)",
+                params![
+                    old(vec![v3(".git/index"), v3(".git/HEAD")]),
+                    old(vec![v3(".git/HEAD"), v3(".git/refs/heads/main")])
+                ],
+            )
+            .unwrap();
+        s.delete_kv("entry_layout").unwrap();
+        s.reencode_conflicts().unwrap();
+        let c = &s.conflicts(false).unwrap()[0];
+        assert_eq!(c.locals.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), [".git/index", ".git/HEAD"]);
+        assert_eq!(c.remotes[1].path, ".git/refs/heads/main");
+        assert_eq!(c.remotes[1].vv, VersionVector::single("A", 2));
+        // Once only: a second run leaves the rows alone.
+        s.reencode_conflicts().unwrap();
+        assert_eq!(s.conflicts(false).unwrap()[0].remotes.len(), 2);
+    }
 
     fn stored(path: &str, content: &[u8]) -> Stored {
         let h = Hash::of(content);
@@ -840,6 +980,7 @@ mod tests {
                 link: None,
                 deleted: false,
                 vv: VersionVector::single("A", 3),
+                prev: Vec::new(),
             },
             disk: path.into(),
             stat: StatCache { ino: 7, dev: 1, ctime_ns: 9 },

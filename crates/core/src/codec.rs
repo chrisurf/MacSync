@@ -15,6 +15,15 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> {
     postcard::from_bytes(bytes)
 }
 
+/// Like [`decode`], but every byte must be used: tells two layouts of the
+/// same data apart (a value of an older layout rarely fits exactly).
+pub fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> {
+    match postcard::take_from_bytes(bytes)? {
+        (v, []) => Ok(v),
+        _ => Err(Error::DeserializeBadEncoding),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,6 +45,7 @@ mod tests {
             link: Some("b".into()),
             deleted: false,
             vv: VersionVector::single("dev", 7),
+            prev: Vec::new(),
         };
         let b = encode(&e).unwrap();
         assert_eq!(decode::<Entry>(&b).unwrap(), e);

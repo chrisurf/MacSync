@@ -391,7 +391,19 @@ impl Engine {
                 self.store().tx_remove(&tx.id)?;
                 continue;
             }
-            let mut plan: Plan = macsync_core::codec::decode(&tx.plan).context("decode journaled plan")?;
+            let mut plan: Plan = match macsync_core::codec::decode(&tx.plan) {
+                Ok(p) => p,
+                Err(e) => {
+                    // Journaled by a version with another layout (an update right
+                    // after an interrupted apply). What was applied is on disk; a
+                    // scan captures it, the next pull completes the rest.
+                    tracing::warn!(tx = %tx.id, unit = %tx.unit, error = %e, "dropping a transaction journaled by another version");
+                    let _ = ops::remove_any(&staging);
+                    self.store().tx_remove(&tx.id)?;
+                    let _ = self.scan_unit(&tx.unit, &crate::capture::ScanOptions::default());
+                    continue;
+                }
+            };
             let lock = self.unit_lock(&plan.unit);
             let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
             let unit_dir = macsync_fs::unit_dir(&self.cfg.root, &plan.unit);

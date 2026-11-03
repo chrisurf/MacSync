@@ -156,6 +156,18 @@ fn concurrent(
         };
     }
 
+    // An old version written back by another tool (a second sync program,
+    // a restore) while the other Mac moved on: the newer one wins, no conflict.
+    // Only for files of the working tree; Git's own state has its own rules.
+    if matches!(class, None | Some(GitClass::Worktree)) {
+        if local.replayed_by(remote) {
+            return Decision::KeepLocalWins(local.vv.merge_bump(&remote.vv, me));
+        }
+        if remote.replayed_by(local) {
+            return Decision::TakeRemote(merged);
+        }
+    }
+
     // Classes that can be merged or tie-broken deterministically.
     let tie_break = match class {
         Some(c) if c.is_object() || c == GitClass::Ephemeral => true,
@@ -209,6 +221,7 @@ mod tests {
             link: None,
             deleted: false,
             vv: VersionVector(vv.iter().map(|(k, v)| (k.to_string(), *v)).collect()),
+            prev: Vec::new(),
         }
     }
 

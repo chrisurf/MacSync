@@ -114,6 +114,13 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Alte Fassung, von einem anderen Werkzeug zurückgeschrieben, ist kein
+  Konflikt mehr: Jede Datei merkt sich ihre letzten Inhalte. Schreibt ein
+  zweites Sync-Programm (etwa ein Obsidian-Plugin) oder eine Wiederherstellung
+  auf einem Mac eine frühere Fassung mit ihrer alten Zeit zurück, während der
+  andere Mac schon weiter ist, gewinnt die neuere Fassung auf beiden Macs.
+  Eine alte Fassung mit neuer Zeit (`git reset`, bewusstes Zurückholen) bleibt
+  eine echte Änderung. **Protokoll 4:** beide Macs gleichzeitig aktualisieren.
 - Zeitreise in Git wird nicht verteilt: Wer in einem Repository einen
   älteren Commit auscheckt (`git checkout <commit>`), um in die Vergangenheit
   zu schauen, dreht damit nicht mehr den anderen Mac zurück. MacSync hält das

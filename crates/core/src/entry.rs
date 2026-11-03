@@ -98,7 +98,15 @@ pub struct Entry {
     pub link: Option<String>,
     pub deleted: bool,
     pub vv: VersionVector,
+    /// Earlier contents of this file, newest first (at most [`LINEAGE`]),
+    /// carried along with the entry. With it either Mac can tell an old
+    /// version that another tool wrote back (a replay) from a new change.
+    /// Not part of the state hash.
+    pub prev: Vec<Hash>,
 }
+
+/// How many earlier contents an entry remembers.
+pub const LINEAGE: usize = 8;
 
 impl Entry {
     pub fn tombstone(path: &str, kind: Kind, vv: VersionVector) -> Entry {
@@ -116,6 +124,7 @@ impl Entry {
             link: None,
             deleted: true,
             vv,
+            prev: Vec::new(),
         }
     }
 
@@ -125,6 +134,39 @@ impl Entry {
     /// hash: all tombstones stay equal.
     pub fn deletion_of(prev: &Entry, vv: VersionVector) -> Entry {
         Entry { size: 0, mtime_ns: 0, deleted: true, vv, ..prev.clone() }
+    }
+
+    /// The content of a live file (what the state hash uses), else `None`.
+    pub fn content(&self) -> Option<Hash> {
+        (!self.deleted && self.kind == Kind::File).then(|| self.cmp.or(self.blob)).flatten()
+    }
+
+    /// The lineage of a new version that replaces `old`: `old`'s content in
+    /// front of `old`'s own lineage.
+    pub fn lineage_after(old: &Entry) -> Vec<Hash> {
+        let mut out = Vec::with_capacity(LINEAGE);
+        for h in old.content().iter().chain(old.prev.iter()) {
+            if out.len() == LINEAGE {
+                break;
+            }
+            if !out.contains(h) {
+                out.push(*h);
+            }
+        }
+        out
+    }
+
+    /// True if `other` is an old version of this file written back: its
+    /// content is one this file had before, and it is not younger. A version
+    /// that is newer on disk (`git reset`, a restore that stamps the time of
+    /// restoring) is a real change, not a replay.
+    pub fn replayed_by(&self, other: &Entry) -> bool {
+        match (self.content(), other.content()) {
+            (Some(mine), Some(theirs)) => {
+                mine != theirs && self.prev.contains(&theirs) && other.mtime_ns <= self.mtime_ns
+            }
+            _ => false,
+        }
     }
 
     /// For a tombstone: the state hash of what it deleted, if it knows.
@@ -231,7 +273,26 @@ mod tests {
             link: None,
             deleted: false,
             vv: VersionVector::new(),
+            prev: Vec::new(),
         }
+    }
+
+    #[test]
+    fn lineage_keeps_earlier_contents_newest_first() {
+        let v1 = file("f", b"1");
+        let v2 = Entry { prev: Entry::lineage_after(&v1), ..file("f", b"2") };
+        let v3 = Entry { prev: Entry::lineage_after(&v2), mtime_ns: 3, ..file("f", b"3") };
+        assert_eq!(v3.prev, vec![Hash::of(b"2"), Hash::of(b"1")]);
+        assert_eq!(v3.state_hash(), file("f", b"3").state_hash(), "lineage is not state");
+        // An old version written back (not younger) is a replay; a newer one is not.
+        assert!(v3.replayed_by(&Entry { mtime_ns: 2, ..file("f", b"1") }));
+        assert!(!v3.replayed_by(&Entry { mtime_ns: 9, ..file("f", b"1") }));
+        assert!(!v3.replayed_by(&Entry { mtime_ns: 1, ..file("f", b"other") }));
+        let mut long = v3.clone();
+        for i in 0..20u8 {
+            long = Entry { prev: Entry::lineage_after(&long), ..file("f", &[i]) };
+        }
+        assert_eq!(long.prev.len(), LINEAGE);
     }
 
     #[test]

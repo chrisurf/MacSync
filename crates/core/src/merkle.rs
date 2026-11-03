@@ -148,6 +148,7 @@ mod tests {
             link: None,
             deleted: false,
             vv: VersionVector::new(),
+            prev: Vec::new(),
         }
     }
 
