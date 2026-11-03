@@ -93,6 +93,26 @@ fn deleted_unit_disappears() {
     }
 }
 
+/// While the other Mac fetches a new folder, it knows the folder already
+/// but has nothing of it yet. Nothing there means "not yet there", not
+/// "deleted there" – only deletion records say that.
+#[test]
+fn unit_still_arriving_is_not_shown_as_deleted() {
+    let p = Pair::new();
+    fs::create_dir_all(p.ra().join("new/sub")).unwrap();
+    fs::write(p.ra().join("new/sub/a.txt"), "a").unwrap();
+    p.a.scan_all(false).unwrap();
+    p.b.store().upsert_unit("new", macsync_core::UnitKind::Folder).unwrap();
+
+    let a = p.a.browse(Some(&p.b as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&a, "new"), (ItemState::ToPeer, Presence::Present, Presence::Missing));
+    let b = p.b.browse(Some(&p.a as &dyn PeerApi), None, "").unwrap();
+    assert_eq!(state(&b, "new"), (ItemState::FromPeer, Presence::Missing, Presence::Present));
+
+    p.sync();
+    p.assert_identical();
+}
+
 /// A git repository inside a folder is a unit of its own; the folder's
 /// listing shows it at the folder's top level and one level deeper.
 #[test]

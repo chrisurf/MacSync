@@ -114,6 +114,9 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Ein neuer Ordner, den der andere Mac gerade erst zu holen beginnt, steht
+  im Synchronisations-Manager nicht mehr als „Wird hier gelöscht“. Gelöscht
+  heißt nur noch, was der andere Mac wirklich gelöscht hat.
 - Menü zeigt klar, ob die Synchronisation läuft, pausiert oder gestoppt ist
   (eigene erste Zeile), und darunter, was gerade passiert. „Wird
   synchronisiert …“ erscheint nur noch, während MacSync wirklich erfasst oder

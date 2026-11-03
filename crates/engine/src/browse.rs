@@ -129,12 +129,14 @@ impl Engine {
                 (_, None) => (Presence::Present, Presence::Unknown, ItemState::Unknown),
                 (Some(a), Some(Some(b))) if a == b => (Presence::Present, Presence::Present, ItemState::Synced),
                 (Some(_), Some(Some(_))) => (Presence::Present, Presence::Present, ItemState::Differs),
-                // Deleted there (only tombstones left) vs. new here.
-                (Some(_), Some(None)) if remote_gone.contains(name) => {
+                // Deleted there (only tombstones left) vs. new here. An
+                // empty root alone is no deletion: the other Mac may have
+                // just started fetching the unit and has nothing of it yet.
+                (Some(_), Some(None)) if remote_gone.contains(name) && self.unit_deleted_on(peer, name, true)? => {
                     (Presence::Present, Presence::Deleted, ItemState::DeleteHere)
                 }
                 (Some(_), Some(None)) => (Presence::Present, Presence::Missing, ItemState::ToPeer),
-                (None, Some(_)) if local_gone.contains(name) => {
+                (None, Some(_)) if local_gone.contains(name) && self.unit_deleted_on(peer, name, false)? => {
                     (Presence::Deleted, Presence::Present, ItemState::DeleteOnPeer)
                 }
                 (None, Some(_)) => (Presence::Missing, Presence::Present, ItemState::FromPeer),
@@ -188,6 +190,20 @@ impl Engine {
         }
         items.sort_by_key(|i| (i.kind != "dir", i.name.to_lowercase()));
         Ok(items)
+    }
+
+    /// The unit's top folder is a deletion record on one side (`remote`:
+    /// the other Mac) that the other side has not seen yet.
+    fn unit_deleted_on(&self, peer: Option<&dyn PeerApi>, unit: &str, remote: bool) -> Result<bool> {
+        let Some(p) = peer else { return Ok(false) };
+        let here = self.store().entry(unit, "")?.map(|s| s.entry);
+        let there = p.entries(unit, &[String::new()], &[])?.into_iter().find(|e| e.path.is_empty());
+        let (gone, other) = if remote { (there, here) } else { (here, there) };
+        Ok(match (gone, other) {
+            (Some(g), Some(o)) => g.deleted && g.vv.compare(&o.vv) == Ordering::Dominates,
+            (Some(g), None) => g.deleted,
+            (None, _) => false,
+        })
     }
 
     fn browse_unit(
