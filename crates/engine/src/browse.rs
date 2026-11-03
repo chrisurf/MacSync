@@ -46,6 +46,9 @@ pub enum ItemState {
     Differs,
     /// The other Mac is not reachable.
     Unknown,
+    /// An older commit is checked out here: not distributed until a branch
+    /// is checked out again.
+    OldCommit,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -141,6 +144,8 @@ impl Engine {
                 }
                 (None, Some(_)) => (Presence::Missing, Presence::Present, ItemState::FromPeer),
             };
+            let state =
+                if l.is_some() && self.old_commit_checked_out(name).is_some() { ItemState::OldCommit } else { state };
             items.push(BrowseItem {
                 name: rest.to_string(),
                 unit: name.clone(),

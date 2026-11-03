@@ -1046,6 +1046,7 @@ private struct StateCell: View {
         case "from-peer": return "Die neuere Version wird von \(peer) geholt"
         case "delete-on-peer": return "Hier gelöscht – wird auch auf \(peer) gelöscht"
         case "delete-here": return "Auf \(peer) gelöscht – wird auch hier gelöscht"
+        case "old-commit": return "Hier ist ein älterer Commit ausgecheckt. Er wird nicht verteilt, bis wieder ein Branch ausgecheckt ist."
         default: return nil
         }
     }
@@ -1075,6 +1076,7 @@ private struct StateCell: View {
         case "delete-on-peer": return ("Wird dort gelöscht", "trash.circle.fill", .orange)
         case "delete-here": return ("Wird hier gelöscht", "trash.circle.fill", .orange)
         case "differs": return ("Änderungen", "arrow.triangle.2.circlepath.circle.fill", .blue)
+        case "old-commit": return ("Alter Stand ausgecheckt", "clock.arrow.circlepath", .orange)
         default: return ("Unbekannt", "questionmark.circle", .secondary)
         }
     }

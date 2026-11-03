@@ -82,9 +82,9 @@ impl Engine {
             Ahead::Diverged => Ok(FastForward::None),
             Ahead::Unknown => {
                 // Only worth waiting for if this pull brings objects.
-                let objects_coming = decisions.iter().any(|(_, c, d)| {
-                    c.is_some_and(|c| c.is_object()) && matches!(d, Decision::TakeRemote(_))
-                });
+                let objects_coming = decisions
+                    .iter()
+                    .any(|(_, c, d)| c.is_some_and(|c| c.is_object()) && matches!(d, Decision::TakeRemote(_)));
                 if !objects_coming {
                     return Ok(FastForward::None);
                 }

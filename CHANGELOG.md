@@ -114,6 +114,15 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Zeitreise in Git wird nicht verteilt: Wer in einem Repository einen
+  älteren Commit auscheckt (`git checkout <commit>`), um in die Vergangenheit
+  zu schauen, dreht damit nicht mehr den anderen Mac zurück. MacSync hält das
+  Repository an – nichts wird verteilt, nichts hineingeschrieben – und zeigt
+  das im Menü und im Synchronisations-Manager („Alter Stand ausgecheckt“).
+  Sobald wieder ein Branch ausgecheckt ist, geht es ohne Konflikt weiter.
+  `git reset` auf einem Branch bleibt eine echte Änderung und wird verteilt;
+  Repositories, die immer auf einem Commit stehen (Submodule), laufen wie
+  bisher.
 - Git-Zustand heilt sich selbst: Haben beide Macs HEAD oder Branches
   geschrieben (etwa `git pull` auf beiden, dann ein Commit auf einem), ist
   aber der eine Stand nur ein Vorgänger des anderen, übernimmt MacSync den

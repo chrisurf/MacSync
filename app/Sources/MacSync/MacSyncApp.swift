@@ -64,6 +64,9 @@ struct MenuContent: View {
         if let n = pausedUnits, n > 0 {
             Text(n == 1 ? "1 Ordner einzeln pausiert" : "\(n) Ordner einzeln pausiert")
         }
+        ForEach(oldCommits, id: \.self) { line in
+            Text(line)
+        }
         if let a = model.activity {
             Text(a.summary(peer: model.status?.peer?.name ?? "anderer Mac"))
         }
@@ -134,5 +137,15 @@ struct MenuContent: View {
     private var pausedUnits: Int? {
         guard model.state != .paused else { return nil }
         return model.status?.units.filter(\.paused).count
+    }
+
+    /// Repositories where an older commit is checked out: held back, not
+    /// distributed until a branch is checked out again.
+    private var oldCommits: [String] {
+        (model.status?.units ?? []).compactMap { u in
+            guard let c = u.oldCommit else { return nil }
+            let name = u.name.split(separator: "/").last.map(String.init) ?? u.name
+            return "⏸ \(name): alter Stand \(c.prefix(7)) ausgecheckt – wird nicht verteilt"
+        }
     }
 }

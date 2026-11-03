@@ -407,6 +407,26 @@ impl Engine {
         unit != macsync_core::entry::ROOT_UNIT && self.cfg.excludes.is_excluded_path(unit)
     }
 
+    /// A single older commit is checked out in a repository that was on a
+    /// branch (`git checkout <commit>` to look at the past). Its files are
+    /// not distributed and nothing is written into it until a branch is
+    /// checked out again. Repositories that always sit on a commit
+    /// (submodules) are not affected: their synchronised HEAD is a commit too.
+    pub fn old_commit_checked_out(&self, unit: &str) -> Option<String> {
+        let work = macsync_fs::unit_dir(&self.cfg.root, unit);
+        let commit = macsync_gitaware::refs::detached_head(&work)?;
+        let head = self.store().entry(unit, ".git/HEAD").ok()??.entry;
+        if head.deleted || head.blob == Some(Hash::of(format!("{commit}\n").as_bytes())) {
+            return None;
+        }
+        // HEAD as last synchronised: `ref: refs/heads/…` or a commit (41 or
+        // 65 bytes; a branch name of exactly that length is told apart by
+        // its content).
+        let branch = |name: &str| head.blob == Some(Hash::of(format!("ref: refs/heads/{name}\n").as_bytes()));
+        let was_on_branch = !matches!(head.size, 41 | 65) || local_branches(&work).iter().any(|b| branch(b));
+        was_on_branch.then_some(commit)
+    }
+
     fn private_dir(&self) -> PathBuf {
         self.cfg.root.join(macsync_fs::PRIVATE_DIR)
     }
@@ -484,4 +504,28 @@ pub fn validate_unit_name(name: &str) -> Result<()> {
         anyhow::bail!("invalid unit name {name:?}");
     }
     Ok(())
+}
+
+/// Names of the local branches of a working tree (loose and packed).
+fn local_branches(work: &Path) -> Vec<String> {
+    let Some(dir) = macsync_gitaware::resolve_git_dir(work) else { return Vec::new() };
+    let mut out = Vec::new();
+    let heads = dir.join("refs/heads");
+    let mut stack = vec![heads.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(rel) = p.strip_prefix(&heads) {
+                out.push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if let Ok(packed) = std::fs::read(dir.join("packed-refs")) {
+        if let Some(m) = macsync_gitaware::refs::ref_values(".git/packed-refs", &packed) {
+            out.extend(m.keys().filter_map(|k| k.strip_prefix("refs/heads/")).map(str::to_string));
+        }
+    }
+    out
 }

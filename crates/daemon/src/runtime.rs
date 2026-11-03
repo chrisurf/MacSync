@@ -150,6 +150,17 @@ impl Node {
 
     /// Status of all units as JSON (shared by the CLI and the IPC socket).
     pub fn status(&self, remote: Option<&HashMap<String, Hash>>, dirty: &BTreeSet<String>) -> Result<Value> {
+        // Before the store is locked: the check reads the store itself.
+        let git_units: Vec<String> = self
+            .engine
+            .store()
+            .units()?
+            .into_iter()
+            .filter(|u| u.kind == macsync_core::UnitKind::Git)
+            .map(|u| u.name)
+            .collect();
+        let old_commits: HashMap<String, String> =
+            git_units.into_iter().filter_map(|u| self.engine.old_commit_checked_out(&u).map(|c| (u, c))).collect();
         let store = self.engine.store();
         let rows = store.units()?;
         let counts = self.entry_counts(&store, &rows)?;
@@ -161,8 +172,11 @@ impl Node {
             };
             let conflicts = store.open_conflict_count(&u.name)?;
             let remote_root = remote.and_then(|m| m.get(&u.name));
+            let old_commit = old_commits.get(&u.name);
             let state = if u.paused {
                 "paused".to_string()
+            } else if old_commit.is_some() {
+                "old commit".to_string()
             } else if conflicts > 0 {
                 "conflict".to_string()
             } else if dirty.contains(&u.name) {
@@ -185,6 +199,7 @@ impl Node {
                 "root": u.root.map(|h| h.short()),
                 "remote_root": remote_root.map(|h| h.short()),
                 "paused": u.paused,
+                "old_commit": old_commit,
                 "prefer": u.prefer.as_str(),
                 "conflicts": conflicts,
                 "entries": live,

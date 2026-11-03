@@ -85,6 +85,16 @@ impl Engine {
         let unit_dir = macsync_fs::unit_dir(root, unit);
 
         if kind == UnitKind::Git {
+            if let Some(commit) = self.old_commit_checked_out(unit) {
+                let short = &commit[..commit.len().min(7)];
+                self.log_skip_once(
+                    unit,
+                    "",
+                    &format!("older commit {short} checked out: not distributed until a branch is checked out again"),
+                );
+                report.root = known.and_then(|u| u.root).unwrap_or_default();
+                return Ok(report);
+            }
             let g = self.gate.check(&unit_dir);
             if !g.is_open() {
                 report.deferred = Some(g.describe());

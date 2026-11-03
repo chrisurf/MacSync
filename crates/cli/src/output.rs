@@ -196,6 +196,7 @@ pub fn browse(v: &Value) {
             "delete-here" => "delete here".to_string(),
             "differs" => "changes inside".to_string(),
             "unknown" => "?".to_string(),
+            "old-commit" => "old commit checked out".to_string(),
             s => s.to_string(),
         };
         let dir = if i["kind"] == "dir" { "/" } else { "" };

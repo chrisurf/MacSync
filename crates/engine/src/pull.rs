@@ -54,6 +54,9 @@ pub enum Outcome {
     Failed(String),
     /// The name is another spelling of a local unit (case-insensitive volume).
     Skipped(String),
+    /// An older commit is checked out here: nothing is written into the
+    /// repository until a branch is checked out again.
+    OldCommit(String),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -218,6 +221,7 @@ impl Engine {
                 Outcome::Paused => "paused".into(),
                 Outcome::Failed(e) => format!("failed: {e}"),
                 Outcome::Skipped(w) => format!("skipped: {w}"),
+                Outcome::OldCommit(c) => format!("old commit checked out: {c}"),
             };
             crate::telemetry::event(
                 "pull",
@@ -275,6 +279,10 @@ impl Engine {
         let row = self.store().unit(unit)?;
         if row.as_ref().is_some_and(|u| u.paused) {
             rep.outcome = Outcome::Paused;
+            return Ok(rep);
+        }
+        if let Some(commit) = self.old_commit_checked_out(unit) {
+            rep.outcome = Outcome::OldCommit(commit);
             return Ok(rep);
         }
         let on_disk = scan::unit_kind_on_disk(&root, unit);

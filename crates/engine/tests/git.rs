@@ -213,6 +213,83 @@ fn pull_on_both_and_commit_on_one_is_a_fast_forward() {
     p.assert_identical();
 }
 
+fn two_commits(dir: &std::path::Path) -> (String, String) {
+    init_repo(dir);
+    let first = git(dir, &["rev-parse", "HEAD"]).trim().to_string();
+    fs::write(dir.join("README.md"), "# demo, second version\n").unwrap();
+    git(dir, &["commit", "-qam", "second"]);
+    (first, git(dir, &["rev-parse", "HEAD"]).trim().to_string())
+}
+
+/// Looking at the past (`git checkout <commit>`) is not distributed: the
+/// other Mac keeps the current state, and its changes wait until a branch is
+/// checked out again here. Then everything continues without a conflict.
+#[test]
+fn checking_out_an_old_commit_is_not_distributed() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("notes");
+    let (first, second) = two_commits(&a);
+    p.sync();
+    let b = p.rb().join("notes");
+
+    git(&a, &["checkout", "-q", &first]);
+    assert_eq!(p.a.old_commit_checked_out("notes"), Some(first.clone()));
+    fs::write(b.join("from-b.md"), "written on B meanwhile").unwrap();
+    p.sync();
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]).trim(), second, "the old commit reached the other Mac");
+    assert_eq!(read(&p.rb(), "notes/README.md"), "# demo, second version\n");
+    assert!(!a.join("from-b.md").exists(), "written into the old checkout");
+
+    git(&a, &["checkout", "-q", "main"]);
+    assert_eq!(p.a.old_commit_checked_out("notes"), None);
+    p.sync();
+    for (e, w) in [(&p.a, &a), (&p.b, &b)] {
+        assert!(e.store().conflicts(false).unwrap().is_empty());
+        assert_eq!(git(w, &["rev-parse", "HEAD"]).trim(), second);
+        assert_fsck(w);
+    }
+    assert_eq!(read(&p.ra(), "notes/from-b.md"), "written on B meanwhile");
+    p.assert_identical();
+}
+
+/// Going back on a branch (`git reset --hard`) is a real change and is
+/// distributed like a commit.
+#[test]
+fn reset_on_a_branch_is_distributed() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("notes");
+    let (first, _) = two_commits(&a);
+    p.sync();
+    git(&a, &["reset", "-q", "--hard", &first]);
+    assert_eq!(p.a.old_commit_checked_out("notes"), None);
+    p.sync();
+    let b = p.rb().join("notes");
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]).trim(), first);
+    assert_eq!(read(&p.rb(), "notes/README.md"), "# demo\n");
+    p.assert_identical();
+}
+
+/// A repository that always sits on a commit (like a submodule) is
+/// synchronised as before, also when it moves to another commit.
+#[test]
+fn repository_that_always_sits_on_a_commit_is_synchronised() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("pinned");
+    let (first, second) = two_commits(&a);
+    git(&a, &["checkout", "-q", &second]);
+    p.sync();
+    let b = p.rb().join("pinned");
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]).trim(), second);
+    git(&a, &["checkout", "-q", &first]);
+    assert_eq!(p.a.old_commit_checked_out("pinned"), None);
+    p.sync();
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]).trim(), first);
+    p.assert_identical();
+}
+
 #[test]
 fn gc_and_repack_converge_and_stay_valid() {
     require_git!();

@@ -18,6 +18,7 @@ struct Status: Decodable {
         var conflicts: Int
         var lastSync: String?
         var paused: Bool
+        var oldCommit: String?
     }
 
     var daemon: Bool?
@@ -351,7 +352,7 @@ final class AppModel: ObservableObject {
         if s.peerOnline != true { return .offline }
         // A unit that differs is not yet work in progress: the daemon says
         // whether it is capturing or pulling (older daemons do not).
-        let open = s.units.filter { !$0.paused && $0.state != "in sync" && $0.state != "paused" }.count
+        let open = s.units.filter { !$0.paused && $0.oldCommit == nil && $0.state != "in sync" && $0.state != "paused" }.count
         guard let busy = s.busy else { return open > 0 ? .syncing : .inSync }
         if busy || (s.queued ?? 0) > 0 { return .syncing }
         return open > 0 ? .pending(open) : .inSync
