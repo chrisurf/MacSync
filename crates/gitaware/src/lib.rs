@@ -6,6 +6,7 @@ pub mod cmd;
 pub mod gate;
 pub mod index;
 pub mod reflog;
+pub mod refs;
 
 pub use gate::{Gate, GateState};
 

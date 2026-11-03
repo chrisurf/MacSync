@@ -57,6 +57,21 @@ pub fn fsck_connectivity(work: &Path) -> io::Result<Result<(), String>> {
     }
 }
 
+/// `git merge-base --is-ancestor a b`: is commit `a` part of the history of
+/// `b`? `None` if Git cannot tell (an object is missing, not a commit).
+pub fn is_ancestor(work: &Path, a: &str, b: &str) -> io::Result<Option<bool>> {
+    let out = git(work)
+        .args(["merge-base", "--is-ancestor", a, b])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    Ok(match out.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

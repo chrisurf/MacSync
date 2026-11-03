@@ -114,6 +114,11 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Git-Zustand heilt sich selbst: Haben beide Macs HEAD oder Branches
+  geschrieben (etwa `git pull` auf beiden, dann ein Commit auf einem), ist
+  aber der eine Stand nur ein Vorgänger des anderen, übernimmt MacSync den
+  neueren ohne Konflikt. Fehlen die neuen Commits noch, wartet der Git-Zustand
+  auf den nächsten Abgleich. Echte Verzweigungen bleiben ein Konflikt.
 - Ein neuer Ordner, den der andere Mac gerade erst zu holen beginnt, steht
   im Synchronisations-Manager nicht mehr als „Wird hier gelöscht“. Gelöscht
   heißt nur noch, was der andere Mac wirklich gelöscht hat.

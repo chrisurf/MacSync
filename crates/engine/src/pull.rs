@@ -355,6 +355,23 @@ impl Engine {
             decisions.push((key.clone(), class, d));
         }
 
+        // 2b. A Git state conflict where one Mac is only behind is a
+        //     fast-forward, not a conflict.
+        let mut waiting_for_objects = Vec::new();
+        if kind == UnitKind::Git {
+            match self.fast_forward_git_state(peer, unit, &local, &remote_entries, &mut decisions, &me)? {
+                crate::fastforward::FastForward::Resolved(ahead) if !opts.dry_run => {
+                    let reason = match ahead {
+                        macsync_gitaware::refs::Ahead::Remote => "Git state: fast-forward to the peer's newer commits",
+                        _ => "Git state: the peer's commits are part of this Mac's history",
+                    };
+                    let _ = self.store().log(unit, "resolve", ".git", reason, "");
+                }
+                crate::fastforward::FastForward::Waiting(held) => waiting_for_objects = held,
+                _ => {}
+            }
+        }
+
         // 3. Git coherence: a conflict in HEAD/refs/index holds back the whole
         //    Git state of the unit as one conflict.
         let git_state_conflict =
@@ -415,6 +432,10 @@ impl Engine {
             lock: None,
             actions: Vec::new(),
         };
+        for path in waiting_for_objects {
+            let reason = "held back: waiting for the peer's commits".to_string();
+            plan.actions.push(PlannedAction { path, kind: ActionKind::Skip, reason });
+        }
         let mut disk_cache: HashMap<String, String> = HashMap::new();
         let mut group_locals: Vec<Entry> = Vec::new();
         let mut group_remotes: Vec<Entry> = Vec::new();

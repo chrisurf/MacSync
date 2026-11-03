@@ -176,6 +176,43 @@ fn concurrent_commits_are_one_git_state_conflict() {
     assert!(p.b.store().conflicts(false).unwrap().iter().all(|c| c.class != "git-state"));
 }
 
+/// Like a `git pull` on both Macs before they synchronised, then a commit on
+/// one of them: both wrote the refs, but one Mac is only behind. That is a
+/// fast-forward, not a conflict.
+#[test]
+fn pull_on_both_and_commit_on_one_is_a_fast_forward() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("notes");
+    init_repo(&a);
+    p.sync();
+    let b = p.rb().join("notes");
+    let origin_dir = tempfile::tempdir().unwrap();
+    let origin = origin_dir.path().join("origin");
+    git(origin_dir.path(), &["clone", "-q", &a.display().to_string(), "origin"]);
+    fs::write(origin.join("server.md"), "from the server").unwrap();
+    git(&origin, &["add", "."]);
+    git(&origin, &["commit", "-qm", "on the server"]);
+    let o = origin.display().to_string();
+    git(&a, &["pull", "-q", "--ff-only", &o, "main"]);
+    git(&b, &["pull", "-q", "--ff-only", &o, "main"]);
+    fs::write(a.join("note.md"), "written on A").unwrap();
+    git(&a, &["add", "."]);
+    git(&a, &["commit", "-qm", "on A"]);
+    let head_a = git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+
+    p.sync();
+    for (e, w) in [(&p.a, &a), (&p.b, &b)] {
+        let open: Vec<_> = e.store().conflicts(false).unwrap();
+        assert!(open.is_empty(), "{open:?}");
+        assert_eq!(git(w, &["rev-parse", "HEAD"]).trim(), head_a);
+        assert_eq!(git(w, &["status", "--porcelain"]), "");
+        assert_fsck(w);
+    }
+    assert_eq!(read(&p.rb(), "notes/note.md"), "written on A");
+    p.assert_identical();
+}
+
 #[test]
 fn gc_and_repack_converge_and_stay_valid() {
     require_git!();
