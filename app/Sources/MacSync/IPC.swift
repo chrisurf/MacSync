@@ -141,17 +141,27 @@ enum CLI {
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
-            p.terminationHandler = { proc in
+            do { try p.run() } catch { cont.resume(throwing: error); return }
+            // Read both pipes while the command runs: an answer larger than
+            // the pipe buffer (64 KB) would otherwise block it forever.
+            DispatchQueue.global().async {
+                var errData = Data()
+                let errDone = DispatchSemaphore(value: 0)
+                DispatchQueue.global().async {
+                    errData = err.fileHandleForReading.readDataToEndOfFile()
+                    errDone.signal()
+                }
                 let o = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                let e = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                if proc.terminationStatus == 0 {
+                errDone.wait()
+                p.waitUntilExit()
+                let e = String(decoding: errData, as: UTF8.self)
+                if p.terminationStatus == 0 {
                     cont.resume(returning: o)
                 } else {
-                    let msg = e.split(separator: "\n").last.map { String($0) } ?? "Fehler \(proc.terminationStatus)"
+                    let msg = e.split(separator: "\n").last.map { String($0) } ?? "Fehler \(p.terminationStatus)"
                     cont.resume(throwing: Failure(message: msg.replacingOccurrences(of: "error: ", with: "")))
                 }
             }
-            do { try p.run() } catch { cont.resume(throwing: error) }
         }
     }
 
@@ -181,11 +191,29 @@ enum CLI {
             }
         }
         p.terminationHandler = { _ in finished.leave() }
+        // stderr is read while the command runs, like stdout: a full pipe
+        // would block it.
+        let errBuffer = LineBuffer()
+        finished.enter()
+        err.fileHandleForReading.readabilityHandler = { h in
+            let chunk = h.availableData
+            if chunk.isEmpty {
+                h.readabilityHandler = nil
+                finished.leave()
+            } else {
+                errBuffer.append(chunk)
+            }
+        }
         finished.notify(queue: .global()) {
-            let e = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let e = String(decoding: errBuffer.all(), as: UTF8.self)
             done(p.terminationStatus, e.split(separator: "\n").last.map { String($0).replacingOccurrences(of: "error: ", with: "") } ?? "")
         }
-        do { try p.run() } catch { done(1, error.localizedDescription); return nil }
+        do { try p.run() } catch {
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
+            done(1, error.localizedDescription)
+            return nil
+        }
         return p
     }
 }
@@ -203,5 +231,15 @@ private final class LineBuffer: @unchecked Sendable {
             data.removeSubrange(data.startIndex...i)
         }
         return lines
+    }
+
+    func append(_ chunk: Data) {
+        lock.lock(); defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    func all() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        return data
     }
 }

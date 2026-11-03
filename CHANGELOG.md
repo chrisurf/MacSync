@@ -114,6 +114,10 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- App blieb nach dem Start bei „Startet …“ stehen, sobald der Status
+  größer als 64 KB war (viele Ordner): die Ausgabe des Hilfsprogramms wurde
+  erst nach seinem Ende gelesen, es wartete aber auf den Leser. Ausgabe wird
+  jetzt während des Laufs gelesen
 - Alte Fassung, von einem anderen Werkzeug zurückgeschrieben, ist kein
   Konflikt mehr: Jede Datei merkt sich ihre letzten Inhalte. Schreibt ein
   zweites Sync-Programm (etwa ein Obsidian-Plugin) oder eine Wiederherstellung
