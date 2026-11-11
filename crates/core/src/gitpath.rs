@@ -100,7 +100,8 @@ pub fn classify(path: &str) -> GitClass {
     if is_process_local(rest) {
         return GitClass::ProcessLocal;
     }
-    if EPHEMERAL.contains(&rest) || rest.starts_with("objects/info/commit-graphs") {
+    // `gk/`: GitLens/GitKraken bookkeeping, rewritten on every access.
+    if EPHEMERAL.contains(&rest) || rest.starts_with("objects/info/commit-graphs") || rest.starts_with("gk/") {
         return GitClass::Ephemeral;
     }
     if let Some(obj) = rest.strip_prefix("objects/") {
@@ -188,6 +189,7 @@ mod tests {
         assert_eq!(classify(".git/objects/incoming-abc/x"), GitClass::ProcessLocal);
         assert_eq!(classify(".git/objects/info/packs"), GitClass::Ephemeral);
         assert_eq!(classify(".git/FETCH_HEAD"), GitClass::Ephemeral);
+        assert_eq!(classify(".git/gk/config"), GitClass::Ephemeral);
         assert_eq!(classify(".git/hooks/pre-commit"), GitClass::Hook);
         assert_eq!(classify(".git/config"), GitClass::Meta);
         assert_eq!(classify(".git/gc.pid"), GitClass::ProcessLocal);

@@ -128,6 +128,9 @@ mit 0.5 verbinden sich nicht miteinander.
   („⚠︎ Photos: zu wenig Speicher – nötig 141 GB, frei 15 GB …“), eine
   Mitteilung und `macsync status` (Zustand `no space`) an, wie viel fehlt.
   Sobald Platz frei ist, geht es von selbst weiter
+- `.git/gk/config` (GitLens/GitKraken schreibt dort bei jedem Zugriff
+  Zeitstempel) wurde zum Konflikt, sobald das Repo auf beiden Macs offen
+  war. Jetzt wie `FETCH_HEAD` flüchtig: eine Seite gewinnt, ohne Rückfrage
 - Speicherplatz-Prüfung zählte auch Inhalte, die dieser Mac schon hat und
   nur klont (eine kopierte Datei, ein Ordner aus einem anderen
   Sync-Ordner): der Ordner blieb „zu wenig Speicher“, obwohl nichts zu
