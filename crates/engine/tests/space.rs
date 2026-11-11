@@ -35,3 +35,20 @@ fn a_pull_that_does_not_fit_says_how_much_is_missing() {
     assert!(p.b.no_space("Photos").is_none());
     assert_eq!(read(&p.rb(), "Photos/big.jpg").len(), 4096);
 }
+
+#[test]
+fn content_this_mac_already_has_needs_no_space() {
+    let p = Pair::new();
+    write(&p.ra(), "Photos/a.jpg", &"x".repeat(4096));
+    p.sync();
+
+    // A copy on the other Mac is cloned here, nothing comes over the network.
+    write(&p.ra(), "Photos/copy.jpg", &"x".repeat(4096));
+    p.a.scan_all(false).unwrap();
+    p.b.pretend_free_space(1000);
+    let r = p.b.sync_from(&p.a, None, PullOptions::default()).unwrap();
+    let rep = r.iter().find(|r| r.unit == "Photos").expect("Photos pulled");
+    assert!(matches!(rep.outcome, Outcome::Applied), "{:?}", rep.outcome);
+    assert!(p.b.no_space("Photos").is_none());
+    assert_eq!(read(&p.rb(), "Photos/copy.jpg").len(), 4096);
+}

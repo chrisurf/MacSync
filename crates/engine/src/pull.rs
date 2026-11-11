@@ -838,13 +838,6 @@ impl Engine {
             }
         }
 
-        let total: u64 = needs.values().map(|n| n.size).sum();
-        if total > 0 {
-            let free = self.free_space(staging).unwrap_or(u64::MAX);
-            if free < total.saturating_add(64 * 1024 * 1024) {
-                return Err(NoSpace { need: total.saturating_add(64 * 1024 * 1024), free }.into());
-            }
-        }
         let mut t = std::time::Instant::now();
         let gone = self.fetch(peer, &needs, rep, staging)?;
         rep.lap("fetch", &mut t);
@@ -1029,6 +1022,15 @@ impl Engine {
         }
         // More data, more connections (up to MAX_LANES in all).
         let remote_bytes: u64 = remote_small.iter().chain(&remote_large).map(|h| needs[h].size).sum();
+        // Only what comes over the network needs room: content this Mac
+        // already has was cloned above and takes (almost) none on APFS.
+        if remote_bytes > 0 {
+            let free = self.free_space(staging).unwrap_or(u64::MAX);
+            let need = remote_bytes.saturating_add(64 * 1024 * 1024);
+            if free < need {
+                return Err(NoSpace { need, free }.into());
+            }
+        }
         let lanes = peer.lanes(lane_count(remote_bytes));
         if !lanes.is_empty() {
             tracing::debug!(unit = %rep.unit, extra = lanes.len(), bytes = remote_bytes, "parallel transfer");

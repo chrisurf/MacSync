@@ -128,6 +128,10 @@ mit 0.5 verbinden sich nicht miteinander.
   („⚠︎ Photos: zu wenig Speicher – nötig 141 GB, frei 15 GB …“), eine
   Mitteilung und `macsync status` (Zustand `no space`) an, wie viel fehlt.
   Sobald Platz frei ist, geht es von selbst weiter
+- Speicherplatz-Prüfung zählte auch Inhalte, die dieser Mac schon hat und
+  nur klont (eine kopierte Datei, ein Ordner aus einem anderen
+  Sync-Ordner): der Ordner blieb „zu wenig Speicher“, obwohl nichts zu
+  übertragen war. Jetzt zählt nur, was über das Netz kommt
 - App blieb nach dem Start bei „Startet …“ stehen, sobald der Status
   größer als 64 KB war (viele Ordner): die Ausgabe des Hilfsprogramms wurde
   erst nach seinem Ende gelesen, es wartete aber auf den Leser. Ausgabe wird
