@@ -5,6 +5,11 @@
 //! commit. Their version vectors are then concurrent, but if one side's refs
 //! are all part of the other side's history, taking the newer side is a
 //! fast-forward and loses nothing. Real divergence stays a conflict.
+//!
+//! The index alone in conflict counts too: a commit on one Mac while the
+//! other staged something (an editor or plugin staging files that a second
+//! sync tool already delivered). The refs that differ decide the direction;
+//! the index follows them. The behind Mac's index is kept as a backup.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -20,8 +25,9 @@ use crate::{Engine, PeerApi};
 pub(crate) enum FastForward {
     /// No Git state conflict, or a real one: decisions unchanged.
     None,
-    /// Resolved towards the newer side.
-    Resolved(Ahead),
+    /// Resolved towards the newer side; `index_replaced` when this Mac's
+    /// index was in conflict and gives way to the peer's.
+    Resolved { ahead: Ahead, index_replaced: bool },
     /// The newer side's commits are still on their way: the Git state waits
     /// for the next pull instead of becoming a conflict.
     Waiting(Vec<String>),
@@ -44,8 +50,20 @@ impl Engine {
         let in_conflict = |c: &Option<GitClass>, d: &Decision| {
             c.is_some_and(|c| c.is_git_state()) && matches!(d, Decision::Conflict(_))
         };
+        if !decisions.iter().any(|(_, c, d)| in_conflict(c, d)) {
+            return Ok(FastForward::None);
+        }
+        // Every ref whose content differs between the Macs, in conflict or
+        // not: with only the index in conflict, the refs the peer simply
+        // moved on tell which side is ahead.
+        let differs = |d: &Decision| {
+            matches!(
+                d,
+                Decision::Conflict(_) | Decision::TakeRemote(_) | Decision::KeepLocal | Decision::KeepLocalWins(_)
+            )
+        };
         let refs: Vec<&String> =
-            decisions.iter().filter(|(_, c, d)| in_conflict(c, d) && is_ref(*c)).map(|(p, _, _)| p).collect();
+            decisions.iter().filter(|(_, c, d)| is_ref(*c) && differs(d)).map(|(p, _, _)| p).collect();
         if refs.is_empty() {
             return Ok(FastForward::None);
         }
@@ -88,24 +106,37 @@ impl Engine {
                 if !objects_coming {
                     return Ok(FastForward::None);
                 }
+                // The whole Git state waits, also the refs the peer moved on:
+                // applied alone, they would leave the index as the only
+                // difference, and that cannot tell a direction any more.
+                let waits = |c: &Option<GitClass>, d: &Decision| {
+                    c.is_some_and(|c| c.is_git_state())
+                        && matches!(d, Decision::Conflict(_) | Decision::TakeRemote(_) | Decision::MergeReflog(_))
+                };
                 let held: Vec<String> =
-                    decisions.iter().filter(|(_, c, d)| in_conflict(c, d)).map(|(p, _, _)| p.clone()).collect();
-                decisions.retain(|(_, c, d)| !in_conflict(c, d));
+                    decisions.iter().filter(|(_, c, d)| waits(c, d)).map(|(p, _, _)| p.clone()).collect();
+                decisions.retain(|(_, c, d)| !waits(c, d));
                 Ok(FastForward::Waiting(held))
             }
             Ahead::Local | Ahead::Remote => {
+                let mut index_replaced = false;
                 for (path, c, d) in decisions.iter_mut() {
                     if !in_conflict(c, d) {
                         continue;
                     }
                     let (Some(l), Some(r)) = (local.get(path.as_str()), remote.get(path.as_str())) else { continue };
                     *d = if ahead == Ahead::Remote {
+                        index_replaced |= *c == Some(GitClass::Index) && !l.entry.deleted;
                         Decision::TakeRemote(l.entry.vv.merge(&r.vv))
+                    } else if *c == Some(GitClass::Index) {
+                        // Not bumped: the behind Mac must decide on its own
+                        // pull, where it keeps its index as a backup.
+                        Decision::KeepLocal
                     } else {
                         Decision::KeepLocalWins(l.entry.vv.merge_bump(&r.vv, me))
                     };
                 }
-                Ok(FastForward::Resolved(ahead))
+                Ok(FastForward::Resolved { ahead, index_replaced })
             }
         }
     }

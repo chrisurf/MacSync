@@ -290,6 +290,122 @@ fn repository_that_always_sits_on_a_commit_is_synchronised() {
     p.assert_identical();
 }
 
+/// A commit on one Mac while the other staged something of its own: only the
+/// index is in conflict, the refs are a fast-forward. The behind Mac takes
+/// the commit at once and keeps its old index as a backup; what it staged
+/// stays in the working tree.
+#[test]
+fn index_staged_on_one_and_commit_on_other_is_a_fast_forward() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("notes");
+    init_repo(&a);
+    p.sync();
+    let b = p.rb().join("notes");
+
+    fs::write(a.join("note.md"), "written on A").unwrap();
+    git(&a, &["add", "."]);
+    git(&a, &["commit", "-qm", "on A"]);
+    let head_a = git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+    fs::write(b.join("draft.md"), "staged on B").unwrap();
+    git(&b, &["add", "draft.md"]);
+
+    // The commits arrive first; then pulls that fail after the fast-forward
+    // was decided (here: no room for A's index) are retried.
+    p.a.scan_all(false).unwrap();
+    p.b.scan_all(false).unwrap();
+    p.b.sync_from(&p.a, None, PullOptions::default()).unwrap();
+    p.b.pretend_free_space(0);
+    for _ in 0..3 {
+        p.b.sync_from(&p.a, None, PullOptions::default()).unwrap();
+    }
+    p.b.pretend_free_space(-1);
+
+    p.sync();
+    for (e, w) in [(&p.a, &a), (&p.b, &b)] {
+        let open: Vec<_> = e.store().conflicts(false).unwrap();
+        assert!(open.is_empty(), "{open:?}");
+        assert_eq!(git(w, &["rev-parse", "HEAD"]).trim(), head_a);
+        assert_fsck(w);
+    }
+    assert_eq!(read(&p.rb(), "notes/note.md"), "written on A");
+    assert_eq!(read(&p.rb(), "notes/draft.md"), "staged on B");
+    let saved: Vec<_> = fs::read_dir(p.b.conflict_root().join("notes"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("index-"))
+        .collect();
+    assert_eq!(saved.len(), 1, "B's index is kept");
+    let staged = std::process::Command::new("git")
+        .current_dir(&b)
+        .env("GIT_INDEX_FILE", saved[0].path().join("index"))
+        .args(["ls-files", "draft.md"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&staged.stdout).trim(), "draft.md");
+    p.assert_identical();
+}
+
+/// A Git state conflict recorded before the fast-forward existed is settled
+/// by it, even while a real conflict elsewhere keeps the unit from
+/// converging.
+#[test]
+fn old_git_state_conflict_is_settled_by_the_fast_forward() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("notes");
+    init_repo(&a);
+    fs::write(a.join("workspace.json"), "both").unwrap();
+    p.sync();
+    let b = p.rb().join("notes");
+
+    fs::write(a.join("note.md"), "written on A").unwrap();
+    git(&a, &["add", "note.md"]);
+    git(&a, &["commit", "-qm", "on A"]);
+    let head_a = git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+    fs::write(b.join("draft.md"), "staged on B").unwrap();
+    git(&b, &["add", "draft.md"]);
+    fs::write(a.join("workspace.json"), "A's layout").unwrap();
+    fs::write(b.join("workspace.json"), "B's layout").unwrap();
+    p.a.scan_all(false).unwrap();
+    let theirs = p.a.store().entry("notes", ".git/index").unwrap().unwrap().entry;
+    p.b.store().add_conflict("notes", ".git", "git-state", &[], &[theirs], "old").unwrap();
+
+    p.sync();
+    assert_eq!(git(&b, &["rev-parse", "HEAD"]).trim(), head_a);
+    let open: Vec<_> = p.b.store().conflicts(false).unwrap().into_iter().map(|c| c.path).collect();
+    assert_eq!(open, vec!["workspace.json".to_string()]);
+}
+
+/// A second sync tool delivered the committed file to the other Mac before
+/// MacSync, and an editor staged it there: same content, one fast-forward.
+#[test]
+fn commit_whose_files_arrived_and_were_staged_elsewhere_is_a_fast_forward() {
+    require_git!();
+    let p = Pair::new();
+    let a = p.ra().join("notes");
+    init_repo(&a);
+    p.sync();
+    let b = p.rb().join("notes");
+
+    fs::write(a.join("note.md"), "same on both").unwrap();
+    git(&a, &["add", "."]);
+    git(&a, &["commit", "-qm", "on A"]);
+    let head_a = git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+    fs::write(b.join("note.md"), "same on both").unwrap();
+    git(&b, &["add", "note.md"]);
+
+    p.sync();
+    for (e, w) in [(&p.a, &a), (&p.b, &b)] {
+        let open: Vec<_> = e.store().conflicts(false).unwrap();
+        assert!(open.is_empty(), "{open:?}");
+        assert_eq!(git(w, &["rev-parse", "HEAD"]).trim(), head_a);
+        assert_eq!(git(w, &["status", "--porcelain"]), "");
+        assert_fsck(w);
+    }
+    p.assert_identical();
+}
+
 #[test]
 fn gc_and_repack_converge_and_stay_valid() {
     require_git!();

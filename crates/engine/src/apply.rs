@@ -345,6 +345,17 @@ impl Engine {
                         if st.supersede_conflicts(unit, &op.path)? > 0 {
                             st.log(unit, "resolve", &op.path, "conflict superseded by a newer version", "")?;
                         }
+                        // The Git state is recorded as one conflict on `.git`.
+                        // Its files are only written once it is no conflict
+                        // any more (a fast-forward), so an old record is
+                        // settled. Vector-only rows pass while it is held.
+                        if plan.unit_kind == UnitKind::Git
+                            && op.kind != OpKind::DbOnly
+                            && macsync_core::gitpath::classify(&op.path).is_git_state()
+                            && st.supersede_conflicts(unit, ".git")? > 0
+                        {
+                            st.log(unit, "resolve", ".git", "Git state conflict settled by a fast-forward", "")?;
+                        }
                         if op.kind != OpKind::DbOnly {
                             let action = match op.kind {
                                 OpKind::Delete => "delete",

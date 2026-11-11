@@ -114,6 +114,15 @@ mit 0.5 verbinden sich nicht miteinander.
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
 
 ### Behoben
+- Commit auf einem Mac, während auf dem anderen etwas gestaged war (ein
+  Editor oder Plugin staged Dateien, die ein zweites Sync-Werkzeug schon
+  gebracht hat): der ganze Git-Zustand blieb als Konflikt hängen, obwohl
+  der andere Mac nur zurücklag. Jetzt bestimmen die Refs die Richtung, der
+  Index folgt; der zurückliegende Mac übernimmt den Commit sofort und legt
+  seinen bisherigen Index einmal in der Konfliktablage ab (`index-…`).
+  Ein schon gespeicherter Git-Zustand-Konflikt erledigt sich damit von
+  selbst. Wartet der Git-Zustand auf die Commits, geht es nach 2 s weiter
+  statt erst mit der nächsten Runde
 - Ordner, der auf diesem Mac keinen Platz hat, blieb stumm „nicht
   abgeglichen“: der Grund stand nur im Protokoll. Jetzt zeigen Menü
   („⚠︎ Photos: zu wenig Speicher – nötig 141 GB, frei 15 GB …“), eine

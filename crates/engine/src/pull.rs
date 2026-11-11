@@ -398,12 +398,37 @@ impl Engine {
         let mut waiting_for_objects = Vec::new();
         if kind == UnitKind::Git {
             match self.fast_forward_git_state(peer, unit, &local, &remote_entries, &mut decisions, &me)? {
-                crate::fastforward::FastForward::Resolved(ahead) if !opts.dry_run => {
+                crate::fastforward::FastForward::Resolved { ahead, index_replaced } if !opts.dry_run => {
                     let reason = match ahead {
                         macsync_gitaware::refs::Ahead::Remote => "Git state: fast-forward to the peer's newer commits",
                         _ => "Git state: the peer's commits are part of this Mac's history",
                     };
                     let _ = self.store().log(unit, "resolve", ".git", reason, "");
+                    if index_replaced {
+                        // What was staged here and is not in the peer's index
+                        // stays in the working tree; the index itself is kept,
+                        // once per version: a pull retried while the peer is
+                        // busy does not save it again.
+                        let index = local.get(".git/index").expect("index in conflict is local");
+                        let src = macsync_fs::abs_path(&root, unit, &index.disk);
+                        let name = match index.entry.blob {
+                            Some(h) => format!("index-{}", h.short()),
+                            None => format!("index-{}", crate::new_tx_id()),
+                        };
+                        let dir = self.conflict_root().join(unit).join(name);
+                        if !dir.join("index").exists() {
+                            std::fs::create_dir_all(&dir)?;
+                            ops::clone_or_copy(&src, &dir.join("index.tmp"))?;
+                            std::fs::rename(dir.join("index.tmp"), dir.join("index"))?;
+                            let _ = self.store().log(
+                                unit,
+                                "resolve",
+                                ".git/index",
+                                "Git state: the peer's index replaces this Mac's (saved)",
+                                &dir.join("index").to_string_lossy(),
+                            );
+                        }
+                    }
                 }
                 crate::fastforward::FastForward::Waiting(held) => waiting_for_objects = held,
                 _ => {}
@@ -470,6 +495,9 @@ impl Engine {
             lock: None,
             actions: Vec::new(),
         };
+        // Left for the next round, which comes right after this pull has
+        // brought the commits.
+        rep.skipped = waiting_for_objects.len();
         for path in waiting_for_objects {
             let reason = "held back: waiting for the peer's commits".to_string();
             plan.actions.push(PlannedAction { path, kind: ActionKind::Skip, reason });
@@ -940,7 +968,7 @@ impl Engine {
         let dropped: HashSet<String> = plan.ops.iter().filter(|op| source_gone(op)).map(|op| op.path.clone()).collect();
         plan.ops
             .retain(|op| !dropped.contains(&op.path) && !op.entry.link.as_ref().is_some_and(|l| dropped.contains(l)));
-        rep.skipped = dropped.len();
+        rep.skipped += dropped.len();
         self.churn.lock().unwrap_or_else(|e| e.into_inner()).remove(&plan.unit);
         tracing::debug!(unit = %plan.unit, skipped = dropped.len(), "files changed on the peer during transfer; left for the next round");
         crate::telemetry::event(
