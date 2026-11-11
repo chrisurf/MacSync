@@ -1405,13 +1405,13 @@ final class FileCompareWindow: NSObject, NSWindowDelegate {
         let root = FileCompareRoot(old: oldMeta, new: newMeta, content: content)
         if let w = window, let host = w.contentViewController as? NSHostingController<FileCompareRoot> {
             host.rootView = root
-            w.title = "MacSync – Vergleich: \(title)"
+            w.title = Paths.windowTitle("MacSync – Vergleich: \(title)")
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
         let w = NSWindow(contentViewController: NSHostingController(rootView: root))
-        w.title = "MacSync – Vergleich: \(title)"
+        w.title = Paths.windowTitle("MacSync – Vergleich: \(title)")
         w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         w.setContentSize(NSSize(width: 1200, height: 720))
         w.isReleasedWhenClosed = false

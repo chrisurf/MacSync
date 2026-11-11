@@ -638,7 +638,7 @@ final class ConflictsWindow: NSObject, NSWindowDelegate {
         }
         let m = ConflictsModel()
         let w = NSWindow(contentViewController: NSHostingController(rootView: ConflictsView(model: m)))
-        w.title = "MacSync – Konflikte"
+        w.title = Paths.windowTitle("MacSync – Konflikte")
         w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         w.setContentSize(NSSize(width: 1080, height: 600))
         w.isReleasedWhenClosed = false

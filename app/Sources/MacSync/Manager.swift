@@ -736,6 +736,15 @@ struct ManagerView: View {
                         app.trustNetwork()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { model.refresh() }
                     }))
+        } else if app.status?.paused == true {
+            // Paused: this Mac neither captures nor asks the other one, so
+            // "not reachable" would point to the wrong cause.
+            HintBar(text: "Synchronisation pausiert – Änderungen dieses Mac gehen nicht hinaus, \(model.peerName) wird nicht abgefragt",
+                    symbol: "pause.circle.fill", color: .orange,
+                    action: ("Fortsetzen", {
+                        app.resume()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { model.refresh() }
+                    }))
         } else if model.peerUnreachable {
             HintBar(text: "\(model.peerName) nicht erreichbar – Status des anderen Mac unbekannt",
                     symbol: "wifi.exclamationmark", color: .orange)
@@ -1098,7 +1107,7 @@ final class ManagerWindow: NSObject, NSWindowDelegate {
         }
         let m = ManagerModel()
         let w = NSWindow(contentViewController: NSHostingController(rootView: ManagerView(model: m)))
-        w.title = "MacSync – Synchronisations-Manager"
+        w.title = Paths.windowTitle("MacSync – Synchronisations-Manager")
         w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         w.setContentSize(NSSize(width: 1100, height: 600))
         w.isReleasedWhenClosed = false

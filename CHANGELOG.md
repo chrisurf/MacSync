@@ -112,6 +112,11 @@ mit 0.5 verbinden sich nicht miteinander.
   zusätzliche Verbindung ab, übernehmen die anderen ihren Teil
 - Manager: In einem unbekannten Netz erklärt die Hinweisleiste, warum die
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
+- Jedes Fenster nennt im Titel den Mac („MacSync – Konflikte · MacBook
+  Pro M3 CH“), damit Screenshots beider Macs auseinanderzuhalten sind
+- Manager, pausiert: Hinweis „Synchronisation pausiert“ mit Knopf
+  „Fortsetzen“ statt „anderer Mac nicht erreichbar“ – ein pausierter Mac
+  fragt den anderen nicht ab
 
 ### Behoben
 - Commit auf einem Mac, während auf dem anderen etwas gestaged war (ein

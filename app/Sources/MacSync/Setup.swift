@@ -35,7 +35,7 @@ final class SetupModel: ObservableObject {
         self.step = step
         let cfg = ConfigFile.load()
         root = URL(fileURLWithPath: Paths.expand(cfg?.string("root") ?? Paths.home.appendingPathComponent("MacSync").path))
-        name = cfg?.string("device_name") ?? Host.current().localizedName ?? "Mac"
+        name = Paths.deviceName
         if step == .pair { startDiscovery() }
     }
 
@@ -370,7 +370,7 @@ final class SetupWindow: NSObject, NSWindowDelegate {
         }
         let m = SetupModel(step: step)
         let w = NSWindow(contentViewController: NSHostingController(rootView: SetupView(setup: m)))
-        w.title = "MacSync"
+        w.title = Paths.windowTitle("MacSync")
         w.styleMask = [.titled, .closable]
         w.isReleasedWhenClosed = false
         w.delegate = self

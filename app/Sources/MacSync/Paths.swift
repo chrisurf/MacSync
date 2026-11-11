@@ -38,6 +38,16 @@ enum Paths {
     static func display(_ p: String) -> String {
         p.hasPrefix(home.path) ? "~" + p.dropFirst(home.path.count) : p
     }
+
+    /// This Mac's name as configured, else the system's.
+    static var deviceName: String {
+        ConfigFile.load()?.string("device_name") ?? Host.current().localizedName ?? "Mac"
+    }
+
+    /// Window title naming this Mac, so screenshots of both Macs can be told apart.
+    static func windowTitle(_ title: String) -> String {
+        "\(title) · \(deviceName)"
+    }
 }
 
 /// Minimal reader/writer for the top-level string keys of config.toml.

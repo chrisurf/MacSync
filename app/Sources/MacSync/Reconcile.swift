@@ -1466,7 +1466,7 @@ final class ReconcileWindow: NSObject, NSWindowDelegate {
         let host = NSHostingController(rootView: ReconcileView(model: m))
         host.sizingOptions = [.minSize] // keep the window size below, not the minimum
         let w = NSWindow(contentViewController: host)
-        w.title = "MacSync – Ordnerabgleich"
+        w.title = Paths.windowTitle("MacSync – Ordnerabgleich")
         w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         w.setContentSize(NSSize(width: 1180, height: 720))
         w.isReleasedWhenClosed = false
