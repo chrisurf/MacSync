@@ -17,6 +17,7 @@ pub struct Pair {
 pub fn engine(base: &Path, name: &str, mode: Mode) -> Engine {
     let mut cfg = EngineConfig::new(base.join(format!("{name}-root")), base.join(format!("{name}-state")), name);
     cfg.mode = mode;
+    cfg.newer_wins = macsync_fs::NewerWins::new(&macsync_fs::NewerWins::defaults()).unwrap();
     Engine::open(cfg).unwrap()
 }
 

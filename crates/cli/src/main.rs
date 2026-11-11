@@ -188,7 +188,8 @@ enum Cmd {
     Pause { unit: Option<String> },
     /// Resume synchronisation.
     Resume { unit: Option<String> },
-    /// Direction preference for a unit: local ("this Mac wins"), remote or none.
+    /// Direction preference for a unit: local ("this Mac wins"), remote, newer
+    /// (the version changed last wins) or none.
     Prefer { unit: String, side: String },
     /// Trash with previous versions (copy-on-write, kept 14 days).
     Trash {
@@ -700,7 +701,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Prefer { unit, side } => {
-            let p = macsync_core::Prefer::parse(&side).context("side must be local, remote or none")?;
+            let p = macsync_core::Prefer::parse(&side).context("side must be local, remote, newer or none")?;
             if !open_store(&cfg)?.set_prefer(&unit, p)? {
                 bail!("unknown unit {unit}");
             }

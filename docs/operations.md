@@ -64,6 +64,11 @@ fsck_after_apply = true
 strip_quarantine = false      # com.apple.quarantine beim Empfang entfernen
 default_excludes = true       # .DS_Store, .Spotlight-V100, .Trashes, .fseventsd …
 excludes = []                 # z. B. ["**/target", "Scratch/*.tmp"]
+# Dateien, die jeder Mac selbst neu schreibt: auf beiden geändert, gewinnt
+# die zuletzt geänderte Fassung statt eines Konflikts; die andere kommt in
+# den MacSync-Papierkorb. `*` bleibt in einem Ordner, `**` geht darüber.
+newer_wins = ["**/.obsidian/workspace.json", "**/.obsidian/workspace-mobile.json",
+              "**/.obsidian/plugins/*/data.json"]
 # Build- und Paketordner je Sprache (App: Einstellungen → Ordner).
 # false (Standard) = nicht abgleichen; vorhandene Kopien bleiben erhalten.
 sync_build_node = false       # node_modules, .next, .nuxt, .svelte-kit, .turbo, .parcel-cache
@@ -95,7 +100,7 @@ Konfigurationsänderungen werden beim Neustart des Daemons übernommen.
 | `macsync resolve <id> --keep local\|remote\|both` | Konflikt lösen |
 | `macsync log [--unit u] [--since 1h] [--json]` | Journal |
 | `macsync pause [unit]` / `resume [unit]` | anhalten / fortsetzen |
-| `macsync prefer <unit> local\|remote\|none` | „dieser Mac gewinnt“ |
+| `macsync prefer <unit> local\|remote\|newer\|none` | „dieser Mac gewinnt“; `newer`: die zuletzt geänderte Fassung gewinnt |
 | `macsync trash list` / `restore <pfad> [--to ziel]` | Papierkorb |
 | `macsync peers` / `unpair <device>` | Peers verwalten |
 

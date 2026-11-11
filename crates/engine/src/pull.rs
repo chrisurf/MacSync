@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use anyhow::Result;
 use macsync_core::proto::{limits, UnitRoot};
 use macsync_core::{
-    decide, path as rpath, ConflictClass, Decision, Entry, GitClass, Hash, Kind, Policy, Tree, UnitKind,
+    decide, path as rpath, ConflictClass, Decision, Entry, GitClass, Hash, Kind, Policy, Prefer, Tree, UnitKind,
 };
 use macsync_fs::{ops, scan};
 use macsync_store::Stored;
@@ -376,12 +376,25 @@ impl Engine {
         let policy = self.policy_for(unit);
         let me = self.cfg.device.clone();
         let mut decisions: Vec<(String, Option<GitClass>, Decision)> = Vec::new();
+        // Files each Mac rewrites on its own: the newer version wins, unless
+        // the unit has a direction of its own. Never for Git's files.
+        let mut newer_wins: HashSet<String> = HashSet::new();
         for key in &keys {
             let class = class_of(kind, key);
             if class == Some(GitClass::ProcessLocal) {
                 continue;
             }
             let l = local.get(key).map(|s| &s.entry);
+            let policy = match policy {
+                Policy::TwoWay(Prefer::None)
+                    if matches!(class, None | Some(GitClass::Worktree))
+                        && self.cfg.newer_wins.matches(&macsync_fs::root_rel(unit, key)) =>
+                {
+                    newer_wins.insert(key.clone());
+                    Policy::TwoWay(Prefer::Newer)
+                }
+                p => p,
+            };
             let d = match remote_entries.get(key) {
                 Some(r) => decide(l, r, class, policy, &me),
                 None if policy == Policy::MirrorReceive && l.is_some_and(|l| !l.deleted) => {
@@ -640,6 +653,9 @@ impl Engine {
                             )
                         }
                         _ if policy == Policy::MirrorReceive => "mirror: peer is authoritative".into(),
+                        _ if newer_wins.contains(&path) || policy == Policy::TwoWay(Prefer::Newer) => {
+                            "changed on both Macs: the newer version wins".into()
+                        }
                         _ => "concurrent change resolved by rule".into(),
                     };
                     if e.deleted {

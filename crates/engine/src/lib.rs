@@ -79,6 +79,8 @@ pub struct EngineConfig {
     pub device: DeviceId,
     pub mode: Mode,
     pub excludes: Excludes,
+    /// Files whose concurrent change goes to the newer version.
+    pub newer_wins: macsync_fs::NewerWins,
     /// Drop `com.apple.quarantine` when applying remote files.
     pub strip_quarantine: bool,
     /// Run `git fsck --connectivity-only` after applying objects or refs.
@@ -96,6 +98,7 @@ impl EngineConfig {
             device: device.into(),
             mode: Mode::TwoWay,
             excludes: Excludes::default(),
+            newer_wins: macsync_fs::NewerWins::default(),
             strip_quarantine: false,
             fsck_after_apply: true,
             tombstone_ttl_days: 30,

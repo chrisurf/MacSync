@@ -112,6 +112,14 @@ mit 0.5 verbinden sich nicht miteinander.
   zusätzliche Verbindung ab, übernehmen die anderen ihren Teil
 - Manager: In einem unbekannten Netz erklärt die Hinweisleiste, warum die
   Macs sich nicht finden, mit Knopf „Diesem Netz vertrauen“
+- Obsidian-Fensterlayout (`.obsidian/workspace.json`) und
+  Plugin-Einstellungen (`.obsidian/plugins/*/data.json`) werden nicht mehr
+  zum Konflikt: jeder Mac schreibt sie bei jedem Klick neu, deshalb gewinnt
+  bei Änderungen auf beiden Macs die zuletzt geänderte Fassung, die andere
+  kommt in den MacSync-Papierkorb. Liste in der Config: `newer_wins`
+  (Globs wie `excludes`). Für einen ganzen Ordner: `macsync prefer <ordner>
+  newer`. Offene Konflikte dieser Dateien erledigen sich beim nächsten
+  Abgleich
 - Jedes Fenster nennt im Titel den Mac („MacSync – Konflikte · MacBook
   Pro M3 CH“), damit Screenshots beider Macs auseinanderzuhalten sind
 - Manager, pausiert: Hinweis „Synchronisation pausiert“ mit Knopf

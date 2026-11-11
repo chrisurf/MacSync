@@ -3,11 +3,13 @@
 
 pub mod exclude;
 pub mod meta;
+pub mod newer;
 pub mod ops;
 pub mod scan;
 pub mod time;
 
 pub use exclude::{Ecosystem, Excludes, Marker, ECOSYSTEMS};
+pub use newer::NewerWins;
 pub use scan::{scan_unit, ScanResult, Scanned};
 
 use std::path::{Path, PathBuf};

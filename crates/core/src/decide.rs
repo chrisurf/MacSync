@@ -16,6 +16,9 @@ pub enum Prefer {
     None,
     Local,
     Remote,
+    /// The version changed last wins (by modification time). For files
+    /// that every Mac rewrites on its own, like an editor's window layout.
+    Newer,
 }
 
 impl Prefer {
@@ -24,6 +27,7 @@ impl Prefer {
             Prefer::None => "none",
             Prefer::Local => "local",
             Prefer::Remote => "remote",
+            Prefer::Newer => "newer",
         }
     }
 
@@ -32,6 +36,7 @@ impl Prefer {
             "none" | "" => Some(Prefer::None),
             "local" => Some(Prefer::Local),
             "remote" => Some(Prefer::Remote),
+            "newer" => Some(Prefer::Newer),
             _ => None,
         }
     }
@@ -195,6 +200,16 @@ fn concurrent(
     match policy {
         Policy::TwoWay(Prefer::Local) => Decision::KeepLocalWins(local.vv.merge_bump(&remote.vv, me)),
         Policy::TwoWay(Prefer::Remote) => Decision::TakeRemote(merged),
+        // Both Macs compare the same two versions, so both pick the same
+        // one; the content hash breaks a tie. The other version goes to the
+        // trash of the Mac that replaces it.
+        Policy::TwoWay(Prefer::Newer) if class_of_conflict == ConflictClass::ConcurrentModify => {
+            if (remote.mtime_ns, remote.state_hash()) > (local.mtime_ns, local.state_hash()) {
+                Decision::TakeRemote(merged)
+            } else {
+                Decision::AdoptVv(merged)
+            }
+        }
         _ => Decision::Conflict(class_of_conflict),
     }
 }
@@ -299,6 +314,21 @@ mod tests {
     }
 
     #[test]
+    fn newer_version_wins_on_both_sides() {
+        let mut old = file("old", &[("A", 2)]);
+        old.mtime_ns = 1;
+        let mut new = file("new", &[("A", 1), ("B", 1)]);
+        new.mtime_ns = 2;
+        let policy = Policy::TwoWay(Prefer::Newer);
+        assert_eq!(decide(Some(&old), &new, None, policy, "A"), Decision::TakeRemote(old.vv.merge(&new.vv)));
+        assert_eq!(decide(Some(&new), &old, None, policy, "B"), Decision::AdoptVv(old.vv.merge(&new.vv)));
+        // A file against a directory stays a conflict.
+        let mut dir = new.clone();
+        dir.kind = Kind::Dir;
+        assert!(matches!(decide(Some(&old), &dir, None, policy, "A"), Decision::Conflict(ConflictClass::KindChange)));
+    }
+
+    #[test]
     fn reflog_concurrent_merges() {
         let l = file("a", &[("A", 1)]);
         let r = file("b", &[("B", 1)]);
@@ -318,8 +348,9 @@ mod tests {
     fn arb_entry() -> impl Strategy<Value = Entry> {
         let vv =
             proptest::collection::btree_map(prop_oneof![Just("A".to_string()), Just("B".to_string())], 0u64..3, 0..3);
-        (prop_oneof![Just("x"), Just("y")], any::<bool>(), vv).prop_map(|(c, del, vv)| {
+        (prop_oneof![Just("x"), Just("y")], any::<bool>(), vv, 0i64..3).prop_map(|(c, del, vv, mtime)| {
             let mut e = file(c, &[]);
+            e.mtime_ns = mtime;
             e.vv = VersionVector(vv);
             e.deleted = del;
             e
@@ -340,9 +371,10 @@ mod tests {
         /// When neither side reports a conflict, both sides end in the same
         /// state with comparable vectors after one exchange in each direction.
         #[test]
-        fn decisions_are_symmetric(a in arb_entry(), b in arb_entry(), class in arb_class()) {
-            let da = decide(Some(&a), &b, class, TW, "A");
-            let db = decide(Some(&b), &a, class, TW, "B");
+        fn decisions_are_symmetric(a in arb_entry(), b in arb_entry(), class in arb_class(), newer in any::<bool>()) {
+            let policy = if newer { Policy::TwoWay(Prefer::Newer) } else { TW };
+            let da = decide(Some(&a), &b, class, policy, "A");
+            let db = decide(Some(&b), &a, class, policy, "B");
             let (Some(oa), Some(ob)) = (outcome(&a, &b, da.clone()), outcome(&b, &a, db.clone())) else {
                 // A conflict must be detected on both sides.
                 prop_assert_eq!(matches!(da, Decision::Conflict(_)), matches!(db, Decision::Conflict(_)));

@@ -65,6 +65,10 @@ pub struct SyncConfig {
     pub default_excludes: bool,
     /// Globs relative to the root, e.g. `"**/target"`.
     pub excludes: Vec<String>,
+    /// Globs relative to the root of files that each Mac rewrites on its
+    /// own: changed on both, the newer version wins instead of a conflict.
+    /// Default: Obsidian's window layout and plugin settings.
+    pub newer_wins: Vec<String>,
     /// Synchronise the build and package folders of an ecosystem (see
     /// `macsync_fs::ECOSYSTEMS`), e.g. `node_modules` or `target`. They can
     /// be installed or built again on each Mac. Default: no.
@@ -110,6 +114,7 @@ impl Default for SyncConfig {
             strip_quarantine: false,
             default_excludes: true,
             excludes: Vec::new(),
+            newer_wins: macsync_fs::NewerWins::defaults(),
             sync_build_node: false,
             sync_build_python: false,
             sync_build_rust: false,
@@ -208,6 +213,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         Mode::parse(&self.mode).with_context(|| format!("unknown mode {:?}", self.mode))?;
         macsync_fs::Excludes::new(&self.sync.excludes, self.sync.default_excludes).context("invalid exclude glob")?;
+        macsync_fs::NewerWins::new(&self.sync.newer_wins).context("invalid newer_wins glob")?;
 
         if !macsync_net::lan::is_local(&self.listen.ip()) && !self.listen.ip().is_unspecified() {
             anyhow::bail!("listen address {} is not a local address", self.listen);
@@ -249,6 +255,7 @@ impl Config {
             &self.sync.skipped_ecosystems(),
             self.sync.sync_git,
         );
+        e.newer_wins = macsync_fs::NewerWins::new(&self.sync.newer_wins)?;
         e.strip_quarantine = self.sync.strip_quarantine;
         e.fsck_after_apply = self.sync.fsck_after_apply;
         e.tombstone_ttl_days = self.sync.tombstone_ttl_days;
